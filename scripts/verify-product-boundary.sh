@@ -54,7 +54,7 @@ check_packages() {
 
 check_embed_inventory() {
   embed_files=$(git grep -l '//go:embed' -- '*.go' ':(exclude)**/*_test.go' | sort)
-  expected_embed_files=$(printf '%s\n' internal/recommend/chinese/embed.go internal/render/site_assets.go internal/social/card.go | sort)
+  expected_embed_files=$(printf '%s\n' internal/edit/web.go internal/recommend/chinese/embed.go internal/render/site_assets.go internal/social/card.go | sort)
   if [ "$embed_files" != "$expected_embed_files" ]; then
     printf 'production embed owners changed:\n%s\n' "$embed_files" >&2
     exit 1

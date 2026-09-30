@@ -41,6 +41,7 @@ type Server struct {
 	static      *internalserver.Server
 	port        int
 	vault       string
+	output      string
 	catalog     *model.SourceCatalog
 	coordinator *Coordinator
 	username    string
@@ -48,6 +49,9 @@ type Server struct {
 
 	mu       sync.Mutex
 	sessions map[string]session
+
+	previewMu sync.Mutex
+	previews  map[string]*editorPreview
 }
 
 var setupMu sync.Mutex
@@ -72,7 +76,11 @@ func New(vaultPath, outputPath string, port int, catalogs ...*model.SourceCatalo
 	if cfg.Edit == nil {
 		return nil, fmt.Errorf("edit.username and edit.passwordHash must be configured before edit can listen")
 	}
-	static, err := internalserver.New(outputPath, port)
+	boundary, err := internalfsutil.ResolveVaultOutput(resolvedVault, outputPath)
+	if err != nil {
+		return nil, err
+	}
+	static, err := internalserver.New(boundary.OutputPath, port)
 	if err != nil {
 		return nil, err
 	}
@@ -88,11 +96,13 @@ func New(vaultPath, outputPath string, port int, catalogs ...*model.SourceCatalo
 		static:      static,
 		port:        port,
 		vault:       resolvedVault,
+		output:      boundary.OutputPath,
 		catalog:     catalog,
 		coordinator: coordinator,
 		username:    cfg.Edit.Username,
 		hash:        cfg.Edit.PasswordHash,
 		sessions:    make(map[string]session),
+		previews:    make(map[string]*editorPreview),
 	}, nil
 }
 
@@ -152,8 +162,28 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 		s.serveLogin(w, r)
 	case "editor":
 		s.serveEditor(w, r)
+	case "editor.css":
+		s.serveEditorAsset(w, r, "web/editor.css", "text/css; charset=utf-8")
+	case "editor.js":
+		s.serveEditorAsset(w, r, "web/editor.bundle.js", "text/javascript; charset=utf-8")
 	case "sources":
 		s.serveSources(w, r)
+	case "files":
+		s.serveFiles(w, r)
+	case "file/folder":
+		s.serveFileFolder(w, r)
+	case "file/markdown":
+		s.serveFileMarkdown(w, r)
+	case "file":
+		s.serveFile(w, r)
+	case "source-meta":
+		s.serveSourceMeta(w, r)
+	case "frontmatter":
+		s.serveFrontmatter(w, r)
+	case "media":
+		s.serveMedia(w, r)
+	case "preview":
+		s.servePreview(w, r)
 	case "source":
 		s.serveSource(w, r)
 	case "logout":
@@ -163,6 +193,10 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 	case "csrf":
 		s.serveCSRF(w, r)
 	default:
+		if strings.HasPrefix(path, "preview/") {
+			s.servePreview(w, r)
+			return
+		}
 		http.NotFound(w, r)
 	}
 }
@@ -177,10 +211,13 @@ func (s *Server) serveEditor(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	selectedJSON, _ := json.Marshal(r.URL.Query().Get("path"))
-	body := `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Obsite editor</title><style>body{font:16px sans-serif;max-width:72rem;margin:2rem auto;padding:0 1rem}main{display:grid;gap:1rem}textarea{min-height:24rem;width:100%;font:14px monospace}button{padding:.4rem .7rem}</style></head><body><main><h1>Obsite editor</h1><p id="status" role="status">Loading sources…</p><select id="source" aria-label="Source"></select><textarea id="content" aria-label="Markdown source"></textarea><div><button id="save" type="button">Save</button><button id="new" type="button">New article</button><button id="delete" type="button">Delete article</button></div><p>Source edits are validated and rebuilt before publication.</p></main><script>(async function(){const status=document.getElementById('status'),select=document.getElementById('source'),content=document.getElementById('content');try{const response=await fetch('/_obsite/sources');if(!response.ok)throw new Error('sources');const data=await response.json();for(const source of data.sources||[]){const option=document.createElement('option');option.value=source.relPath;option.textContent=(source.effectivePublish?'':'[draft] ')+source.relPath;select.appendChild(option)}if(` + string(selectedJSON) + `)select.value=` + string(selectedJSON) + `;async function load(){const response=await fetch('/_obsite/source?path='+encodeURIComponent(select.value));if(!response.ok)throw new Error('source');content.value=await response.text();window.obsiteSourceHash=response.headers.get('X-Obsite-Source-Hash')||'';status.textContent='Loaded '+select.value}select.onchange=load;if(select.value)await load();else status.textContent='No Markdown sources'}catch(error){status.textContent='Editor unavailable'}})();</script><script>(async function(){const status=document.getElementById('status'),select=document.getElementById('source'),content=document.getElementById('content');const csrf=async()=>((await (await fetch('/_obsite/session')).json()).csrf||'');const mutation=async(method,url,body,expectedHash=window.obsiteSourceHash||'')=>{const response=await fetch(url,{method,headers:{'X-Obsite-CSRF':await csrf(),'X-Obsite-Source-Hash':expectedHash},body});if(!response.ok)throw new Error(await response.text());return response.json()};document.getElementById('save').onclick=async()=>{try{status.textContent='Saving and rebuilding…';const result=await mutation('PUT','/_obsite/source?path='+encodeURIComponent(select.value),content.value);window.obsiteSourceHash=result.sourceHash;status.textContent=result.warningCount?'Saved and rebuilt with warnings':'Saved and rebuilt'}catch(error){status.textContent='Save failed: '+error.message}};document.getElementById('delete').onclick=async()=>{if(!confirm('Delete this article?'))return;try{status.textContent='Deleting and rebuilding…';const result=await mutation('DELETE','/_obsite/source?path='+encodeURIComponent(select.value)+'&confirm=true');status.textContent=result.warningCount?'Deleted and rebuilt with warnings':'Deleted and rebuilt';location.reload()}catch(error){status.textContent='Delete failed: '+error.message}};document.getElementById('new').onclick=async()=>{const path=prompt('New article path (for example notes/new.md)');const title=prompt('Title');if(!path||!title)return;const type=prompt('Type (doc or post)','doc')||'doc';const date=type==='post'?(prompt('Date (YYYY-MM-DD or RFC3339)')||''):'';const form=new URLSearchParams({path,title,type,date});try{status.textContent='Creating and rebuilding…';const result=await mutation('POST','/_obsite/source',form,'absent');status.textContent=result.warningCount?'Created and rebuilt with warnings':'Created and rebuilt';location.reload()}catch(error){status.textContent='Create failed: '+error.message}}})()</script></body></html>`
+	editorBody, err := editorWeb.ReadFile("web/editor.html")
+	if err != nil {
+		http.Error(w, "editor unavailable", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = io.WriteString(w, body)
+	_, _ = w.Write(editorBody)
 }
 
 type sourceCatalogResponse struct {
@@ -478,7 +515,7 @@ func (s *Server) serveDecoratedStatic(w http.ResponseWriter, r *http.Request, en
 	body := append([]byte(nil), recorder.Body.Bytes()...)
 	contentType := strings.ToLower(recorder.Header().Get("Content-Type"))
 	if r.Method != http.MethodHead && status >= 200 && status < 300 && strings.Contains(contentType, "text/html") {
-		link := `<a class="edit-page-link" href="/_obsite/editor?path=` + url.QueryEscape(entry.RelPath) + `">编辑</a>`
+		link := `<a class="edit-page-link" href="/_obsite/editor?path=` + url.QueryEscape(entry.RelPath) + `">Edit</a>`
 		lower := strings.ToLower(string(body))
 		if index := strings.LastIndex(lower, "</body>"); index >= 0 {
 			body = append(append(append([]byte(nil), body[:index]...), []byte(link)...), body[index:]...)

@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Obsite Editor</title>
+  <link rel="stylesheet" href="/_obsite/editor.css">
+</head>
+<body>
+  <svg class="icon-sprite" aria-hidden="true" focusable="false">
+    <symbol id="icon-quote" viewBox="0 0 24 24"><path d="M5 5h6v6H8c0 2.6 1.2 4.2 3.5 5.1V19C7.1 18.4 5 15.5 5 11V5Zm8 0h6v6h-3c0 2.6 1.2 4.2 3.5 5.1V19c-4.4-.6-6.5-3.5-6.5-8V5Z"/></symbol>
+    <symbol id="icon-list" viewBox="0 0 24 24"><path d="M4 5.5h2v2H4v-2Zm4 0h12v2H8v-2ZM4 11h2v2H4v-2Zm4 0h12v2H8v-2ZM4 16.5h2v2H4v-2Zm4 0h12v2H8v-2Z"/></symbol>
+    <symbol id="icon-ordered-list" viewBox="0 0 24 24"><path d="M4 5h1v5H4V7H3V6h1V5Zm3 0h14v2H7V5ZM3 13c0-1.3.8-2 2-2s2 .7 2 2c0 .8-.4 1.3-1.1 1.8l-.8.5H7V16H3v-.8l2-1.5c.3-.2.5-.4.5-.7 0-.3-.2-.5-.5-.5s-.5.2-.5.6H3V13Zm4 3h14v2H7v-2Z"/></symbol>
+    <symbol id="icon-task" viewBox="0 0 24 24"><path d="M4 4h12v2H6v12h10v2H4V4Zm15.3 1.3 1.4 1.4-8.1 8.1-4-4L10 9.4l2.6 2.6 6.7-6.7Z"/></symbol>
+    <symbol id="icon-link" viewBox="0 0 24 24"><path d="M9.2 14.8 7.8 16.2a3 3 0 1 1-4.2-4.2l3.2-3.2A3 3 0 0 1 12 9l-1.4 1.4a1 1 0 0 0-2.4-.2L5 13.4a1 1 0 0 0 1.4 1.4l1.4-1.4 1.4 1.4Zm5.6-5.6 1.4-1.4a3 3 0 1 1 4.2 4.2l-3.2 3.2A3 3 0 0 1 12 15l1.4-1.4a1 1 0 0 0 2.4.2l3.2-3.2a1 1 0 0 0-1.4-1.4l-1.4 1.4-1.4-1.4ZM8 17.4l9.4-9.4 1.4 1.4-9.4 9.4L8 17.4Z"/></symbol>
+    <symbol id="icon-image" viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm2 2v12h12V6H6Zm2 9 2.5-3 2 2.4 1.5-1.8 2 2.4H8Zm2-5.5A1.5 1.5 0 1 1 10 6.5a1.5 1.5 0 0 1 0 3Z"/></symbol>
+    <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M12 5c5 0 8.8 4.2 10 7-1.2 2.8-5 7-10 7S3.2 14.8 2 12c1.2-2.8 5-7 10-7Zm0 2c-3.5 0-6.3 2.7-7.6 5 1.3 2.3 4.1 5 7.6 5s6.3-2.7 7.6-5C18.3 9.7 15.5 7 12 7Zm0 1.8A3.2 3.2 0 1 1 12 15a3.2 3.2 0 0 1 0-6.2Zm0 2A1.2 1.2 0 1 0 12 13a1.2 1.2 0 0 0 0-2.2Z"/></symbol>
+    <symbol id="icon-columns" viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm2 2v12h5V6H6Zm7 0v12h5V6h-5Z"/></symbol>
+    <symbol id="icon-fullscreen" viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4V4Zm10 0h6v6h-2V6h-4V4ZM4 14h2v4h4v2H4v-6Zm14 0h2v6h-6v-2h4v-4Z"/></symbol>
+    <symbol id="icon-help" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm-.1-5.2h.2v2h-.2v-2Zm.2-8c2 0 3.4 1.2 3.4 3 0 1.4-.7 2.2-1.9 3-.8.5-1.2.9-1.2 1.7h-2c0-1.7.8-2.5 1.8-3.2.8-.5 1.3-.9 1.3-1.6 0-.7-.5-1.1-1.4-1.1-1 0-1.6.5-1.7 1.5h-2c.1-2 1.5-3.3 3.7-3.3Z"/></symbol>
+    <symbol id="icon-code" viewBox="0 0 24 24"><path d="m8.7 6.3-5.7 5.7 5.7 5.7 1.4-1.4L5.8 12l4.3-4.3-1.4-1.4Zm6.6 0-1.4 1.4 4.3 4.3-4.3 4.3 1.4 1.4 5.7-5.7-5.7-5.7Z"/></symbol>
+  </svg>
+
+  <header class="editor-header">
+    <div>
+      <a href="/">Back to site</a>
+      <h1>Content editor</h1>
+    </div>
+    <div class="header-actions">
+      <button id="preview" type="button">Preview draft</button>
+      <button id="mode" type="button">Source mode</button>
+      <button id="save" type="button" class="primary" aria-label="Save and publish">Save and publish</button>
+      <button id="new" type="button" aria-label="New article">New article</button>
+      <button id="delete" type="button" class="danger" aria-label="Delete article">Delete article</button>
+    </div>
+  </header>
+
+  <main class="editor-layout">
+    <aside class="source-sidebar" aria-label="Content list">
+      <label for="source">Content</label>
+      <select id="source" size="14" aria-label="Select content"></select>
+      <button id="refresh" type="button">Refresh list</button>
+      <section class="file-manager" aria-label="File manager">
+        <div class="file-manager-header"><strong>File manager</strong><button id="file-refresh" type="button" aria-label="Refresh files" title="Refresh files">↻</button></div>
+        <div id="file-tree" class="file-tree" role="tree"></div>
+        <div class="file-actions">
+          <button id="file-new-folder" type="button">New folder</button>
+          <button id="file-new-markdown" type="button">New Markdown</button>
+          <button id="file-rename" type="button">Rename</button>
+          <button id="file-delete" type="button" class="danger">Delete</button>
+        </div>
+      </section>
+      <div class="sidebar-help">
+        <strong>Help</strong>
+        <p>A full build runs before saving. Drafts are not published.</p>
+      </div>
+    </aside>
+
+    <section class="workspace" aria-label="Editor workspace">
+      <p id="status" class="status" role="status">Loading content…</p>
+
+      <form id="metadata" class="metadata" autocomplete="off">
+        <div class="metadata-grid">
+          <label class="wide">Title<input data-field="title" required></label>
+          <label class="publish-field"><input data-field="publish" type="checkbox"> Publish</label>
+          <label data-field-wrap="type">Type
+            <select data-field="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select>
+          </label>
+          <label data-field-wrap="date">Publish date<input data-field="date" placeholder="YYYY-MM-DD or RFC3339"></label>
+          <label>Description<input data-field="description"></label>
+          <label>Author<input data-field="author"></label>
+          <label>Updated<input data-field="updated" placeholder="YYYY-MM-DD or RFC3339"></label>
+          <label>Reviewed<input data-field="reviewed" placeholder="YYYY-MM-DD or RFC3339"></label>
+          <label>Tags<input data-field="tags" placeholder="Comma-separated"></label>
+          <label>Aliases<input data-field="aliases" placeholder="Comma-separated"></label>
+          <label>Slug<input data-field="slug"></label>
+          <label>Order<input data-field="order" type="number"></label>
+          <label>Status<select data-field="status"><option value="">Not set</option><option value="stable">Stable</option><option value="experimental">Experimental</option><option value="deprecated">Deprecated</option></select></label>
+          <label>Audience<input data-field="audience"></label>
+          <label>Product version<input data-field="productVersion"></label>
+          <label>Series<input data-field="series"></label>
+          <label>Cover<input data-field="cover" placeholder="Choose from media library or enter path"></label>
+          <label>Banner<input data-field="banner" placeholder="Choose from media library or enter path"></label>
+          <label>Banner alt text<input data-field="bannerAlt"></label>
+        </div>
+      </form>
+
+      <div class="toolbar" role="toolbar" aria-label="Markdown toolbar">
+        <div class="toolbar-group">
+          <button class="toolbar-button text-icon" type="button" data-command="bold" aria-label="Bold" title="Bold">B</button>
+          <button class="toolbar-button text-icon italic-icon" type="button" data-command="italic" aria-label="Italic" title="Italic">I</button>
+          <button class="toolbar-button text-icon" type="button" data-command="heading" aria-label="Heading" title="Heading">H</button>
+        </div>
+        <span class="toolbar-separator" role="separator"></span>
+        <div class="toolbar-group">
+          <button class="toolbar-button" type="button" data-command="quote" aria-label="Block quote" title="Block quote"><svg><use href="#icon-quote"></use></svg></button>
+          <button class="toolbar-button" type="button" data-command="ul" aria-label="Bulleted list" title="Bulleted list"><svg><use href="#icon-list"></use></svg></button>
+          <button class="toolbar-button" type="button" data-command="ol" aria-label="Numbered list" title="Numbered list"><svg><use href="#icon-ordered-list"></use></svg></button>
+          <button class="toolbar-button" type="button" data-command="task" aria-label="Task list" title="Task list"><svg><use href="#icon-task"></use></svg></button>
+        </div>
+        <span class="toolbar-separator" role="separator"></span>
+        <div class="toolbar-group">
+          <button class="toolbar-button" type="button" data-command="link" aria-label="Insert link" title="Insert link"><svg><use href="#icon-link"></use></svg></button>
+          <button class="toolbar-button" id="media" type="button" data-command="image" aria-label="Media library" title="Media library"><svg><use href="#icon-image"></use></svg></button>
+          <button class="toolbar-button" type="button" data-command="code" aria-label="Inline code" title="Inline code"><svg><use href="#icon-code"></use></svg></button>
+        </div>
+        <span class="toolbar-separator" role="separator"></span>
+        <div class="toolbar-group">
+          <button class="toolbar-button" id="toolbar-preview" type="button" aria-label="Preview" title="Preview"><svg><use href="#icon-eye"></use></svg></button>
+          <button class="toolbar-button" id="toolbar-split" type="button" aria-label="Focus preview" title="Focus preview"><svg><use href="#icon-columns"></use></svg></button>
+          <button class="toolbar-button" id="toolbar-fullscreen" type="button" aria-label="Toggle fullscreen" title="Toggle fullscreen"><svg><use href="#icon-fullscreen"></use></svg></button>
+        </div>
+        <span class="toolbar-separator" role="separator"></span>
+        <button class="toolbar-button" id="toolbar-help" type="button" aria-label="Editor help" title="Markdown shortcuts: Ctrl/Cmd+B, Ctrl/Cmd+I, Ctrl/Cmd+K"><svg><use href="#icon-help"></use></svg></button>
+        <span class="toolbar-hint">Ctrl/Cmd+B · Ctrl/Cmd+I · Ctrl/Cmd+K</span>
+      </div>
+
+      <div class="editor-preview-grid">
+        <div class="editor-pane">
+          <div class="pane-title">Markdown</div>
+          <div id="editor" aria-label="Markdown editor"></div>
+        </div>
+        <div class="preview-pane">
+          <div class="pane-title">Draft preview</div>
+          <iframe id="preview-frame" title="Draft preview" hidden></iframe>
+          <div id="preview-empty" class="preview-empty">Select Preview draft to see the server-rendered result.</div>
+        </div>
+      </div>
+      <div id="diagnostics" class="diagnostics" hidden></div>
+    </section>
+  </main>
+
+  <dialog id="file-dialog">
+    <form method="dialog" id="file-form" class="new-form">
+      <h2 id="file-dialog-title">New file</h2>
+      <input id="file-original" type="hidden">
+      <label>Path<input id="file-path" name="path" placeholder="For example: docs/guide.md" required></label>
+      <div id="markdown-file-fields">
+        <label>Title<input id="file-title" name="title"></label>
+        <label>Type<select id="file-type" name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
+        <label>Publish date<input id="file-date" name="date" placeholder="YYYY-MM-DD"></label>
+        <label>Source kind<select id="file-kind" name="kind"><option value="article">Article</option><option value="section">Section index</option></select></label>
+      </div>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button id="file-submit" value="default" class="primary">Create</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="new-dialog">
+    <form method="dialog" id="new-form" class="new-form">
+      <h2>New article</h2>
+      <label>Path<input name="path" placeholder="For example: news/new.md" required></label>
+      <label>Title<input name="title" required></label>
+      <label>Type<select name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
+      <label id="new-date-wrap">Publish date<input name="date" placeholder="YYYY-MM-DD"></label>
+      <div class="dialog-actions"><button value="cancel">Cancel</button><button id="new-submit" value="default" class="primary">Create draft</button></div>
+    </form>
+  </dialog>
+
+  <aside id="media-panel" class="media-panel" hidden aria-label="Media library">
+    <div class="media-header"><h2>Media library</h2><button id="media-close" type="button">Close</button></div>
+    <label class="upload-button">Upload image<input id="media-upload" type="file" accept="image/*" hidden></label>
+    <div id="media-list" class="media-list"><p>Loading…</p></div>
+  </aside>
+
+  <script type="module" src="/_obsite/editor.js"></script>
+</body>
+</html>

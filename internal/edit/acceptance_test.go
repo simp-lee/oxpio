@@ -351,6 +351,10 @@ func TestEditNewArticleTemplatesAndMutationGuards(t *testing.T) {
 	if err != nil || !strings.Contains(string(post), "date: \"2025-01-02\"") {
 		t.Fatalf("post template = %q, err=%v", post, err)
 	}
+	page, err := NewArticleSource("Page", "page", "")
+	if err != nil || !strings.Contains(string(page), "type: page") {
+		t.Fatalf("page template = %q, err=%v", page, err)
+	}
 	for _, test := range []struct {
 		typeName string
 		date     string
@@ -377,7 +381,7 @@ func TestEditNewArticleTemplatesAndMutationGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, relPath := range []string{"../escape.md", "/absolute.md", "not-markdown.txt", "guide/_index.md"} {
+	for _, relPath := range []string{"../escape.md", "/absolute.md", ".draft.md", "node_modules/draft.md", "not-markdown.txt", "guide/_index.md"} {
 		var err error
 		if relPath == "guide/_index.md" {
 			_, err = coordinator.Delete(relPath, sourceHashForTest([]byte("wrong")))

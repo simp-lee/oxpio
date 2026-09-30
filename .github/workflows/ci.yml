@@ -76,6 +76,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - run: npm run build:editor
       - name: Install lockfile-pinned Chromium
         run: npx --no-install playwright install --with-deps chromium
       - run: npm run test:e2e

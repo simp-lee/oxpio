@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// NewArticleSource renders the only editor-supported new-article templates.
+// NewArticleSource renders the editor-supported new-article templates.
 // It intentionally uses no clock or filesystem metadata.
 func NewArticleSource(title, typeName, date string) ([]byte, error) {
 	title = strings.TrimSpace(title)
@@ -18,8 +18,8 @@ func NewArticleSource(title, typeName, date string) ([]byte, error) {
 	if typeName == "" {
 		typeName = "doc"
 	}
-	if typeName != "doc" && typeName != "post" {
-		return nil, fmt.Errorf("type must be doc or post")
+	if typeName != "doc" && typeName != "post" && typeName != "page" {
+		return nil, fmt.Errorf("type must be doc, post, or page")
 	}
 	date = strings.TrimSpace(date)
 	if typeName == "post" {
@@ -39,4 +39,13 @@ func NewArticleSource(title, typeName, date string) ([]byte, error) {
 	}
 	builder.WriteString("---\n\n")
 	return []byte(builder.String()), nil
+}
+
+// NewSectionSource renders an unpublished section index template.
+func NewSectionSource(title string) ([]byte, error) {
+	title = strings.TrimSpace(title)
+	if title == "" {
+		return nil, fmt.Errorf("title must be non-empty")
+	}
+	return []byte(fmt.Sprintf("---\ntitle: %s\npublish: false\n---\n\n", strconv.Quote(title))), nil
 }

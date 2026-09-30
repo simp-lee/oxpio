@@ -14,6 +14,16 @@ The font is embedded for social-card rendering and is never loaded from the host
 ## Mermaid
 Version: 11.17.2. License: MIT (`internal/render/vendor/mermaid/LICENSE`).
 
+## CodeMirror 6 editor
+Pinned browser editor packages in `package-lock.json`, including CodeMirror 6,
+`@codemirror/lang-markdown`, and their Lezer parser dependencies. License: MIT.
+The bundled editor is embedded at `internal/edit/web/editor.bundle.js` and does
+not load JavaScript from a network at runtime.
+
+## esbuild
+Version: 0.28.2. License: MIT. Build-time bundler used to produce the embedded
+CodeMirror editor bundle; it is not included in the release executable.
+
 ## hugo-goldmark-extensions/passthrough
 Version: 0.5.0. License: Apache-2.0 (`internal/markdown/PASSTHROUGH_LICENSE`).
 

@@ -36,7 +36,7 @@ edit:
   passwordHash: $argon2id$v=19$m=65536,t=3,p=1$...
 ```
 
-After login, mapped article and section pages show an in-memory edit link. The embedded editor lists published and draft Markdown sources, preserves the submitted source bytes, validates and rebuilds before an atomic source/output transaction, and reports warnings or build failures. New articles are drafts by default (`title`, `publish: false`, `type: doc`); posts require an explicit date. Deletes are limited to ordinary articles and require confirmation. Every source read/save/create/delete uses a SHA-256 version and stale requests are rejected; failures do not reload the public site. `serve`, including `serve --watch`, remains read-only.
+After login, mapped article and section pages show an in-memory edit link. The embedded editor uses a locally bundled CodeMirror 6 Markdown editor with Markdown shortcuts, a toolbar, a frontmatter form that hides YAML by default, and a source mode for advanced edits. It supports server-rendered draft previews, an authenticated image upload/media picker, and local assets without CDN requests. It preserves the submitted source bytes, validates and rebuilds before an atomic source/output transaction, and reports warnings or build failures. New articles are drafts by default (`title`, `publish: false`, `type: doc`); posts require an explicit date. The File Manager supports creating folders and Markdown files, renaming managed files or folders, and confirmed recursive deletion, with path validation and SHA-256 CAS checks. Failures do not reload the public site. `serve`, including `serve --watch`, remains read-only.
 
 ## Vault and section model
 
@@ -185,6 +185,7 @@ make tools
 make check
 go test -race ./internal/analyze ./internal/build ./internal/cli ./internal/render ./internal/server ./internal/recommend/... ./internal/vault ./internal/link
 npm ci
+npm run build:editor
 npx --no-install playwright install chromium
 npm run test:e2e
 ```

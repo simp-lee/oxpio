@@ -111,6 +111,9 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	}
 	entry := catalogEntry(coordinator.catalog, relPath)
 	if creating {
+		if err := validateManagedRelPath(relPath); err != nil {
+			return TransactionResult{}, fmt.Errorf("source path %q must be a contained normalized Markdown path: %w", relPath, err)
+		}
 		if !strings.EqualFold(path.Ext(relPath), ".md") {
 			return TransactionResult{}, fmt.Errorf("source path %q must be a contained normalized Markdown path", relPath)
 		}

@@ -141,12 +141,18 @@ test('authenticated catalog maps articles, sections, drafts, and preserves full 
   await page.goto(`${origin}/section/`);
   await expect(page.locator('.edit-page-link')).toHaveAttribute('href', /path=section%2F_index\.md/);
   await page.goto(`${origin}/_obsite/editor?path=article.md`);
-  await expect(page.locator('textarea')).toHaveValue(/preserve this comment/);
-  await expect(page.locator('select option')).toHaveCount(5);
-  await expect(page.locator('select')).toContainText('[draft] draft.md');
+  await expect(page.locator('#editor .cm-content')).toContainText('Original');
+  await page.locator('#mode').click();
+  await expect(page.locator('#editor .cm-content')).toContainText('preserve this comment');
+  const unchanged = await fs.readFile(path.join(vault, 'article.md'), 'utf8');
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  expect(await fs.readFile(path.join(vault, 'article.md'), 'utf8')).toBe(unchanged);
+  await expect(page.locator('#source option')).toHaveCount(5);
+  await expect(page.locator('#source')).toContainText('[Draft] draft.md');
 
   const updated = '---\n# preserve this comment\ntitle: "Article"\npublish: true\ntype: doc\n---\n\nChanged from editor\n';
-  await page.locator('textarea').fill(updated);
+  await page.locator('#editor .cm-content').fill(updated);
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   const saved = await fs.readFile(path.join(vault, 'article.md'), 'utf8');
@@ -163,13 +169,11 @@ test('browser create defaults to a private draft, rejects bad posts, and deletes
   await login(page);
   await page.goto(`${origin}/_obsite/editor?path=article.md`);
 
-  const prompts = ['new-browser.md', 'Browser draft', 'doc'];
-  const handlePrompts = async dialog => {
-    expect(dialog.type()).toBe('prompt');
-    await dialog.accept(prompts.shift());
-  };
-  page.on('dialog', handlePrompts);
   await page.getByRole('button', {name: 'New article'}).click();
+  await page.locator('#new-dialog input[name="path"]').fill('new-browser.md');
+  await page.locator('#new-dialog input[name="title"]').fill('Browser draft');
+  await page.locator('#new-dialog select[name="type"]').selectOption('doc');
+  await page.locator('#new-submit').click();
   await expect.poll(async () => (await fs.access(path.join(vault, 'new-browser.md')).then(() => true).catch(() => false))).toBe(true);
   const draft = await fs.readFile(path.join(vault, 'new-browser.md'), 'utf8');
   expect(draft).toBe('---\ntitle: "Browser draft"\npublish: false\ntype: doc\n---\n\n');
@@ -177,7 +181,6 @@ test('browser create defaults to a private draft, rejects bad posts, and deletes
   expect(draftPage.status()).toBe(404);
   expect(await draftPage.text()).not.toContain('Browser draft');
 
-  page.off('dialog', handlePrompts);
   await page.goto(`${origin}/_obsite/editor?path=new-browser.md`);
   page.once('dialog', dialog => dialog.accept());
   await page.getByRole('button', {name: 'Delete article'}).click();
@@ -200,7 +203,8 @@ test('failed builds and stale hashes are visible and leave source and output unc
   const beforeHTML = await beforePage.text();
 
   await page.goto(`${origin}/_obsite/editor?path=article.md`);
-  await page.locator('textarea').fill('---\ntitle: Broken\npublish: true\ntype: invalid\n---\nFailure\n');
+  await page.locator('#mode').click();
+  await page.locator('#editor .cm-content').fill('---\ntitle: Broken\npublish: true\ntype: invalid\n---\nFailure\n');
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Save failed');
   const afterFailure = await source(context, 'article.md');
@@ -225,7 +229,8 @@ test('successful edit sends one live reload and serve remains read-only', async 
   const editorPage = await context.newPage();
   await login(editorPage);
   await editorPage.goto(`${origin}/_obsite/editor?path=article.md`);
-  await editorPage.locator('textarea').fill('---\ntitle: Article\npublish: true\ntype: doc\n---\nReloaded\n');
+  await editorPage.locator('#mode').click();
+  await editorPage.locator('#editor .cm-content').fill('---\ntitle: Article\npublish: true\ntype: doc\n---\nReloaded\n');
   const navigations = [];
   publicPage.on('framenavigated', frame => {
     if (frame === publicPage.mainFrame()) navigations.push(frame.url());
@@ -250,6 +255,71 @@ test('successful edit sends one live reload and serve remains read-only', async 
     if (!readOnly.killed) readOnly.kill('SIGTERM');
     await waitForExit(readOnly);
   }
+  await context.close();
+});
+
+test('structured editor exposes metadata forms, draft preview, and media management', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_obsite/editor?path=draft.md`);
+  await expect(page.locator('[data-field="title"]')).toHaveValue('Draft');
+  await expect(page.locator('#editor .cm-content')).toContainText('Private');
+  await expect(page.locator('#editor .cm-content')).not.toContainText('title: Draft');
+
+  await page.getByRole('button', {name: 'Preview draft'}).click();
+  await expect(page.locator('#preview-frame')).not.toBeHidden();
+  await expect(page.frameLocator('#preview-frame').locator('body')).toContainText('Private');
+
+  await page.locator('[data-field="title"]').fill('Updated draft');
+  await page.locator('[data-field="description"]').fill('A draft description');
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  const saved = await fs.readFile(path.join(vault, 'draft.md'), 'utf8');
+  expect(saved).toContain('title: Updated draft');
+  expect(saved).toContain('description: A draft description');
+  expect(saved).toContain('publish: false');
+
+  await page.getByRole('button', {name: 'Media library'}).click();
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  await page.locator('#media-upload').setInputFiles({name: 'editor-pixel.png', mimeType: 'image/png', buffer: png});
+  await expect(page.locator('.media-item')).toContainText('editor-pixel.png');
+  await expect(page.locator('#status')).toContainText('Uploaded uploads/editor-pixel.png');
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  const mediaSaved = await fs.readFile(path.join(vault, 'draft.md'), 'utf8');
+  expect(mediaSaved).toContain('editor-pixel.png');
+
+  await page.getByRole('button', {name: 'New folder'}).click();
+  await page.locator('#file-path').fill('docs');
+  await page.locator('#file-submit').click();
+  await expect(page.locator('.file-entry[data-path="docs"]')).toHaveCount(1);
+
+  await page.getByRole('button', {name: 'New Markdown'}).click();
+  await page.locator('#file-path').fill('docs/_index.md');
+  await page.locator('#file-title').fill('Docs');
+  await page.locator('#file-kind').selectOption('section');
+  await page.locator('#file-submit').click();
+  await expect(page.locator('.file-entry[data-path="docs/_index.md"]')).toHaveCount(1);
+
+  await page.getByRole('button', {name: 'New Markdown'}).click();
+  await page.locator('#file-path').fill('docs/guide.md');
+  await page.locator('#file-title').fill('Guide');
+  await page.locator('#file-submit').click();
+  await expect(page.locator('.file-entry[data-path="docs/guide.md"]')).toHaveCount(1);
+
+  await page.getByRole('button', {name: 'Rename'}).click();
+  await page.locator('#file-path').fill('docs/renamed.md');
+  await page.locator('#file-submit').click();
+  await expect(page.locator('.file-entry[data-path="docs/renamed.md"]')).toHaveCount(1);
+
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#file-delete').click();
+  await expect(page.locator('.file-entry[data-path="docs/renamed.md"]')).toHaveCount(0);
+  await page.locator('.file-entry[data-path="docs"]').click();
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#file-delete').click();
+  await expect(page.locator('.file-entry[data-path="docs"]')).toHaveCount(0);
   await context.close();
 });
 
