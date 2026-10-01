@@ -60,7 +60,7 @@ func TestStrictBuildUsesCollectionOrderForTagPages(t *testing.T) {
 	}
 
 	tagPage := string(readBuildOutputFile(t, output, "tags/shared/index.html"))
-	if b, a := strings.Index(tagPage, ">B</a>"), strings.Index(tagPage, ">A</a>"); b < 0 || a < 0 || b >= a {
+	if b, a := strings.Index(tagPage, `class=listing-title>B</span>`), strings.Index(tagPage, `class=listing-title>A</span>`); b < 0 || a < 0 || b >= a {
 		t.Fatalf("tag page does not use collection order B, A:\n%s", tagPage)
 	}
 }

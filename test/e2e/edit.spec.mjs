@@ -163,6 +163,133 @@ test('authenticated catalog maps articles, sections, drafts, and preserves full 
   await context.close();
 });
 
+test('editor visual states hide irrelevant controls and protect frontmatter during media insertion', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_obsite/editor?path=section/_index.md`);
+  await expect(page.locator('#editor .cm-content')).toBeVisible();
+  await expect(page.locator('.metadata-advanced')).toBeHidden();
+  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  const originalSource = (await source(context, 'article.md')).body;
+  const closingDelimiter = originalSource.indexOf('\n---\n');
+  const originalFrontmatter = originalSource.slice(0, closingDelimiter + '\n---\n'.length);
+
+  await expect(page.locator('#preview-empty')).toBeVisible();
+  await page.locator('#preview').click();
+  await expect(page.locator('#preview-frame')).toBeVisible();
+  await expect(page.locator('#preview-empty')).toBeHidden();
+
+  await page.locator('#file-new-folder').click();
+  await expect(page.locator('#markdown-file-fields')).toBeHidden();
+  await page.locator('#file-dialog').evaluate(dialog => dialog.close());
+  await page.locator('#file-rename').click();
+  await expect(page.locator('#markdown-file-fields')).toBeHidden();
+  await page.locator('#file-dialog').evaluate(dialog => dialog.close());
+  await page.locator('#new').click();
+  await expect(page.locator('#new-dialog')).toBeVisible();
+  await page.locator('#new-dialog').evaluate(dialog => dialog.close());
+
+  await page.locator('#mode').click();
+  await page.locator('#media').click();
+  await page.locator('#media-upload').setInputFiles(path.join(repoRoot, 'test', 'testdata', 'e2e', 'runtime-vault', 'images', 'hero.png'));
+  await page.waitForFunction(() => document.querySelectorAll('#media-list .media-item').length > 0);
+  await expect.poll(async () => (await page.locator('#editor .cm-line').allTextContents()).join('\n')).toMatch(/^---[\s\S]*---\r?\n\r?\n!\[/);
+  const editorSource = (await page.locator('#editor .cm-line').allTextContents()).join('\n');
+  expect(editorSource.startsWith(`${originalFrontmatter}\n![hero](uploads/hero.png)`)).toBe(true);
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  const persisted = await source(context, 'article.md');
+  expect(persisted.body.startsWith(`${originalFrontmatter}\n![hero](uploads/hero.png)`)).toBe(true);
+  await page.reload();
+  await page.locator('#editor .cm-content').waitFor();
+  await page.locator('#mode').click();
+  await expect.poll(async () => (await page.locator('#editor .cm-line').allTextContents()).join('\n')).toContain('![hero](uploads/hero.png)');
+  await context.close();
+});
+
+test('source media insertion preserves mixed line endings after save and reload', async ({browser}) => {
+  const mixedSource = '---\r\n# preserve this comment\r\ntitle: "Article"\r\npublish: true\r\ntype: doc\r\n---\r\n\nOriginal\n';
+  await fs.writeFile(path.join(vault, 'article.md'), mixedSource);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  const delimiter = mixedSource.indexOf('\r\n---\r\n') + '\r\n---\r\n'.length;
+  const originalFrontmatter = mixedSource.slice(0, delimiter);
+  const expected = `${originalFrontmatter}\r\n![hero](uploads/hero.png)\r\n\nOriginal\n`;
+  await page.locator('#mode').click();
+  await page.locator('#media').click();
+  await page.locator('#media-upload').setInputFiles(path.join(repoRoot, 'test', 'testdata', 'e2e', 'runtime-vault', 'images', 'hero.png'));
+  await page.waitForFunction(() => document.querySelectorAll('#media-list .media-item').length > 0);
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  expect((await source(context, 'article.md')).body).toBe(expected);
+  await page.reload();
+  expect((await source(context, 'article.md')).body).toBe(expected);
+  await context.close();
+});
+
+test('form metadata edits preserve mixed source bytes after save and reload', async ({browser}) => {
+  const original = '---\r\n# preserve this comment\r\ntitle: "Article"\r\npublish: true\r\ntype: doc\r\n---\r\n\nOriginal\n';
+  await fs.writeFile(path.join(vault, 'article.md'), original);
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.locator('[data-field="title"]').fill('Edited');
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  const expected = original.replace('title: "Article"\r\n', 'title: Edited\r\n');
+  expect((await source(context, 'article.md')).body).toBe(expected);
+  await page.reload();
+  expect((await source(context, 'article.md')).body).toBe(expected);
+  await context.close();
+});
+
+test('editor dark mode keeps metadata and long file labels readable', async ({browser}) => {
+  const longPath = 'deeply-nested-folder-with-a-long-name/another-long-folder/article-with-a-long-name.md';
+  await fs.mkdir(path.dirname(path.join(vault, longPath)), {recursive: true});
+  await fs.writeFile(path.join(vault, longPath), '---\ntitle: Long\npublish: false\ntype: doc\n---\nLong\n');
+  const context = await browser.newContext({viewport: {width: 390, height: 844}, colorScheme: 'dark'});
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.locator('#file-refresh').click();
+  const label = page.locator('.file-entry-label').filter({hasText: longPath}).first();
+  await expect(label).toBeVisible();
+  const labelLayout = await label.evaluate(node => {
+    const rect = node.getBoundingClientRect();
+    const parent = node.parentElement.getBoundingClientRect();
+    const style = getComputedStyle(node);
+    return {contained: rect.right <= parent.right + 1, overflow: style.overflow, textOverflow: style.textOverflow};
+  });
+  expect(labelLayout.contained).toBe(true);
+  expect(labelLayout.overflow).toBe('hidden');
+  expect(labelLayout.textOverflow).toBe('ellipsis');
+  await expect(page.locator('.metadata-advanced summary')).toHaveCSS('color', 'rgb(200, 212, 223)');
+  await context.close();
+});
+
+test('editor mobile layout keeps the workspace ahead of navigation', async ({browser}) => {
+  const context = await browser.newContext({viewport: {width: 390, height: 844}});
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.locator('#editor .cm-content').waitFor();
+  await expect(page.locator('.metadata')).toBeVisible();
+  await expect(page.locator('.toolbar')).toBeVisible();
+  const layout = await page.evaluate(() => {
+    const workspace = document.querySelector('.workspace').getBoundingClientRect();
+    const sidebar = document.querySelector('.source-sidebar').getBoundingClientRect();
+    const editor = document.querySelector('#editor').getBoundingClientRect();
+    return {workspaceTop: workspace.top, sidebarTop: sidebar.top, editorWidth: editor.width, viewportWidth: innerWidth};
+  });
+  expect(layout.workspaceTop).toBeLessThan(layout.sidebarTop);
+  expect(layout.editorWidth).toBeLessThanOrEqual(layout.viewportWidth);
+  await context.close();
+});
+
 test('browser create defaults to a private draft, rejects bad posts, and deletes after confirmation', async ({browser}) => {
   const context = await browser.newContext();
   const page = await context.newPage();

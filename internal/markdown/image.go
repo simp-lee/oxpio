@@ -501,7 +501,7 @@ type codeBlockHTMLRenderer struct {
 }
 
 func newCodeBlockHTMLRenderer(note *model.Note, diagCollector *diag.Collector) *codeBlockHTMLRenderer {
-	fallbackRenderer := highlighting.NewHTMLRenderer(highlighting.WithStyle("github"))
+	fallbackRenderer := highlighting.NewHTMLRenderer(highlighting.WithStyle("github-dark"))
 	fallbackRegisterer := newNodeRendererFuncRegisterer()
 	fallbackRenderer.RegisterFuncs(fallbackRegisterer)
 	setOptioner, _ := fallbackRenderer.(renderer.SetOptioner)

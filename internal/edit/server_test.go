@@ -12,10 +12,39 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	internalconfig "github.com/simp-lee/obsite/internal/config"
 	"github.com/simp-lee/obsite/internal/model"
 )
+
+func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
+	vault := t.TempDir()
+	output := t.TempDir()
+	hash, err := internalconfig.HashArgon2idPassword("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/docs/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, output, "index.html", `<!doctype html><body data-obsite-base-path="/docs/">public</body></html>`)
+	server, err := New(vault, output, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	login := httptest.NewRecorder()
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/_obsite/login", nil))
+	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `href="/docs/"`) {
+		t.Fatalf("login = %d %s", login.Code, login.Body.String())
+	}
+	server.sessions["test-session"] = session{username: "admin", expires: time.Now().Add(time.Hour)}
+	request := httptest.NewRequest(http.MethodGet, "/_obsite/editor", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
+	editor := httptest.NewRecorder()
+	server.ServeHTTP(editor, request)
+	if editor.Code != http.StatusOK || !strings.Contains(editor.Body.String(), `href="/docs/"`) {
+		t.Fatalf("editor = %d %s", editor.Code, editor.Body.String())
+	}
+}
 
 func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	vault := t.TempDir()
@@ -54,7 +83,26 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	httpClient := listener.Client()
 	httpClient.Jar = client
 
-	response, err := httpClient.Get(listener.URL + "/")
+	response, err := httpClient.Get(listener.URL + "/_obsite/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginBody, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(loginBody), "Welcome back") || !strings.Contains(string(loginBody), "login.css") {
+		t.Fatalf("login page = %d %q", response.StatusCode, loginBody)
+	}
+	response, err = httpClient.Get(listener.URL + "/_obsite/login.css")
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginCSS, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK || !strings.Contains(string(loginCSS), ".login-card") {
+		t.Fatalf("login CSS = %d %q", response.StatusCode, loginCSS)
+	}
+
+	response, err = httpClient.Get(listener.URL + "/")
 	if err != nil {
 		t.Fatal(err)
 	}

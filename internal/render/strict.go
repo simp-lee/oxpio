@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
+	"io"
 	"net/url"
 	"path"
 	"strings"
@@ -35,8 +36,17 @@ func RenderStrictSection(plan *model.SitePlan, section *model.Section, index *mo
 	if err != nil {
 		return nil, err
 	}
+	content, _, leadingTitleID, err := strictDropLeadingTitleHeading(content, section.Title)
+	if err != nil {
+		return nil, err
+	}
 	var body strings.Builder
-	_, _ = fmt.Fprintf(&body, `<section class="section-landing"><header><h1>%s</h1>`, esc(section.Title))
+	headingID, _ := strictLeadingTitlePlacement(content, sectionNote, leadingTitleID)
+	if headingID != "" {
+		_, _ = fmt.Fprintf(&body, `<section class="section-landing"><header><h1 id="%s">%s</h1>`, esc(headingID), esc(section.Title))
+	} else {
+		_, _ = fmt.Fprintf(&body, `<section class="section-landing"><header><h1>%s</h1>`, esc(section.Title))
+	}
 	if section.Description != "" {
 		_, _ = fmt.Fprintf(&body, `<p class="section-description">%s</p>`, esc(section.Description))
 	}
@@ -69,9 +79,7 @@ func RenderStrictSection(plan *model.SitePlan, section *model.Section, index *mo
 	if len(section.Articles) > 0 {
 		body.WriteString(`<h2>Articles</h2><ul class="section-articles">`)
 		for _, article := range section.Articles {
-			if article != nil {
-				_, _ = fmt.Fprintf(&body, `<li><a href="%s">%s</a></li>`, esc(strictSitePath(plan, article.Route)), esc(article.Frontmatter.Title))
-			}
+			strictWriteListingItem(&body, plan, article)
 		}
 		body.WriteString(`</ul>`)
 	}
@@ -91,6 +99,11 @@ func RenderStrictArticle(plan *model.SitePlan, article *model.Note, previous, ne
 	if err != nil {
 		return nil, err
 	}
+	content, _, leadingTitleID, err := strictDropLeadingTitleHeading(content, article.Frontmatter.Title)
+	if err != nil {
+		return nil, err
+	}
+	headingID, tocHeadingID := strictLeadingTitlePlacement(content, article, leadingTitleID)
 	if plan.Config.Popover.Enabled {
 		content, err = annotateStrictPopovers(content, article, index, plan)
 		if err != nil {
@@ -103,7 +116,11 @@ func RenderStrictArticle(plan *model.SitePlan, article *model.Note, previous, ne
 		breadcrumbs = section.Breadcrumbs
 	}
 	var body strings.Builder
-	_, _ = fmt.Fprintf(&body, `<article class="article-page article-sheet"><header><h1>%s</h1>`, esc(article.Frontmatter.Title))
+	if headingID != "" {
+		_, _ = fmt.Fprintf(&body, `<article class="article-page article-sheet"><header><h1 id="%s">%s</h1>`, esc(headingID), esc(article.Frontmatter.Title))
+	} else {
+		_, _ = fmt.Fprintf(&body, `<article class="article-page article-sheet"><header><h1>%s</h1>`, esc(article.Frontmatter.Title))
+	}
 	if article.Frontmatter.Description != "" {
 		_, _ = fmt.Fprintf(&body, `<p class="article-description">%s</p>`, esc(article.Frontmatter.Description))
 	}
@@ -115,7 +132,7 @@ func RenderStrictArticle(plan *model.SitePlan, article *model.Note, previous, ne
 	}
 	_, _ = fmt.Fprintf(&body, `</header>`)
 	writeStrictArticleMetadata(&body, article)
-	writeStrictTOC(&body, article)
+	writeStrictTOC(&body, article, tocHeadingID)
 	_, _ = fmt.Fprintf(&body, `<div class="entry-content article-content" data-page-content>%s</div>`, content)
 	if len(article.Tags) > 0 {
 		body.WriteString(`<ul class="article-tags" aria-label="Tags">`)
@@ -130,9 +147,7 @@ func RenderStrictArticle(plan *model.SitePlan, article *model.Note, previous, ne
 	if len(related) > 0 {
 		body.WriteString(`<section class="related-articles"><h2>Related articles</h2><ul>`)
 		for _, note := range related {
-			if note != nil {
-				_, _ = fmt.Fprintf(&body, `<li><a href="%s">%s</a></li>`, esc(strictSitePath(plan, note.Route)), esc(note.Frontmatter.Title))
-			}
+			strictWriteListingItem(&body, plan, note)
 		}
 		body.WriteString(`</ul></section>`)
 	}
@@ -146,12 +161,17 @@ func RenderStrictArticle(plan *model.SitePlan, article *model.Note, previous, ne
 		body.WriteString(`</ul></section>`)
 	}
 	if article.Frontmatter.Type == "doc" {
-		_, _ = fmt.Fprintf(&body, `<nav class="reading-flow" aria-label="Document navigation"><span class="position">%d of %d</span>`, position, total)
+		body.WriteString(`<nav class="reading-flow" aria-label="Document navigation">`)
 		if previous != nil {
-			_, _ = fmt.Fprintf(&body, `<a class="previous" rel="prev" href="%s">Previous</a>`, esc(strictSitePath(plan, previous.Route)))
+			_, _ = fmt.Fprintf(&body, `<a class="previous" rel="prev" href="%s">← Previous</a>`, esc(strictSitePath(plan, previous.Route)))
+		} else {
+			body.WriteString(`<span class="reading-flow-spacer" aria-hidden="true"></span>`)
 		}
+		_, _ = fmt.Fprintf(&body, `<span class="position">%d of %d</span>`, position, total)
 		if next != nil {
-			_, _ = fmt.Fprintf(&body, `<a class="next" rel="next" href="%s">Next</a>`, esc(strictSitePath(plan, next.Route)))
+			_, _ = fmt.Fprintf(&body, `<a class="next" rel="next" href="%s">Next →</a>`, esc(strictSitePath(plan, next.Route)))
+		} else {
+			body.WriteString(`<span class="reading-flow-spacer" aria-hidden="true"></span>`)
 		}
 		body.WriteString(`</nav>`)
 	}
@@ -176,9 +196,7 @@ func RenderStrictTag(plan *model.SitePlan, tag *model.Tag, notes []*model.Note) 
 	var body strings.Builder
 	_, _ = fmt.Fprintf(&body, `<section class="tag-page"><h1>Tag: %s</h1><ul class="tag-articles">`, esc(tag.Name))
 	for _, note := range notes {
-		if note != nil {
-			_, _ = fmt.Fprintf(&body, `<li><a href="%s">%s</a></li>`, esc(strictSitePath(plan, note.Route)), esc(note.Frontmatter.Title))
-		}
+		strictWriteListingItem(&body, plan, note)
 	}
 	body.WriteString(`</ul></section>`)
 	route := "/" + slug.EncodePath(tag.Slug) + "/"
@@ -193,9 +211,7 @@ func RenderStrictTimeline(plan *model.SitePlan, route string, notes []*model.Not
 	var body strings.Builder
 	_, _ = fmt.Fprintf(&body, `<section class="timeline-page"><h1>Recent articles</h1><ul>`)
 	for _, note := range notes {
-		if note != nil {
-			_, _ = fmt.Fprintf(&body, `<li><a href="%s">%s</a></li>`, esc(strictSitePath(plan, note.Route)), esc(note.Frontmatter.Title))
-		}
+		strictWriteListingItem(&body, plan, note)
 	}
 	body.WriteString(`</ul>`)
 	if page, total := timelinePageInfo(plan, route); total > 1 {
@@ -239,44 +255,74 @@ func annotateStrictPopovers(content string, article *model.Note, index *model.Va
 	if strings.TrimSpace(content) == "" || article == nil || index == nil {
 		return content, nil
 	}
-	context := &xhtml.Node{Type: xhtml.ElementNode, DataAtom: atom.Div, Data: "div"}
-	nodes, err := xhtml.ParseFragment(strings.NewReader(content), context)
-	if err != nil {
-		return "", fmt.Errorf("parse article HTML for popovers: %w", err)
-	}
 	basePath := "/"
 	if plan != nil {
 		basePath = strictBasePath(plan)
 	}
 	base, _ := url.Parse("https://obsite.invalid" + strings.TrimSuffix(basePath, "/") + article.Route)
-	var visit func(*xhtml.Node)
-	visit = func(node *xhtml.Node) {
-		if node == nil {
-			return
+	type replacement struct {
+		start, end int
+		value      []byte
+	}
+	tokenizer := xhtml.NewTokenizer(strings.NewReader(content))
+	replacements := make([]replacement, 0)
+	offset := 0
+	for {
+		tokenType := tokenizer.Next()
+		raw := tokenizer.Raw()
+		start := offset
+		offset += len(raw)
+		if tokenType == xhtml.ErrorToken {
+			if tokenizer.Err() == io.EOF {
+				break
+			}
+			return "", fmt.Errorf("scan article HTML for popovers: %w", tokenizer.Err())
 		}
-		if node.Type == xhtml.ElementNode && node.Data == "a" {
-			for _, attribute := range node.Attr {
-				if strings.EqualFold(attribute.Key, "href") && attribute.Val != "" && !strings.HasPrefix(attribute.Val, "#") {
-					if target := strictPopoverTarget(base, attribute.Val, index, basePath, article.VersionID); target != nil {
-						node.Attr = append(node.Attr, xhtml.Attribute{Key: "data-popover-path", Val: target.RelPath})
-					}
-					break
-				}
+		if tokenType != xhtml.StartTagToken {
+			continue
+		}
+		raw = append([]byte(nil), raw...)
+		token := tokenizer.Token()
+		if !strings.EqualFold(token.Data, "a") {
+			continue
+		}
+		href := ""
+		for _, attribute := range token.Attr {
+			if strings.EqualFold(attribute.Key, "href") {
+				href = attribute.Val
+				break
 			}
 		}
-		for child := node.FirstChild; child != nil; child = child.NextSibling {
-			visit(child)
+		if href == "" || strings.HasPrefix(href, "#") {
+			continue
 		}
+		target := strictPopoverTarget(base, href, index, basePath, article.VersionID)
+		if target == nil {
+			continue
+		}
+		insertion := len(raw) - 1
+		if insertion > 0 && raw[insertion-1] == '/' {
+			insertion--
+		}
+		value := make([]byte, 0, len(raw)+len(target.RelPath)+22)
+		value = append(value, raw[:insertion]...)
+		value = append(value, ` data-popover-path="`...)
+		value = append(value, esc(target.RelPath)...)
+		value = append(value, `"`...)
+		value = append(value, raw[insertion:]...)
+		replacements = append(replacements, replacement{start: start, end: offset, value: value})
 	}
-	for _, node := range nodes {
-		visit(node)
+	if len(replacements) == 0 {
+		return content, nil
 	}
 	var output bytes.Buffer
-	for _, node := range nodes {
-		if err := xhtml.Render(&output, node); err != nil {
-			return "", err
-		}
+	previous := 0
+	for _, current := range replacements {
+		output.WriteString(content[previous:current.start])
+		output.Write(current.value)
+		previous = current.end
 	}
+	output.WriteString(content[previous:])
 	return output.String(), nil
 }
 
@@ -291,7 +337,7 @@ func strictPopoverTarget(base *url.URL, href string, index *model.VaultIndex, ba
 	resolved := base.ResolveReference(targetURL)
 	cleaned := strings.TrimSuffix(resolved.EscapedPath(), "/index.html")
 	prefix := strings.TrimSuffix(basePath, "/")
-	if prefix != "" && strings.HasPrefix(cleaned, prefix) {
+	if prefix != "" && (cleaned == prefix || strings.HasPrefix(cleaned, prefix+"/")) {
 		cleaned = strings.TrimPrefix(cleaned, prefix)
 	}
 	if cleaned == "" {
@@ -308,12 +354,17 @@ func strictPopoverTarget(base *url.URL, href string, index *model.VaultIndex, ba
 	return nil
 }
 
-func writeStrictTOC(body *strings.Builder, article *model.Note) {
+func writeStrictTOC(body *strings.Builder, article *model.Note, omitHeadingID string) {
 	if body == nil || article == nil || len(article.Headings) == 0 {
 		return
 	}
 	items := 0
+	skippedHeading := false
 	for _, heading := range article.Headings {
+		if omitHeadingID != "" && !skippedHeading && heading.ID == omitHeadingID {
+			skippedHeading = true
+			continue
+		}
 		if heading.ID != "" && strings.TrimSpace(heading.Text) != "" {
 			items++
 		}
@@ -322,7 +373,12 @@ func writeStrictTOC(body *strings.Builder, article *model.Note) {
 		return
 	}
 	body.WriteString(`<nav class="table-of-contents" aria-label="Table of contents"><ol>`)
+	skippedHeading = false
 	for _, heading := range article.Headings {
+		if omitHeadingID != "" && !skippedHeading && heading.ID == omitHeadingID {
+			skippedHeading = true
+			continue
+		}
 		if heading.ID != "" && strings.TrimSpace(heading.Text) != "" {
 			_, _ = fmt.Fprintf(body, `<li class="toc-level-%d"><a href="#%s">%s</a></li>`, heading.Level, esc(heading.ID), esc(heading.Text))
 		}
@@ -351,7 +407,7 @@ func writeStrictArticleMetadata(body *strings.Builder, article *model.Note) {
 				body.WriteString(`<dl class="article-metadata">`)
 				written = true
 			}
-			_, _ = fmt.Fprintf(body, `<dt>%s</dt><dd>%s</dd>`, esc(item.name), esc(item.value))
+			_, _ = fmt.Fprintf(body, `<div><dt>%s</dt><dd>%s</dd></div>`, esc(item.name), esc(item.value))
 		}
 	}
 	if written {
@@ -363,7 +419,7 @@ func strictMetadataTime(value time.Time) string {
 	if value.IsZero() {
 		return ""
 	}
-	return value.UTC().Format(time.RFC3339)
+	return value.UTC().Format("Jan 2, 2006")
 }
 
 func strictDocument(plan *model.SitePlan, currentRoute, title, description string, breadcrumbs []model.Breadcrumb, versionID string, versionRoutes map[string]string, socialImage string, metadata *model.Note, sourcePath string, sidebarNodes []model.SidebarNode, body string) ([]byte, error) {
@@ -560,7 +616,7 @@ func strictDocument(plan *model.SitePlan, currentRoute, title, description strin
 		output.WriteString(`</nav>`)
 	}
 	if plan.Config.Popover.Enabled {
-		output.WriteString(`<div id="obsite-popover-card" data-popover-card hidden aria-hidden="true"></div>`)
+		output.WriteString(`<div id="obsite-popover-card" class="popover-card" data-popover-card hidden aria-hidden="true"></div>`)
 	}
 	output.WriteString(slots["obsite-main-end"])
 	output.WriteString(`</div></main><footer class="site-footer"><small>Generated by Obsite</small>`)
@@ -688,6 +744,348 @@ func strictMarkdown(plan *model.SitePlan, index *model.VaultIndex, note *model.N
 	return output.String(), nil
 }
 
+func strictLeadingTitlePlacement(content string, note *model.Note, leadingID string) (shellID, tocHeadingID string) {
+	if leadingID == "" {
+		return "", ""
+	}
+	retainedIDs := strictRenderedHTMLIDs(content)
+	matchingHeadings := 0
+	for _, heading := range noteHeadings(note) {
+		if heading.ID == leadingID {
+			matchingHeadings++
+		}
+	}
+	if _, collision := retainedIDs[leadingID]; collision {
+		if !strictSourceStartsWithRawHTMLHeading(note) && matchingHeadings > 0 {
+			return "", leadingID
+		}
+		return "", ""
+	}
+	if matchingHeadings > 0 && !strictSourceStartsWithRawHTMLHeading(note) {
+		return leadingID, leadingID
+	}
+	return leadingID, ""
+}
+
+func noteHeadings(note *model.Note) []model.Heading {
+	if note == nil {
+		return nil
+	}
+	return note.Headings
+}
+
+func strictSourceStartsWithRawHTMLHeading(note *model.Note) bool {
+	if note == nil || len(note.RawContent) == 0 {
+		return false
+	}
+	source := note.RawContent
+	tokenizer := xhtml.NewTokenizer(bytes.NewReader(source))
+	for {
+		tokenType := tokenizer.Next()
+		switch tokenType {
+		case xhtml.ErrorToken:
+			return false
+		case xhtml.CommentToken:
+			continue
+		case xhtml.TextToken:
+			if strings.TrimSpace(string(tokenizer.Text())) == "" {
+				continue
+			}
+			return false
+		case xhtml.StartTagToken:
+			tagName, _ := tokenizer.TagName()
+			return strings.EqualFold(string(tagName), "h1")
+		default:
+			return false
+		}
+	}
+}
+
+func strictRenderedHTMLComments(content string) []byte {
+	var comments bytes.Buffer
+	rawTextTag := ""
+	tokenizer := xhtml.NewTokenizer(strings.NewReader(content))
+	for {
+		tokenType := tokenizer.Next()
+		raw := tokenizer.Raw()
+		if tokenType == xhtml.ErrorToken {
+			return comments.Bytes()
+		}
+		if tokenType == xhtml.CommentToken {
+			comments.Write(raw)
+			continue
+		}
+		if rawTextTag != "" {
+			switch tokenType {
+			case xhtml.TextToken:
+				strictAppendHTMLCommentLexemes(&comments, raw)
+			case xhtml.EndTagToken:
+				tagName, _ := tokenizer.TagName()
+				if strings.EqualFold(string(tagName), rawTextTag) {
+					rawTextTag = ""
+				}
+			}
+			continue
+		}
+		if tokenType == xhtml.StartTagToken {
+			tagName, _ := tokenizer.TagName()
+			if strings.EqualFold(string(tagName), "script") || strings.EqualFold(string(tagName), "style") {
+				rawTextTag = strings.ToLower(string(tagName))
+			}
+		}
+	}
+}
+
+func strictAppendHTMLCommentLexemes(output *bytes.Buffer, content []byte) {
+	for offset := 0; offset < len(content); {
+		start := bytes.Index(content[offset:], []byte("<!--"))
+		if start < 0 {
+			return
+		}
+		start += offset
+		end := bytes.Index(content[start+4:], []byte("-->"))
+		if end < 0 {
+			return
+		}
+		end += start + 7
+		output.Write(content[start:end])
+		offset = end
+	}
+}
+
+func strictRenderedHTMLIDs(content string) map[string]struct{} {
+	ids := make(map[string]struct{})
+	tokenizer := xhtml.NewTokenizer(strings.NewReader(content))
+	for {
+		tokenType := tokenizer.Next()
+		if tokenType == xhtml.ErrorToken {
+			return ids
+		}
+		if tokenType != xhtml.StartTagToken && tokenType != xhtml.SelfClosingTagToken {
+			continue
+		}
+		for _, attribute := range tokenizer.Token().Attr {
+			if attribute.Key == "id" && attribute.Val != "" {
+				ids[attribute.Val] = struct{}{}
+			}
+		}
+	}
+}
+
+// strictDropLeadingTitleHeading keeps the authored source intact while avoiding
+// a duplicate visible H1 when the shell already renders the frontmatter title.
+// Only a leading, exact title match is removed; authored headings elsewhere are
+// preserved.
+func strictDropLeadingTitleHeading(content, title string) (string, bool, string, error) {
+	if strings.TrimSpace(content) == "" || strings.TrimSpace(title) == "" {
+		return content, false, "", nil
+	}
+	tokenizer := xhtml.NewTokenizer(strings.NewReader(content))
+	wrappers := make([]string, 0)
+	offset := 0
+	for {
+		tokenType := tokenizer.Next()
+		raw := tokenizer.Raw()
+		start := offset
+		offset += len(raw)
+		switch tokenType {
+		case xhtml.ErrorToken:
+			if tokenizer.Err() == io.EOF {
+				return content, false, "", nil
+			}
+			return "", false, "", fmt.Errorf("scan rendered Markdown heading: %w", tokenizer.Err())
+		case xhtml.TextToken:
+			if strings.TrimSpace(string(tokenizer.Text())) == "" {
+				continue
+			}
+			return content, false, "", nil
+		case xhtml.CommentToken:
+			continue
+		case xhtml.EndTagToken:
+			tagName, _ := tokenizer.TagName()
+			if len(wrappers) > 0 && strings.EqualFold(string(tagName), wrappers[len(wrappers)-1]) {
+				wrappers = wrappers[:len(wrappers)-1]
+				continue
+			}
+			return content, false, "", nil
+		case xhtml.StartTagToken, xhtml.SelfClosingTagToken:
+			token := tokenizer.Token()
+			tagName := strings.ToLower(token.Data)
+			if strictHTMLTagInvisible(tagName, token.Attr) {
+				if tokenType != xhtml.SelfClosingTagToken && !strictHTMLVoidTag(tagName) {
+					consumed, err := strictSkipInvisibleHTML(tokenizer, tagName)
+					offset += consumed
+					if err != nil && err != io.EOF {
+						return "", false, "", fmt.Errorf("scan invisible rendered HTML: %w", err)
+					}
+				}
+				continue
+			}
+			if tagName != "h1" {
+				if tokenType == xhtml.SelfClosingTagToken || strictHTMLVoidTag(tagName) {
+					return content, false, "", nil
+				}
+				wrappers = append(wrappers, tagName)
+				continue
+			}
+			if tokenType == xhtml.SelfClosingTagToken {
+				return content, false, "", nil
+			}
+			end := offset
+			depth := 1
+			for depth > 0 {
+				innerType := tokenizer.Next()
+				innerRaw := tokenizer.Raw()
+				end += len(innerRaw)
+				if innerType == xhtml.ErrorToken {
+					if tokenizer.Err() == io.EOF {
+						return content, false, "", nil
+					}
+					return "", false, "", fmt.Errorf("scan rendered Markdown heading: %w", tokenizer.Err())
+				}
+				switch innerType {
+				case xhtml.StartTagToken:
+					innerName, _ := tokenizer.TagName()
+					if string(innerName) == "h1" {
+						depth++
+					}
+				case xhtml.EndTagToken:
+					innerName, _ := tokenizer.TagName()
+					if string(innerName) == "h1" {
+						depth--
+					}
+				}
+			}
+			headingID, matches, err := strictRenderedHeadingIdentity(content[start:end], title)
+			if err != nil {
+				return "", false, "", err
+			}
+			if !matches {
+				return content, false, "", nil
+			}
+			preservedComments := strictRenderedHTMLComments(content[start:end])
+			if len(preservedComments) == 0 {
+				return content[:start] + content[end:], true, headingID, nil
+			}
+			return content[:start] + string(preservedComments) + content[end:], true, headingID, nil
+		default:
+			return content, false, "", nil
+		}
+	}
+}
+
+func strictRenderedHeadingIdentity(fragment, title string) (string, bool, error) {
+	context := &xhtml.Node{Type: xhtml.ElementNode, DataAtom: atom.Div, Data: "div"}
+	nodes, err := xhtml.ParseFragment(strings.NewReader(fragment), context)
+	if err != nil {
+		return "", false, fmt.Errorf("parse rendered Markdown heading: %w", err)
+	}
+	for _, node := range nodes {
+		if node.Type != xhtml.ElementNode || node.Data != "h1" {
+			continue
+		}
+		if normalizeStrictHeadingText(strictHTMLText(node)) != normalizeStrictHeadingText(title) {
+			return "", false, nil
+		}
+		for _, attr := range node.Attr {
+			if attr.Key == "id" {
+				return string(attr.Val), true, nil
+			}
+		}
+		return "", true, nil
+	}
+	return "", false, nil
+}
+
+func normalizeStrictHeadingText(value string) string {
+	return strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+}
+
+func strictHTMLText(node *xhtml.Node) string {
+	if node.Type == xhtml.TextNode {
+		return node.Data
+	}
+	if strictHTMLNodeInvisible(node) {
+		return ""
+	}
+	var text strings.Builder
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		boundary := child.Type == xhtml.ElementNode && strictHTMLBoundaryTag(child.Data)
+		if boundary {
+			text.WriteByte(' ')
+		}
+		text.WriteString(strictHTMLText(child))
+		if boundary {
+			text.WriteByte(' ')
+		}
+	}
+	return text.String()
+}
+
+func strictHTMLNodeInvisible(node *xhtml.Node) bool {
+	return node != nil && strictHTMLTagInvisible(node.Data, node.Attr)
+}
+
+func strictHTMLTagInvisible(tag string, attrs []xhtml.Attribute) bool {
+	if tag == "script" || tag == "style" || tag == "template" {
+		return true
+	}
+	for _, attr := range attrs {
+		switch attr.Key {
+		case "hidden":
+			return true
+		case "style":
+			if markdown.StyleHidesHTMLText(string(attr.Val)) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func strictHTMLVoidTag(tag string) bool {
+	switch tag {
+	case "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr":
+		return true
+	default:
+		return false
+	}
+}
+
+func strictSkipInvisibleHTML(tokenizer *xhtml.Tokenizer, tag string) (int, error) {
+	depth := 1
+	consumed := 0
+	for depth > 0 {
+		tokenType := tokenizer.Next()
+		consumed += len(tokenizer.Raw())
+		if tokenType == xhtml.ErrorToken {
+			return consumed, tokenizer.Err()
+		}
+		switch tokenType {
+		case xhtml.StartTagToken:
+			token := tokenizer.Token()
+			if strings.ToLower(token.Data) == tag && !strictHTMLVoidTag(tag) {
+				depth++
+			}
+		case xhtml.EndTagToken:
+			tagName, _ := tokenizer.TagName()
+			if strings.EqualFold(string(tagName), tag) {
+				depth--
+			}
+		}
+	}
+	return consumed, nil
+}
+
+func strictHTMLBoundaryTag(tag string) bool {
+	switch tag {
+	case "address", "article", "aside", "blockquote", "br", "caption", "dd", "div", "dl", "dt", "figcaption", "figure", "footer", "form", "header", "h1", "h2", "h3", "h4", "h5", "h6", "hr", "li", "main", "nav", "ol", "p", "pre", "section", "table", "tbody", "td", "tfoot", "th", "thead", "tr", "ul":
+		return true
+	default:
+		return false
+	}
+}
+
 func strictPublicVersions(plan *model.SitePlan) []*model.Version {
 	if plan == nil {
 		return nil
@@ -712,6 +1110,24 @@ func publishedSectionChildren(section *model.Section) []*model.Section {
 		}
 	}
 	return result
+}
+
+func strictWriteListingItem(body *strings.Builder, plan *model.SitePlan, note *model.Note) {
+	if body == nil || plan == nil || note == nil {
+		return
+	}
+	_, _ = fmt.Fprintf(body, `<li><a class="listing-card" href="%s"><span class="listing-title">%s</span>`, esc(strictSitePath(plan, note.Route)), esc(note.Frontmatter.Title))
+	summary := strings.TrimSpace(note.Frontmatter.Description)
+	if summary == "" {
+		summary = strings.TrimSpace(note.Summary)
+	}
+	if summary != "" {
+		_, _ = fmt.Fprintf(body, `<span class="listing-summary">%s</span>`, esc(summary))
+	}
+	if published := note.Frontmatter.Date; !published.IsZero() {
+		_, _ = fmt.Fprintf(body, `<time class="listing-date" datetime="%s">%s</time>`, esc(published.UTC().Format(time.RFC3339)), esc(strictMetadataTime(published)))
+	}
+	body.WriteString(`</a></li>`)
 }
 
 func strictChildVersions(plan *model.SitePlan, section *model.Section) []*model.Version {

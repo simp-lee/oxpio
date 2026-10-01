@@ -65,6 +65,22 @@ func readBuildOutputFile(t *testing.T, root, relPath string) []byte {
 	return data
 }
 
+func TestStrictBuildPreservesAuthoredHTMLComments(t *testing.T) {
+	vaultPath := t.TempDir()
+	writeStrictFile(t, vaultPath, "obsite.yaml", "title: Comments\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vaultPath, "_index.md", "---\ntitle: Home\npublish: true\n---\n<!-- preserve this comment --><script><!-- preserve script comment --></script><style><!-- preserve style comment --></style><p>Body</p>\n")
+	outputPath := filepath.Join(t.TempDir(), "site")
+	if _, err := BuildWithOptions(vaultPath, outputPath, Options{}); err != nil {
+		t.Fatal(err)
+	}
+	output := string(readBuildOutputFile(t, outputPath, "index.html"))
+	for _, comment := range []string{"<!-- preserve this comment -->", "<!-- preserve script comment -->", "<!-- preserve style comment -->"} {
+		if !strings.Contains(output, comment) {
+			t.Fatalf("authored HTML comment %q missing from output: %s", comment, output)
+		}
+	}
+}
+
 func TestStrictBuildUsesCanonicalSectionPlanAndRichMarkdown(t *testing.T) {
 	vaultPath := copyFixtureVault(t, "feature-vault")
 	outputPath := filepath.Join(t.TempDir(), "site")
@@ -81,6 +97,17 @@ func TestStrictBuildUsesCanonicalSectionPlanAndRichMarkdown(t *testing.T) {
 		}
 	}
 	article := readBuildOutputFile(t, outputPath, "guide/article/index.html")
+	articleHTML := string(article)
+	if strings.Count(articleHTML, "<h1") != 1 {
+		t.Fatalf("article H1 count = %d, want one\n%s", strings.Count(articleHTML, "<h1"), articleHTML)
+	}
+	if !strings.Contains(articleHTML, `article-metadata`) {
+		t.Fatalf("article missing structured metadata\n%s", articleHTML)
+	}
+	section := string(readBuildOutputFile(t, outputPath, "index.html"))
+	if strings.Count(section, "<h1") != 1 {
+		t.Fatalf("home H1 count = %d, want one\n%s", strings.Count(section, "<h1"), section)
+	}
 	for _, want := range []string{"Feature Article", "deprecated", "Alice Example", "Developers", "2.0", "Releases", "application/ld+json", "summary_large_image", "page-banner"} {
 		if !bytes.Contains(article, []byte(want)) {
 			t.Fatalf("article missing %q\n%s", want, article)

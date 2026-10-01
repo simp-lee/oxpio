@@ -50,11 +50,13 @@ function formValues() {
   return result;
 }
 function showForm(metadata) {
+  const advanced = document.querySelector(".metadata-advanced");
+  if (advanced) advanced.hidden = state.kind === "section";
   for (const input of fields) {
     const name = input.dataset.field;
     const value = metadata[name];
     if (name === "publish") input.checked = value === true;
-    else if (Array.isArray(value)) input.value = value.join("\n");
+    else if (Array.isArray(value)) input.value = value.join(", ");
     else input.value = value == null ? "" : String(value);
     input.closest("label").hidden = state.kind === "section" && !sectionFields.has(name);
   }
@@ -130,6 +132,7 @@ async function refreshFiles(preferred = state.filePath) {
     icon.className = "file-entry-icon";
     icon.textContent = entry.kind === "folder" ? "▾" : "·";
     const label = document.createElement("span");
+    label.className = "file-entry-label";
     label.textContent = entry.path;
     button.append(icon, label);
     button.onclick = () => selectFileEntry(entry);
@@ -217,8 +220,43 @@ function updateMode() {
   $("#metadata").hidden = state.mode === "source";
   $("#mode").textContent = state.mode === "source" ? "Form mode" : "Source mode";
 }
+function originalOffsetForNormalized(value, target) {
+  let normalized = 0;
+  let offset = 0;
+  while (offset < value.length && normalized < target) {
+    if (value[offset] === "\r" && value[offset + 1] === "\n") offset++;
+    offset++;
+    normalized++;
+  }
+  return offset;
+}
+function sourceLineBreakAt(value, offset) {
+  for (let index = offset - 1; index >= 0; index--) {
+    if (value[index] === "\n") return index > 0 && value[index - 1] === "\r" ? "\r\n" : "\n";
+    if (value[index] === "\r") return "\r";
+  }
+  for (let index = offset; index < value.length; index++) {
+    if (value[index] === "\n") return index > 0 && value[index - 1] === "\r" ? "\r\n" : "\n";
+    if (value[index] === "\r") return "\r";
+  }
+  return "\n";
+}
+function applySourceChanges(update) {
+  const changes = [];
+  update.changes.iterChanges((fromA, toA, _fromB, _toB, insert) => changes.push({fromA, toA, insert: insert.toString()}));
+  let source = state.source;
+  for (let index = changes.length - 1; index >= 0; index--) {
+    const change = changes[index];
+    const from = originalOffsetForNormalized(source, change.fromA);
+    const to = originalOffsetForNormalized(source, change.toA);
+    const lineBreak = sourceLineBreakAt(source, from);
+    const inserted = change.insert.replace(/\n/g, lineBreak);
+    source = source.slice(0, from) + inserted + source.slice(to);
+  }
+  return source;
+}
 async function compose() {
-  if (state.mode === "source") return state.sourceChanged ? text() : state.source;
+  if (state.mode === "source") return state.source;
   const changed = changes();
   const bodyChanged = text() !== state.bodyBaseline;
   if (!changed.length && !bodyChanged) return state.source;
@@ -329,6 +367,7 @@ function editorExtensions() {
     EditorView.contentAttributes.of({"aria-label": "Markdown content"}),
     EditorView.updateListener.of(update => {
       if (!suppressChanges && update.docChanged) {
+        if (state.mode === "source") state.source = applySourceChanges(update);
         state.sourceChanged = true;
         dirty();
       }
@@ -341,7 +380,30 @@ function mediaReference(mediaPath) {
   const alt = mediaPath.split("/").pop().replace(/\.[^.]+$/, "").replace(/[\[\]\\]/g, "\\$&");
   return `![${alt}](${destination})`;
 }
-function insertMedia(path) { insert(mediaReference(path)); }
+function insertMedia(path) {
+  if (state.busy) return;
+  const reference = mediaReference(path);
+  let {from, to} = editor.state.selection.main;
+  let afterFrontmatter = false;
+  if (state.mode === "source") {
+    const source = text();
+    const frontmatter = /^(?:\uFEFF)?---(?:\r\n|\r|\n)[\s\S]*?(?:\r\n|\r|\n)(?:---|\.\.\.)(?:(?:\r\n|\r|\n)|$)/.exec(source);
+    if (frontmatter && from < frontmatter[0].length) {
+      from = to = frontmatter[0].length;
+      afterFrontmatter = true;
+    } else if (/^(?:\uFEFF)?---[ \t]*(?:(?:\r\n|\r|\n)|$)/.test(source) && !frontmatter) {
+      status("Fix the frontmatter or switch to form mode before inserting an image.");
+      return;
+    }
+  }
+  const source = text();
+  const before = source.slice(0, from);
+  const after = source.slice(to);
+  const prefix = afterFrontmatter ? "\n" : (before && !before.endsWith("\n") ? "\n\n" : "");
+  const value = prefix + reference + (after && !after.startsWith("\n") ? "\n\n" : "\n");
+  editor.dispatch({changes: {from, to, insert: value}, selection: {anchor: from + value.length}});
+  editor.focus();
+}
 async function openMedia() { $("#media-panel").hidden = false; await loadMedia(); }
 async function loadMedia() {
   const list = $("#media-list");

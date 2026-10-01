@@ -6,10 +6,10 @@ cover: images/hero.png
 ---
 # Math and Diagrams
 
-Inline formula $\\frac{1}{2}$.
+Inline formula $\frac{1}{2}$.
 
 $$
-\\frac{1}{1 + \\frac{1}{n}}
+\frac{1}{1 + \frac{1}{n}}
 $$
 
 ```mermaid

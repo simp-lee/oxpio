@@ -455,6 +455,11 @@ func (s *Server) RefreshBasePath() {
 	s.basePathMu.Unlock()
 }
 
+// BasePath returns the configured public output prefix.
+func (s *Server) BasePath() string {
+	return s.currentBasePath()
+}
+
 func (s *Server) currentBasePath() string {
 	if s == nil {
 		return "/"

@@ -207,7 +207,7 @@ test('strict section pages and article flow remain usable without JavaScript', a
   await expect(page.locator('.breadcrumbs')).toContainText('Nested Child');
   const collection = page.locator('.section-articles a');
   await expectHrefOrder(collection, childDocumentRoutes);
-  await expect(collection).toHaveText(['Intro', 'Tie', 'Tie', 'Child Article']);
+  await expect(collection.locator('.listing-title')).toHaveText(['Intro', 'Tie', 'Tie', 'Child Article']);
   await expectHrefSubsetOrder(page.locator('[data-sidebar-root]'), childDocumentRoutes);
 
   const readingFlow = [
@@ -323,6 +323,9 @@ test('strict Markdown runtime stays local and social PNG is independently reacha
   await page.goto(`${origin}/alpha/math-diagrams/`);
   await expect(page.locator('article > header h1')).toHaveText('Math and Diagrams');
   await expect(page.locator('[data-obsite-main]')).toContainText('After invalid diagram remains visible.');
+  await expect(page.locator('[data-obsite-math-source] .katex')).toHaveCount(2);
+  await expect(page.locator('[data-obsite-math-source] .katex-error')).toHaveCount(0);
+  await expect(page.locator('[data-page-content] pre.mermaid svg')).toHaveCount(1);
   await expect(page.locator('script[src*="/assets/obsite/runtime."]')).toHaveCount(1);
   await page.goto(`${origin}/alpha/child/child/`);
   await expect.poll(() => page.locator('[data-site-body]').getAttribute('data-sidebar-ready')).toBe('true');

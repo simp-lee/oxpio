@@ -447,14 +447,45 @@ func headingHTMLTagIsVoid(name string) bool {
 	return ok
 }
 
+func StyleHidesHTMLText(style string) bool {
+	for _, declaration := range strings.Split(style, ";") {
+		colon := strings.IndexByte(declaration, ':')
+		if colon < 0 {
+			continue
+		}
+		property := strings.ToLower(strings.TrimSpace(declaration[:colon]))
+		value := strings.Fields(strings.ToLower(strings.TrimSpace(declaration[colon+1:])))
+		if len(value) == 0 {
+			continue
+		}
+		firstValue := strings.TrimSuffix(value[0], "!important")
+		switch property {
+		case "display":
+			if firstValue == "none" {
+				return true
+			}
+		case "visibility":
+			if firstValue == "hidden" || firstValue == "collapse" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func headingHTMLTagHidesText(name string, attrs []xhtml.Attribute) bool {
 	if _, ok := headingInvisibleTextTags[name]; ok {
 		return true
 	}
 
 	for _, attr := range attrs {
-		if strings.EqualFold(attr.Key, "hidden") {
+		switch {
+		case strings.EqualFold(attr.Key, "hidden"):
 			return true
+		case strings.EqualFold(attr.Key, "style"):
+			if StyleHidesHTMLText(string(attr.Val)) {
+				return true
+			}
 		}
 	}
 

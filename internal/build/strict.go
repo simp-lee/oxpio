@@ -31,6 +31,7 @@ import (
 	"github.com/simp-lee/obsite/internal/social"
 	"github.com/tdewolff/minify/v2"
 	minhtml "github.com/tdewolff/minify/v2/html"
+	xhtml "golang.org/x/net/html"
 )
 
 // buildStrictSite publishes the normalized section model through the same
@@ -394,10 +395,12 @@ func (sink *strictCacheAssetSink) Register(source string) string {
 }
 
 type strictCachePageEntry struct {
-	RelPath   string `json:"relPath"`
-	Route     string `json:"route"`
-	Title     string `json:"title"`
-	VersionID string `json:"versionID,omitempty"`
+	RelPath     string `json:"relPath"`
+	Route       string `json:"route"`
+	Title       string `json:"title"`
+	Summary     string `json:"summary,omitempty"`
+	PublishedAt string `json:"publishedAt,omitempty"`
+	VersionID   string `json:"versionID,omitempty"`
 }
 
 type strictCacheVersionEntry struct {
@@ -605,7 +608,7 @@ func strictCachePageEntries(notes []*model.Note) []strictCachePageEntry {
 	entries := make([]strictCachePageEntry, 0, len(notes))
 	for _, note := range notes {
 		if note != nil {
-			entries = append(entries, strictCachePageEntry{RelPath: note.RelPath, Route: note.Route, Title: note.Frontmatter.Title, VersionID: note.VersionID})
+			entries = append(entries, *strictCacheNoteEntry(note))
 		}
 	}
 	return entries
@@ -625,7 +628,18 @@ func strictCacheNoteEntry(note *model.Note) *strictCachePageEntry {
 	if note == nil {
 		return nil
 	}
-	return &strictCachePageEntry{RelPath: note.RelPath, Route: note.Route, Title: note.Frontmatter.Title, VersionID: note.VersionID}
+	summary := strings.TrimSpace(note.Frontmatter.Description)
+	if summary == "" {
+		summary = strings.TrimSpace(note.Summary)
+	}
+	publishedAt := ""
+	if published := note.Frontmatter.Date; !published.IsZero() {
+		publishedAt = published.UTC().Format(time.RFC3339)
+	}
+	return &strictCachePageEntry{
+		RelPath: note.RelPath, Route: note.Route, Title: note.Frontmatter.Title,
+		Summary: summary, PublishedAt: publishedAt, VersionID: note.VersionID,
+	}
 }
 
 // strictCacheLookupDigests hashes the shared lookup once per build. The base
@@ -732,13 +746,109 @@ func strictCacheArticlePageInput(plan *model.SitePlan, article *model.Note, sect
 }
 
 func writeStrictHTML(outputs *strictOutputRegistry, outputRoot, relPath, owner string, data []byte) error {
+	protected, comments, err := protectStrictHTMLComments(data)
+	if err != nil {
+		return fmt.Errorf("protect HTML comments in %s: %w", relPath, err)
+	}
 	minifier := minify.New()
 	minifier.AddFunc("text/html", minhtml.Minify)
-	compact, err := minifier.Bytes("text/html", data)
+	compact, err := minifier.Bytes("text/html", protected)
 	if err != nil {
 		return fmt.Errorf("minify %s: %w", relPath, err)
 	}
+	for _, comment := range comments {
+		compact = bytes.ReplaceAll(compact, comment.placeholder, comment.content)
+	}
 	return outputs.write(outputRoot, relPath, owner, compact)
+}
+
+type strictHTMLComment struct {
+	placeholder []byte
+	content     []byte
+}
+
+type strictHTMLProtectionSpan struct {
+	start, end int
+	rawComment bool
+}
+
+func protectStrictHTMLComments(data []byte) ([]byte, []strictHTMLComment, error) {
+	spans := make([]strictHTMLProtectionSpan, 0)
+	rawTextTag := ""
+	tokenizer := xhtml.NewTokenizer(bytes.NewReader(data))
+	offset := 0
+	for {
+		tokenType := tokenizer.Next()
+		raw := tokenizer.Raw()
+		start := offset
+		offset += len(raw)
+		if tokenType == xhtml.ErrorToken {
+			if tokenizer.Err() == io.EOF {
+				break
+			}
+			return nil, nil, tokenizer.Err()
+		}
+		if rawTextTag != "" {
+			appendStrictRawTextCommentSpans(&spans, raw, start)
+			if tokenType == xhtml.EndTagToken {
+				tagName, _ := tokenizer.TagName()
+				if strings.EqualFold(string(tagName), rawTextTag) {
+					rawTextTag = ""
+				}
+			}
+			continue
+		}
+		if tokenType == xhtml.CommentToken {
+			spans = append(spans, strictHTMLProtectionSpan{start: start, end: offset})
+			continue
+		}
+		if tokenType == xhtml.StartTagToken {
+			tagName, _ := tokenizer.TagName()
+			if strings.EqualFold(string(tagName), "script") || strings.EqualFold(string(tagName), "style") {
+				rawTextTag = strings.ToLower(string(tagName))
+			}
+		}
+	}
+	if len(spans) == 0 {
+		return data, nil, nil
+	}
+	digest := sha256.Sum256(data)
+	comments := make([]strictHTMLComment, 0, len(spans))
+	protected := make([]byte, 0, len(data))
+	previous := 0
+	for index, current := range spans {
+		protected = append(protected, data[previous:current.start]...)
+		token := []byte(fmt.Sprintf("obsite-comment-%x-%08d", digest[:8], index))
+		for bytes.Contains(data, token) {
+			token = append(token, 'x')
+		}
+		placeholder := token
+		if current.rawComment {
+			placeholder = []byte(`/*!` + string(token) + `*/`)
+		}
+		comments = append(comments, strictHTMLComment{placeholder: placeholder, content: append([]byte(nil), data[current.start:current.end]...)})
+		protected = append(protected, placeholder...)
+		previous = current.end
+	}
+	protected = append(protected, data[previous:]...)
+	return protected, comments, nil
+}
+
+func appendStrictRawTextCommentSpans(spans *[]strictHTMLProtectionSpan, raw []byte, offset int) {
+	for cursor := 0; cursor < len(raw); {
+		start := bytes.Index(raw[cursor:], []byte("<!--"))
+		if start < 0 {
+			return
+		}
+		start += cursor
+		end := bytes.Index(raw[start+4:], []byte("-->"))
+		if end < 0 {
+			return
+		}
+		end += start + 7
+		*spans = append(*spans, strictHTMLProtectionSpan{start: offset + start, end: offset + end, rawComment: true})
+		cursor = end
+	}
 }
 
 func generateStrictSocialCards(plan *model.SitePlan, vaultPath string, workerCount int) (map[string]social.Result, error) {

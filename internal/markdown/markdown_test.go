@@ -255,7 +255,7 @@ func TestNewParserPass1HeadingIDsIgnoreInvisibleRawHTMLAndPreserveEntities(t *te
 	t.Parallel()
 
 	md := NewParser(diag.NewCollector())
-	source := []byte("# Hello <script>alert(1)</script><style>.x{}</style><template><span>Ghost</span></template><span hidden>Skip <span>Deeper</span></span><span>&amp;lt;</span> World\n")
+	source := []byte("# Hello <script>alert(1)</script><style>.x{}</style><template><span>Ghost</span></template><span hidden>Skip <span>Deeper</span></span><span style=\"display: none\">Also skip</span><span>&amp;lt;</span> World\n")
 	doc := md.Parser().Parse(text.NewReader(source))
 	headings := collectHeadings(t, doc)
 	if len(headings) != 1 {

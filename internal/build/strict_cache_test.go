@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/simp-lee/obsite/internal/model"
@@ -38,6 +39,39 @@ func TestStrictCacheManifestSeparatesInputsFromOutputs(t *testing.T) {
 	}
 	if firstOutput.OutputHash == secondOutput.OutputHash {
 		t.Fatal("custom CSS output hash did not change")
+	}
+}
+
+func TestStrictCacheInvalidatesListingMetadata(t *testing.T) {
+	vault := t.TempDir()
+	writeStrictFile(t, vault, "obsite.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeStrictFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: post\ndate: 2026-01-02\ndescription: Initial summary\n---\nArticle\n")
+	output := t.TempDir()
+	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
+		t.Fatal(err)
+	}
+	first, err := os.ReadFile(filepath.Join(output, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(first), "Initial summary") || !strings.Contains(string(first), "Jan 2, 2026") {
+		t.Fatalf("initial listing metadata missing: %s", first)
+	}
+
+	writeStrictFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: post\ndate: 2026-01-03\ndescription: Updated summary\n---\nArticle\n")
+	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := os.ReadFile(filepath.Join(output, "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(second), "Updated summary") || !strings.Contains(string(second), "Jan 3, 2026") {
+		t.Fatalf("updated listing metadata missing: %s", second)
+	}
+	if strings.Contains(string(second), "Initial summary") || strings.Contains(string(second), "Jan 2, 2026") {
+		t.Fatalf("stale listing metadata survived rebuild: %s", second)
 	}
 }
 

@@ -91,14 +91,14 @@ navigation:
 		t.Fatalf("section article list is unterminated:\n%s", section)
 	}
 	articleList := section[articleListStart : articleListStart+articleListEnd]
-	firstLink := strings.Index(articleList, `href=/guide/first/>First</a>`)
-	secondLink := strings.Index(articleList, `href=/guide/second/>Second</a>`)
+	firstLink := strings.Index(articleList, `href=/guide/first/`)
+	secondLink := strings.Index(articleList, `href=/guide/second/`)
 	if firstLink < 0 || secondLink < 0 || firstLink >= secondLink {
 		t.Fatalf("section article order = %s, want First then Second", articleList)
 	}
 
 	first := string(readCLIOutputFile(t, output, "guide/first/index.html"))
-	if !strings.Contains(first, `<span class=position>1 of 2</span>`) || !strings.Contains(first, `<a class=next rel=next href=/guide/second/>Next</a>`) {
+	if !strings.Contains(first, `<span class=position>1 of 2</span>`) || !strings.Contains(first, `<a class=next rel=next href=/guide/second/>Next →</a>`) {
 		t.Fatalf("first reading flow = %s", first)
 	}
 	if strings.Contains(first, `class=previous`) {
@@ -106,7 +106,7 @@ navigation:
 	}
 
 	second := string(readCLIOutputFile(t, output, "guide/second/index.html"))
-	if !strings.Contains(second, `<span class=position>2 of 2</span>`) || !strings.Contains(second, `<a class=previous rel=prev href=/guide/first/>Previous</a>`) {
+	if !strings.Contains(second, `<span class=position>2 of 2</span>`) || !strings.Contains(second, `<a class=previous rel=prev href=/guide/first/>← Previous</a>`) {
 		t.Fatalf("second reading flow = %s", second)
 	}
 	if strings.Contains(second, `class=next`) {

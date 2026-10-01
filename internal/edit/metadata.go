@@ -90,15 +90,20 @@ func parseEditorDocument(content []byte) (editorDocument, error) {
 
 func editorSourceLines(content []byte) []editorLine {
 	lines := make([]editorLine, 0)
-	start := 0
-	for start < len(content) {
-		end := bytes.IndexByte(content[start:], '\n')
-		if end < 0 {
-			lines = append(lines, editorLine{start: start, end: len(content), text: string(content[start:])})
-			break
+	for start := 0; start < len(content); {
+		lineEnd := start
+		for lineEnd < len(content) && content[lineEnd] != '\r' && content[lineEnd] != '\n' {
+			lineEnd++
 		}
-		end += start + 1
-		lines = append(lines, editorLine{start: start, end: end, text: string(content[start : end-1])})
+		end := lineEnd
+		if end < len(content) {
+			if content[end] == '\r' && end+1 < len(content) && content[end+1] == '\n' {
+				end += 2
+			} else {
+				end++
+			}
+		}
+		lines = append(lines, editorLine{start: start, end: end, text: string(content[start:lineEnd])})
 		start = end
 	}
 	return lines
@@ -335,50 +340,84 @@ func editorYAMLField(key string, value any) []string {
 }
 
 func replaceEditorField(block []byte, key string, replacement []string) ([]byte, error) {
-	lines := strings.SplitAfter(string(block), "\n")
+	lines := editorSourceLines(block)
 	start := -1
 	for index, line := range lines {
-		if editorTopLevelField(line) == key {
+		if editorTopLevelField(line.text) == key {
 			start = index
 			break
 		}
 	}
+	separator := editorPreferredLineEnding(block)
 	if start < 0 {
 		if len(replacement) == 0 {
 			return block, nil
 		}
-		insertAt := len(lines)
-		if insertAt > 0 && lines[insertAt-1] == "" {
-			insertAt--
+		updated := append([]byte(nil), block...)
+		if len(updated) > 0 && !hasEditorLineEnding(updated) {
+			updated = append(updated, separator...)
 		}
-		lines = append(lines, "")
-		lines = append(lines[:insertAt], append(editorLinesWithNewlines(replacement), lines[insertAt:]...)...)
-		return []byte(strings.Join(lines, "")), nil
+		return append(updated, []byte(strings.Join(editorLinesWithNewlines(replacement, separator), ""))...), nil
 	}
 	end := start + 1
 	for end < len(lines) {
-		line := strings.TrimSuffix(strings.TrimSuffix(lines[end], "\n"), "\r")
-		if line != "" && !strings.HasPrefix(line, " ") && !strings.HasPrefix(line, "\t") {
+		line := lines[end].text
+		if line == "" {
+			next := end + 1
+			for next < len(lines) && lines[next].text == "" {
+				next++
+			}
+			if next >= len(lines) || (len(lines[next].text) == 0 || (lines[next].text[0] != ' ' && lines[next].text[0] != '\t')) {
+				break
+			}
+			end++
+			continue
+		}
+		if line[0] != ' ' && line[0] != '\t' {
 			break
 		}
 		end++
 	}
-	replacementLines := editorLinesWithNewlines(replacement)
+	replacementLines := editorLinesWithNewlines(replacement, separator)
 	if len(replacementLines) > 0 {
-		if comment := editorInlineComment(lines[start]); comment != "" {
-			replacementLines[0] = strings.TrimSuffix(replacementLines[0], "\n") + " " + comment + "\n"
+		if comment := editorInlineComment(lines[start].text); comment != "" {
+			replacementLines[0] = strings.TrimSuffix(replacementLines[0], separator) + " " + comment + separator
 		}
 	}
-	lines = append(append(append([]string{}, lines[:start]...), replacementLines...), lines[end:]...)
-	return []byte(strings.Join(lines, "")), nil
+	before := block[:lines[start].start]
+	after := block[lines[end-1].end:]
+	result := make([]byte, 0, len(before)+len(after))
+	result = append(result, before...)
+	result = append(result, []byte(strings.Join(replacementLines, ""))...)
+	result = append(result, after...)
+	return result, nil
 }
 
-func editorLinesWithNewlines(lines []string) []string {
+func editorLinesWithNewlines(lines []string, separator string) []string {
 	result := make([]string, 0, len(lines))
 	for _, line := range lines {
-		result = append(result, line+"\n")
+		result = append(result, line+separator)
 	}
 	return result
+}
+
+func editorPreferredLineEnding(content []byte) string {
+	for index, character := range content {
+		switch character {
+		case '\r':
+			if index+1 < len(content) && content[index+1] == '\n' {
+				return "\r\n"
+			}
+			return "\r"
+		case '\n':
+			return "\n"
+		}
+	}
+	return "\n"
+}
+
+func hasEditorLineEnding(content []byte) bool {
+	return bytes.ContainsAny(content, "\r\n")
 }
 
 func editorTopLevelField(line string) string {

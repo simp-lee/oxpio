@@ -23,25 +23,25 @@
 
   <header class="editor-header">
     <div>
-      <a href="/">Back to site</a>
+      <a href="__OBSITE_BASE_PATH__">Back to site</a>
       <h1>Content editor</h1>
     </div>
     <div class="header-actions">
       <button id="preview" type="button">Preview draft</button>
       <button id="mode" type="button">Source mode</button>
-      <button id="save" type="button" class="primary" aria-label="Save and publish">Save and publish</button>
+      <button id="save" type="button" class="primary" aria-label="Save changes">Save changes</button>
       <button id="new" type="button" aria-label="New article">New article</button>
       <button id="delete" type="button" class="danger" aria-label="Delete article">Delete article</button>
     </div>
   </header>
 
   <main class="editor-layout">
-    <aside class="source-sidebar" aria-label="Content list">
-      <label for="source">Content</label>
-      <select id="source" size="14" aria-label="Select content"></select>
+    <aside class="source-sidebar" aria-label="Document list">
+      <label for="source">Documents</label>
+      <select id="source" size="14" aria-label="Select document"></select>
       <button id="refresh" type="button">Refresh list</button>
-      <section class="file-manager" aria-label="File manager">
-        <div class="file-manager-header"><strong>File manager</strong><button id="file-refresh" type="button" aria-label="Refresh files" title="Refresh files">↻</button></div>
+      <section class="file-manager" aria-label="Vault files">
+        <div class="file-manager-header"><strong>Vault files</strong><button id="file-refresh" type="button" aria-label="Refresh files" title="Refresh files">↻</button></div>
         <div id="file-tree" class="file-tree" role="tree"></div>
         <div class="file-actions">
           <button id="file-new-folder" type="button">New folder</button>
@@ -70,18 +70,23 @@
           <label>Description<input data-field="description"></label>
           <label>Author<input data-field="author"></label>
           <label>Updated<input data-field="updated" placeholder="YYYY-MM-DD or RFC3339"></label>
-          <label>Reviewed<input data-field="reviewed" placeholder="YYYY-MM-DD or RFC3339"></label>
-          <label>Tags<input data-field="tags" placeholder="Comma-separated"></label>
-          <label>Aliases<input data-field="aliases" placeholder="Comma-separated"></label>
-          <label>Slug<input data-field="slug"></label>
-          <label>Order<input data-field="order" type="number"></label>
-          <label>Status<select data-field="status"><option value="">Not set</option><option value="stable">Stable</option><option value="experimental">Experimental</option><option value="deprecated">Deprecated</option></select></label>
-          <label>Audience<input data-field="audience"></label>
-          <label>Product version<input data-field="productVersion"></label>
-          <label>Series<input data-field="series"></label>
-          <label>Cover<input data-field="cover" placeholder="Choose from media library or enter path"></label>
-          <label>Banner<input data-field="banner" placeholder="Choose from media library or enter path"></label>
-          <label>Banner alt text<input data-field="bannerAlt"></label>
+          <details class="metadata-advanced">
+            <summary>More metadata</summary>
+            <div class="metadata-advanced-grid">
+              <label>Reviewed<input data-field="reviewed" placeholder="YYYY-MM-DD or RFC3339"></label>
+              <label>Tags<input data-field="tags" placeholder="Comma-separated"></label>
+              <label>Aliases<input data-field="aliases" placeholder="Comma-separated"></label>
+              <label>Slug<input data-field="slug"></label>
+              <label>Order<input data-field="order" type="number"></label>
+              <label>Status<select data-field="status"><option value="">Not set</option><option value="stable">Stable</option><option value="experimental">Experimental</option><option value="deprecated">Deprecated</option></select></label>
+              <label>Audience<input data-field="audience"></label>
+              <label>Product version<input data-field="productVersion"></label>
+              <label>Series<input data-field="series"></label>
+              <label>Cover<input data-field="cover" placeholder="Choose from media library or enter path"></label>
+              <label>Banner<input data-field="banner" placeholder="Choose from media library or enter path"></label>
+              <label>Banner alt text<input data-field="bannerAlt"></label>
+            </div>
+          </details>
         </div>
       </form>
 

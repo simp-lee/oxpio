@@ -2,6 +2,7 @@
 package edit
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -10,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	stdhtml "html"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -160,6 +162,8 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 	switch path {
 	case "login":
 		s.serveLogin(w, r)
+	case "login.css":
+		s.serveLoginAsset(w, r)
 	case "editor":
 		s.serveEditor(w, r)
 	case "editor.css":
@@ -216,6 +220,7 @@ func (s *Server) serveEditor(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "editor unavailable", http.StatusInternalServerError)
 		return
 	}
+	editorBody = injectEditorBasePath(editorBody, s.static.BasePath())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	_, _ = w.Write(editorBody)
 }
@@ -535,12 +540,29 @@ func (s *Server) serveDecoratedStatic(w http.ResponseWriter, r *http.Request, en
 	}
 }
 
+func injectEditorBasePath(data []byte, basePath string) []byte {
+	if strings.TrimSpace(basePath) == "" {
+		basePath = "/"
+	}
+	return bytes.ReplaceAll(data, []byte("__OBSITE_BASE_PATH__"), []byte(stdhtml.EscapeString(basePath)))
+}
+
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		htmlBody := `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Obsite login</title></head><body><main><h1>Obsite login</h1><form method="post" action="/_obsite/login"><label>Username <input name="username" autocomplete="username"></label><label>Password <input type="password" name="password" autocomplete="current-password"></label><button type="submit">Log in</button></form></main></body></html>`
+		htmlBody, err := editorWeb.ReadFile("web/login.html")
+		if err != nil {
+			http.Error(w, "login unavailable", http.StatusInternalServerError)
+			return
+		}
+		htmlBody = injectEditorBasePath(htmlBody, s.static.BasePath())
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = io.WriteString(w, htmlBody)
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(htmlBody)))
+		w.WriteHeader(http.StatusOK)
+		if r.Method == http.MethodGet {
+			_, _ = w.Write(htmlBody)
+		}
 	case http.MethodPost:
 		if !sameOrigin(r) {
 			http.Error(w, "csrf validation failed", http.StatusForbidden)
@@ -580,6 +602,26 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (s *Server) serveLoginAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data, err := editorWeb.ReadFile("web/login.css")
+	if err != nil {
+		http.Error(w, "login asset unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(data)
 	}
 }
 

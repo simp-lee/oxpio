@@ -57,6 +57,53 @@ func TestApplyEditorFrontmatterUpdatesOnlyChangedFields(t *testing.T) {
 	}
 }
 
+func TestApplyEditorFrontmatterReplacesMultilineYAMLFields(t *testing.T) {
+	source := []byte("---\ndescription: |\n  first\n\n  second\npublish: false\n---\nBody\n")
+	updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Description: "New"}, "article", []string{"description"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\ndescription: New\npublish: false\n---\nBody\n"
+	if string(updated) != want {
+		t.Fatalf("updated = %q, want %q", updated, want)
+	}
+}
+
+func TestApplyEditorFrontmatterPreservesBlankFieldSeparators(t *testing.T) {
+	source := []byte("---\ntitle: Old\n\npublish: false\n---\nBody\n")
+	updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Title: "New"}, "article", []string{"title"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "---\ntitle: New\n\npublish: false\n---\nBody\n"
+	if string(updated) != want {
+		t.Fatalf("updated = %q, want %q", updated, want)
+	}
+}
+
+func TestApplyEditorFrontmatterPreservesLineEndings(t *testing.T) {
+	for _, tt := range []struct {
+		name      string
+		separator string
+	}{
+		{name: "crlf", separator: "\r\n"},
+		{name: "cr", separator: "\r"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			separator := tt.separator
+			source := []byte("---" + separator + "title: Old" + separator + "publish: false" + separator + "---" + separator + "Body" + separator)
+			updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Description: "New"}, "article", []string{"description"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := "---" + separator + "title: Old" + separator + "publish: false" + separator + "description: New" + separator + "---" + separator + "Body" + separator
+			if string(updated) != want {
+				t.Fatalf("updated = %q, want %q", updated, want)
+			}
+		})
+	}
+}
+
 func TestApplyEditorFrontmatterCreatesBlockForBodyOnlySource(t *testing.T) {
 	updated, err := applyEditorFrontmatter([]byte("Body"), []byte("Body"), editorFrontmatter{Title: "Page", Publish: false, Type: "page"}, "article")
 	if err != nil {
