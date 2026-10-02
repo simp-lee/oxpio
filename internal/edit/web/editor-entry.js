@@ -297,10 +297,26 @@ async function preview() {
     const frame = $("#preview-frame");
     frame.hidden = false;
     $("#preview-empty").hidden = true;
-    frame.src = result.url;
+    frame.src = result.contentURL || result.url;
     diagnostics(result.diagnostics);
-    status(result.warningCount ? "Preview generated with warnings." : "Preview generated; source and public output were not changed.");
+    status(result.warningCount ? "Content preview generated with warnings." : "Content preview generated; source and public output were not changed.");
   });
+}
+async function fullPagePreview() {
+  if (!state.path) return;
+  const popup = window.open("about:blank", "_blank");
+  if (popup) popup.opener = null;
+  let opened = false;
+  await operation("Full page preview", async () => {
+    if (!popup) throw new Error("Allow pop-ups to open the full page preview.");
+    status("Generating full page preview…");
+    const result = await mutation("POST", "/_obsite/preview", {path: state.path, source: await compose()});
+    popup.location = result.fullURL || result.url;
+    opened = true;
+    diagnostics(result.diagnostics);
+    status(result.warningCount ? "Full page preview generated with warnings." : "Full page preview opened; source and public output were not changed.");
+  });
+  if (!opened) popup?.close();
 }
 async function toggleMode() {
   await operation("Switch mode", async () => {
@@ -486,6 +502,7 @@ $("#source").onchange = event => {
 $("#refresh").onclick = () => { if (confirmDiscard()) loadCatalog().catch(error => status(error.message)); };
 $("#save").onclick = save;
 $("#preview").onclick = preview;
+$("#full-page-preview").onclick = fullPagePreview;
 $("#toolbar-preview").onclick = preview;
 $("#toolbar-split").onclick = event => {
   const grid = $(".editor-preview-grid");

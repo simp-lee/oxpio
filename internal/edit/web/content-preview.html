@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="{{.Language}}" data-obsite-base-path="/" data-obsite-content-preview{{if .Math}} data-obsite-math{{end}}{{if .Mermaid}} data-obsite-mermaid{{end}}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} · Draft preview</title>
+  <base href="{{.BaseURL}}">
+  <link rel="stylesheet" href="{{.CSSURL}}">
+  {{if .KatexCSSURL}}<link rel="stylesheet" href="{{.KatexCSSURL}}">{{end}}
+</head>
+<body>
+  <main class="content-preview-shell">
+    <article class="content-preview-page">
+      <header class="content-preview-header">
+        <h1>{{.Title}}</h1>
+      </header>
+      <div class="entry-content content-preview-content" data-page-content>{{.Content}}</div>
+    </article>
+  </main>
+  {{if .RuntimeURL}}<script src="{{.RuntimeURL}}" defer></script>{{end}}
+</body>
+</html>

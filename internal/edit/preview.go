@@ -1,8 +1,10 @@
 package edit
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,17 +16,34 @@ import (
 
 	internalbuild "github.com/simp-lee/obsite/internal/build"
 	internalserver "github.com/simp-lee/obsite/internal/server"
+	xhtml "golang.org/x/net/html"
 )
 
 const previewLifetime = 30 * time.Minute
 
 type editorPreview struct {
-	static  *internalserver.Server
-	root    string
-	expires time.Time
+	static      *internalserver.Server
+	root        string
+	contentHTML []byte
+	expires     time.Time
 }
 
+type contentPreviewPage struct {
+	Language    string
+	Title       string
+	CSSURL      string
+	BaseURL     string
+	RuntimeURL  string
+	KatexCSSURL string
+	Math        bool
+	Mermaid     bool
+	Content     template.HTML
+}
+
+var contentPreviewTemplate = template.Must(template.ParseFS(editorWeb, "web/content-preview.html"))
+
 func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
 	if _, ok := s.sessionForRequest(r); !ok {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
@@ -49,6 +68,19 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if len(parts) == 2 && parts[1] == "content" {
+		servePreviewBytes(w, r, preview.contentHTML, "text/html; charset=utf-8")
+		return
+	}
+	if len(parts) == 2 && parts[1] == "content.css" {
+		data, err := editorWeb.ReadFile("web/content-preview.css")
+		if err != nil {
+			http.Error(w, "preview stylesheet unavailable", http.StatusInternalServerError)
+			return
+		}
+		servePreviewBytes(w, r, data, "text/css; charset=utf-8")
+		return
+	}
 	relPath := "/"
 	if len(parts) == 2 && parts[1] != "" {
 		relPath = "/" + parts[1]
@@ -66,6 +98,7 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 	for name, values := range recorder.Header() {
 		w.Header()[name] = append([]string(nil), values...)
 	}
+	w.Header().Set("Cache-Control", "no-store")
 	if r.Method != http.MethodHead {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	}
@@ -73,6 +106,185 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(body)
 	}
+}
+
+func servePreviewBytes(w http.ResponseWriter, r *http.Request, data []byte, contentType string) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(data)
+	}
+}
+
+func renderPreviewPage(static *internalserver.Server, requestPath string) ([]byte, error) {
+	if static == nil {
+		return nil, fmt.Errorf("preview server is nil")
+	}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, requestPath, nil)
+	static.ServeHTTP(recorder, request)
+	if recorder.Code < http.StatusOK || recorder.Code >= http.StatusMultipleChoices {
+		return nil, fmt.Errorf("preview page returned HTTP %d", recorder.Code)
+	}
+	if !strings.Contains(strings.ToLower(recorder.Header().Get("Content-Type")), "text/html") {
+		return nil, fmt.Errorf("preview page returned %q", recorder.Header().Get("Content-Type"))
+	}
+	return append([]byte(nil), recorder.Body.Bytes()...), nil
+}
+
+func previewSitePath(basePath, route string) string {
+	base := strings.Trim(basePath, "/")
+	relative := strings.Trim(route, "/")
+	requestPath := "/"
+	if base != "" || relative != "" {
+		requestPath = "/" + strings.Trim(strings.Join([]string{base, relative}, "/"), "/")
+	}
+	if strings.HasSuffix(route, "/") && requestPath != "/" {
+		requestPath += "/"
+	}
+	return requestPath
+}
+
+func renderContentPreview(fullPage []byte, token, title, pagePath string) ([]byte, error) {
+	document, err := xhtml.Parse(bytes.NewReader(fullPage))
+	if err != nil {
+		return nil, fmt.Errorf("parse rendered page: %w", err)
+	}
+	contentNode := findPreviewNodeWithClass(document, "entry-content")
+	if contentNode == nil {
+		return nil, fmt.Errorf("rendered page has no entry content")
+	}
+	var content bytes.Buffer
+	for child := contentNode.FirstChild; child != nil; child = child.NextSibling {
+		if err := xhtml.Render(&content, child); err != nil {
+			return nil, fmt.Errorf("render entry content: %w", err)
+		}
+	}
+	contentHTML := rewritePreviewHTML(content.Bytes(), "/_obsite/preview/"+token)
+	math := strings.Contains(string(contentHTML), "data-obsite-math-source")
+	mermaid := findPreviewNodeWithClass(contentNode, "mermaid") != nil
+	prefix := "/_obsite/preview/" + token
+	page := contentPreviewPage{
+		Language: languageFromPreviewDocument(document),
+		Title:    title,
+		CSSURL:   prefix + "/content.css",
+		BaseURL:  prefix + pagePath,
+		Math:     math,
+		Mermaid:  mermaid,
+		Content:  template.HTML(contentHTML),
+	}
+	if page.Language == "" {
+		page.Language = "en"
+	}
+	if math || mermaid {
+		page.RuntimeURL = previewResourceURL(prefix, previewDocumentResource(document, "runtime"))
+	}
+	if math {
+		page.KatexCSSURL = previewResourceURL(prefix, previewDocumentResource(document, "katex"))
+	}
+	var output bytes.Buffer
+	if err := contentPreviewTemplate.Execute(&output, page); err != nil {
+		return nil, fmt.Errorf("execute content preview template: %w", err)
+	}
+	return output.Bytes(), nil
+}
+
+func findPreviewNodeWithClass(root *xhtml.Node, className string) *xhtml.Node {
+	if root == nil {
+		return nil
+	}
+	if previewNodeHasClass(root, className) {
+		return root
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if found := findPreviewNodeWithClass(child, className); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func previewNodeHasClass(node *xhtml.Node, className string) bool {
+	classes := previewNodeAttribute(node, "class")
+	for _, value := range strings.Fields(classes) {
+		if value == className {
+			return true
+		}
+	}
+	return false
+}
+
+func previewNodeAttribute(node *xhtml.Node, name string) string {
+	if node == nil {
+		return ""
+	}
+	for _, attribute := range node.Attr {
+		if strings.EqualFold(attribute.Key, name) {
+			return attribute.Val
+		}
+	}
+	return ""
+}
+
+func languageFromPreviewDocument(document *xhtml.Node) string {
+	htmlNode := findPreviewElement(document, "html")
+	return previewNodeAttribute(htmlNode, "lang")
+}
+
+func previewDocumentResource(document *xhtml.Node, kind string) string {
+	var resource string
+	var visit func(*xhtml.Node)
+	visit = func(node *xhtml.Node) {
+		if node == nil || resource != "" {
+			return
+		}
+		switch strings.ToLower(node.Data) {
+		case "script":
+			if kind == "runtime" {
+				candidate := previewNodeAttribute(node, "src")
+				if strings.Contains(candidate, "/assets/obsite/runtime.") {
+					resource = candidate
+				}
+			}
+		case "link":
+			if kind == "katex" && strings.Contains(strings.ToLower(previewNodeAttribute(node, "href")), "katex.min.css") {
+				resource = previewNodeAttribute(node, "href")
+			}
+		}
+		for child := node.FirstChild; child != nil; child = child.NextSibling {
+			visit(child)
+		}
+	}
+	visit(document)
+	return resource
+}
+
+func findPreviewElement(root *xhtml.Node, elementName string) *xhtml.Node {
+	if root == nil {
+		return nil
+	}
+	if strings.EqualFold(root.Data, elementName) {
+		return root
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if found := findPreviewElement(child, elementName); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func previewResourceURL(prefix, resource string) string {
+	if resource == "" || strings.HasPrefix(resource, "//") || !strings.HasPrefix(resource, "/") || strings.HasPrefix(resource, prefix) {
+		return resource
+	}
+	return prefix + resource
 }
 
 func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
@@ -141,16 +353,31 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not create preview token", http.StatusInternalServerError)
 		return
 	}
-	s.previewMu.Lock()
-	s.cleanupPreviewsLocked(time.Now())
-	s.previews[token] = &editorPreview{static: static, root: root, expires: time.Now().Add(previewLifetime)}
-	s.previewMu.Unlock()
 	basePath := ""
 	if built.Catalog != nil {
 		basePath = strings.TrimSuffix(built.Catalog.BasePath, "/")
 	}
+	fullURL := "/_obsite/preview/" + token + basePath + previewEntry.Route
+	fullPage, err := renderPreviewPage(static, previewSitePath(basePath, previewEntry.Route))
+	if err != nil {
+		_ = os.RemoveAll(root)
+		http.Error(w, "could not render preview page", http.StatusInternalServerError)
+		return
+	}
+	contentHTML, err := renderContentPreview(fullPage, token, previewEntry.Title, previewSitePath(basePath, previewEntry.Route))
+	if err != nil {
+		_ = os.RemoveAll(root)
+		http.Error(w, "could not render content preview", http.StatusInternalServerError)
+		return
+	}
+	s.previewMu.Lock()
+	s.cleanupPreviewsLocked(time.Now())
+	s.previews[token] = &editorPreview{static: static, root: root, contentHTML: contentHTML, expires: time.Now().Add(previewLifetime)}
+	s.previewMu.Unlock()
 	response := map[string]any{
-		"url":          "/_obsite/preview/" + token + basePath + previewEntry.Route,
+		"url":          fullURL,
+		"fullURL":      fullURL,
+		"contentURL":   "/_obsite/preview/" + token + "/content",
 		"warningCount": built.WarningCount,
 		"diagnostics":  s.editorDiagnostics(built.Diagnostics),
 	}

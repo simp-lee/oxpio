@@ -6,6 +6,27 @@ cd vault && obsite init && obsite build && obsite serve --watch
 
 Obsite is a self-contained Go CLI that publishes one Obsidian vault as a deterministic static site. The vault is the only content source and `<vault>/obsite.yaml` is the only site configuration. The generated site is written transactionally to `<vault>/public` by default.
 
+## Online editing
+
+Obsite is also a focused online writing workspace. Run `obsite edit`, open a Markdown source, edit frontmatter and content visually, preview the content-only server-rendered draft, or switch to source mode when you need full control.
+
+```bash
+obsite edit --vault ./vault --port 8080
+```
+
+The editor keeps the vault as the source of truth and publishes only after validation and a successful build. It includes a local CodeMirror Markdown editor, metadata form, toolbar, file manager, content-only draft preview, optional full-page preview, media library, responsive layout, and safe save/rollback behavior. The default preview isolates the rendered article content from navigation, Sidebar, Footer, theme CSS, custom CSS, and related articles; **Full page preview** opens the complete generated page in a new window for final visual checks. The English showcase article below intentionally exercises inline and block math, a Go code block, a Markdown table, a callout, and a local image.
+
+<div align="center">
+  <a href="docs/images/editor-preview.png"><img src="docs/images/editor-preview.png" alt="Obsite editor with a content-only server-rendered draft preview" width="49%"></a>
+  <a href="docs/images/editor-source.png"><img src="docs/images/editor-source.png" alt="Obsite editor source mode with frontmatter and content-only Markdown preview" width="49%"></a>
+</div>
+
+<p align="center"><em>The first frame shows the content-only draft with several Markdown elements rendered; the next frame shows source mode alongside the same <strong>Draft preview</strong>.</em></p>
+
+<div align="center">
+  <a href="docs/images/editor-login.png"><img src="docs/images/editor-login.png" alt="Obsite editor login screen" width="49%"></a>
+</div>
+
 ## Commands
 
 ```text

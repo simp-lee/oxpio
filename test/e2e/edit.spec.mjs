@@ -84,7 +84,7 @@ async function startConfiguredEditor() {
   await fs.mkdir(path.join(vault, 'section'));
   await fs.writeFile(path.join(vault, 'section', '_index.md'), '---\ntitle: Section\npublish: true\n---\nSection\n');
   await fs.writeFile(path.join(vault, 'article.md'), '---\n# preserve this comment\ntitle: "Article"\npublish: true\ntype: doc\n---\n\nOriginal\n');
-  await fs.writeFile(path.join(vault, 'draft.md'), '---\ntitle: Draft\npublish: false\ntype: doc\n---\nPrivate\n');
+  await fs.writeFile(path.join(vault, 'draft.md'), '---\ntitle: Draft\npublish: false\ntype: doc\n---\nPrivate\n\n$E = mc^2$\n\n```mermaid\ngraph TD\nA-->B\n```\n');
   const port = await freePort();
   origin = `http://127.0.0.1:${port}`;
   const configPath = path.join(vault, 'obsite.yaml');
@@ -179,6 +179,10 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   await page.locator('#preview').click();
   await expect(page.locator('#preview-frame')).toBeVisible();
   await expect(page.locator('#preview-empty')).toBeHidden();
+  const preview = page.frameLocator('#preview-frame');
+  await expect(preview.locator('.content-preview-content')).toContainText('Original');
+  await expect(preview.locator('.site-header, .sidebar-shell, .site-footer, .related-articles')).toHaveCount(0);
+  await expect(preview.locator('link[href*="custom.css"], link[href*="theme.css"]')).toHaveCount(0);
 
   await page.locator('#file-new-folder').click();
   await expect(page.locator('#markdown-file-fields')).toBeHidden();
@@ -387,6 +391,10 @@ test('successful edit sends one live reload and serve remains read-only', async 
 
 test('structured editor exposes metadata forms, draft preview, and media management', async ({browser}) => {
   const context = await browser.newContext();
+  const externalRequests = [];
+  context.on('request', request => {
+    if (new URL(request.url()).origin !== origin) externalRequests.push(request.url());
+  });
   const page = await context.newPage();
   await login(page);
   await page.goto(`${origin}/_obsite/editor?path=draft.md`);
@@ -396,7 +404,20 @@ test('structured editor exposes metadata forms, draft preview, and media managem
 
   await page.getByRole('button', {name: 'Preview draft'}).click();
   await expect(page.locator('#preview-frame')).not.toBeHidden();
-  await expect(page.frameLocator('#preview-frame').locator('body')).toContainText('Private');
+  const draftPreview = page.frameLocator('#preview-frame');
+  await expect(draftPreview.locator('body')).toContainText('Private');
+  await expect(draftPreview.locator('html')).toHaveAttribute('data-obsite-math', '');
+  await expect(draftPreview.locator('html')).toHaveAttribute('data-obsite-mermaid', '');
+  await expect.poll(async () => draftPreview.locator('.katex').count()).toBeGreaterThan(0);
+  await expect.poll(async () => draftPreview.locator('svg').count()).toBeGreaterThan(0);
+  const contentPreviewResponse = await context.request.get(`${origin}${await page.locator('#preview-frame').getAttribute('src')}`);
+  expect(contentPreviewResponse.headers()['cache-control']).toBe('no-store');
+  const fullPreviewPopup = page.waitForEvent('popup');
+  await page.getByRole('button', {name: 'Full page preview'}).click();
+  const fullPreview = await fullPreviewPopup;
+  await expect(fullPreview).toHaveURL(/_obsite\/preview\/[^/]+\/draft\//);
+  await expect(fullPreview.locator('[data-page-content]')).toContainText('Private');
+  await fullPreview.close();
 
   await page.locator('[data-field="title"]').fill('Updated draft');
   await page.locator('[data-field="description"]').fill('A draft description');
@@ -416,6 +437,18 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   const mediaSaved = await fs.readFile(path.join(vault, 'draft.md'), 'utf8');
   expect(mediaSaved).toContain('editor-pixel.png');
+
+  await page.getByRole('button', {name: 'Preview draft'}).click();
+  const contentPreview = page.frameLocator('#preview-frame');
+  await expect(contentPreview.locator('img')).toHaveCount(1);
+  await expect.poll(async () => contentPreview.locator('img').evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+  const mediaFullPreviewPopup = page.waitForEvent('popup');
+  await page.getByRole('button', {name: 'Full page preview'}).click();
+  const mediaFullPreview = await mediaFullPreviewPopup;
+  await expect(mediaFullPreview).toHaveURL(/_obsite\/preview\/[^/]+\/draft\//);
+  await expect(mediaFullPreview.locator('[data-page-content] img')).toHaveCount(1);
+  await expect.poll(async () => mediaFullPreview.locator('[data-page-content] img').evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+  await mediaFullPreview.close();
 
   await page.getByRole('button', {name: 'New folder'}).click();
   await page.locator('#file-path').fill('docs');
@@ -447,6 +480,7 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   page.once('dialog', dialog => dialog.accept());
   await page.locator('#file-delete').click();
   await expect(page.locator('.file-entry[data-path="docs"]')).toHaveCount(0);
+  expect(externalRequests).toEqual([]);
   await context.close();
 });
 
