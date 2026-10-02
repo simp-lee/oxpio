@@ -124,6 +124,7 @@ async function prepareEditor() {
   await fs.mkdir(path.join(vault, 'images'), {recursive: true});
   await fs.copyFile(path.join(runtimeFixture, 'images', 'hero.png'), path.join(vault, 'images', 'hero.png'));
   await fs.writeFile(path.join(vault, 'article.md'), `---\ntitle: Reliable publishing in one small workflow\npublish: true\ntype: doc\ndate: 2026-04-06\ndescription: A compact article showing formulas, code, tables, callouts, and a local image.\nauthor: Obsite team\nupdated: 2026-04-08\ntags:\n  - writing\n  - markdown\nstatus: stable\nslug: reliable-publishing\n---\n> [!info] Editor showcase\n> This page is rendered from a local Markdown source and can be edited without leaving the vault.\n\nGood publishing keeps the source readable and the final page predictable.\n\n![A calm workspace](images/hero.png)\n\n## A small formula\n\nInline math stays close to the sentence: $E = mc^2$.\n\n$$\n\\operatorname{score}(x) = \\frac{\\sum_i w_i x_i}{\\sum_i w_i}\n$$\n\n## A practical code sample\n\n\`\`\`go\nfunc Publish(source []byte) error {\n    return validateAndBuild(source)\n}\n\`\`\`\n\n## A compact comparison\n\n| Stage | Input | Result |\n| --- | --- | --- |\n| Edit | Markdown source | Clear intent |\n| Preview | Candidate bytes | Rendered draft |\n| Publish | Validated build | Atomic output |\n\n## Keep the loop short\n\nChange one thing, preview the result, and publish only when the page is ready.\n`);
+  await fs.writeFile(path.join(vault, 'preview.md'), '---\ntitle: A short preview loop\npublish: true\ntype: doc\n---\n> [!tip] Preview first\n> Check the rendered result before publishing.\n\nChange one thing, inspect the page, and keep the final review calm.\n\n## Three steps\n\n1. Edit the source.\n2. Preview the content.\n3. Publish when it is ready.\n\n| Stage | Result |\n| --- | --- |\n| Draft | Clear intent |\n| Review | Confident release |\n');
   await fs.writeFile(path.join(vault, 'draft.md'), '---\ntitle: Private draft\npublish: false\ntype: doc\n---\nWork in progress.\n');
   await fs.writeFile(path.join(vault, 'section', '_index.md'), '---\ntitle: Notes\npublish: true\n---\nA collection of notes.\n');
   await fs.writeFile(path.join(vault, 'section', 'nested', '_index.md'), '---\ntitle: Nested notes\npublish: true\n---\nNested material.\n');
@@ -215,10 +216,18 @@ async function captureEditor(browser) {
   await capture(page, 'editor-new-article.png', 'New article draft dialog.');
   await page.locator('#new-dialog').evaluate(dialog => dialog.close());
 
+  await page.goto(`${editorOrigin}/_obsite/editor?path=preview.md`, {waitUntil: 'domcontentloaded'});
+  await page.locator('#editor .cm-content').waitFor();
   await page.locator('#preview').click();
   await page.locator('#preview-frame').waitFor({state: 'visible'});
   await page.locator('#preview-empty').waitFor({state: 'hidden'});
-  await capture(page, 'editor-preview.png', 'Content-only server-rendered draft preview beside the editor.');
+  await capture(page, 'editor-preview.png', 'Short content-only server-rendered draft preview beside the editor.');
+
+  await page.goto(`${editorOrigin}/_obsite/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
+  await page.locator('#editor .cm-content').waitFor();
+  await page.locator('#preview').click();
+  await page.locator('#preview-frame').waitFor({state: 'visible'});
+  await page.locator('#preview-empty').waitFor({state: 'hidden'});
   await page.locator('#mode').click();
   await page.locator('#mode').filter({hasText: 'Form mode'}).waitFor();
   await capture(page, 'editor-source.png', 'Full Markdown/YAML source editing mode.');

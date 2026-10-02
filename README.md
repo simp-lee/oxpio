@@ -21,11 +21,7 @@ The editor keeps the vault as the source of truth and publishes only after valid
   <a href="docs/images/editor-source.png"><img src="docs/images/editor-source.png" alt="Obsite editor source mode with frontmatter and content-only Markdown preview" width="49%"></a>
 </div>
 
-<p align="center"><em>The first frame shows the content-only draft with several Markdown elements rendered; the next frame shows source mode alongside the same <strong>Draft preview</strong>.</em></p>
-
-<div align="center">
-  <a href="docs/images/editor-login.png"><img src="docs/images/editor-login.png" alt="Obsite editor login screen" width="49%"></a>
-</div>
+<p align="center"><em>The first frame shows a short content-only draft preview; the next frame shows the longer showcase article in source mode.</em></p>
 
 ## Commands
 
