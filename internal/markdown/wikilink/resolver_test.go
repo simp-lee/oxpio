@@ -646,6 +646,52 @@ func TestNewRenderVaultResolverUsesHostOutputAndNamespacedSelfFragments(t *testi
 	}
 }
 
+func TestLookupRouteTargetCanonicalizesEncodedAndUnicodeRoutes(t *testing.T) {
+	t.Parallel()
+
+	current := &model.Note{RelPath: "index.md", VersionID: "v1"}
+	note := &model.Note{RelPath: "cafe.md", Route: "/café/", VersionID: "v1"}
+	section := &model.Section{
+		RelPath:    "tags",
+		SourcePath: "tags/_index.md",
+		Route:      "/tags/Cafe\u0301/",
+		VersionID:  "v1",
+	}
+	idx := &model.VaultIndex{
+		Notes:           map[string]*model.Note{note.RelPath: note},
+		SectionsByRoute: map[string]*model.Section{section.Route: section},
+	}
+
+	tests := []struct {
+		name        string
+		target      string
+		wantNote    *model.Note
+		wantSection *model.Section
+	}{
+		{
+			name:     "percent-encoded route",
+			target:   "/%63af%C3%A9/",
+			wantNote: note,
+		},
+		{
+			name:        "unicode-equivalent section route",
+			target:      "/tags/Caf%C3%A9/",
+			wantSection: section,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lookup := LookupRouteTarget(idx, current, tt.target, "")
+			if lookup.Note != tt.wantNote {
+				t.Fatalf("LookupRouteTarget(%q).Note = %p, want %p", tt.target, lookup.Note, tt.wantNote)
+			}
+			if lookup.Section != tt.wantSection {
+				t.Fatalf("LookupRouteTarget(%q).Section = %p, want %p", tt.target, lookup.Section, tt.wantSection)
+			}
+		})
+	}
+}
+
 type noteOption func(*model.Note)
 
 func testNote(relPath string, slug string, options ...noteOption) *model.Note {

@@ -325,7 +325,10 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stageOutput := filepath.Join(root, "public")
-	built, buildErr := internalbuild.BuildWithOptions(s.vault, stageOutput, internalbuild.Options{SourceOverlay: overlay})
+	built, buildErr := internalbuild.BuildWithOptions(s.vault, stageOutput, internalbuild.Options{
+		SourceOverlay:    overlay,
+		SourceOutputPath: s.output,
+	})
 	if buildErr != nil {
 		_ = os.RemoveAll(root)
 		if built != nil {

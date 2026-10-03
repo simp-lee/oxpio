@@ -47,13 +47,20 @@ type Options struct {
 	// used by edit transactions. They are never written by the builder.
 	SourceOverlay map[string][]byte
 	SourceDeleted map[string]bool
+	// SourceOutputPath is the formal output boundary to exclude from source
+	// discovery when it differs from the temporary publication path.
+	SourceOutputPath string
 }
 
 // BuildWithOptions analyzes the vault once and publishes the resulting
 // canonical section plan. Normal builds continue after warnings; strict builds
 // reject both warnings and errors before opening a staging publisher.
 func BuildWithOptions(vaultPath, outputPath string, options Options) (*BuildResult, error) {
-	analysis, analyzeErr := internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlay(vaultPath, outputPath, options.Concurrency, options.SourceOverlay, options.SourceDeleted)
+	sourceOutputPath := outputPath
+	if options.SourceOutputPath != "" {
+		sourceOutputPath = options.SourceOutputPath
+	}
+	analysis, analyzeErr := internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlay(vaultPath, sourceOutputPath, options.Concurrency, options.SourceOverlay, options.SourceDeleted)
 	if writeErr := internalanalyze.WriteDiagnostics(options.DiagnosticsWriter, analysis.Diagnostics); writeErr != nil {
 		return nil, fmt.Errorf("write diagnostics: %w", writeErr)
 	}

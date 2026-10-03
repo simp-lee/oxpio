@@ -100,6 +100,29 @@ func TestCoordinatorPreservesCASAndPublishesSourceAndOutputTogether(t *testing.T
 	}
 }
 
+func TestCoordinatorCandidateExcludesFormalOutput(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "public")
+	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
+	writeEditFile(t, vault, "article.md", original)
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeEditFile(t, vault, "public/stale.md", "not a source document")
+
+	coordinator, err := NewCoordinator(vault, output, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := "---\ntitle: Article\npublish: true\ntype: doc\n---\nUpdated\n"
+	if _, err := coordinator.Save("article.md", sourceHash([]byte(original)), []byte(updated)); err != nil {
+		t.Fatalf("Save() error = %v", err)
+	}
+}
+
 func TestCoordinatorEditsScannerAcceptedUppercaseMarkdownRelPath(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")

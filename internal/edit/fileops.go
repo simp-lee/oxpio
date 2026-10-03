@@ -156,7 +156,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, fmt.Errorf("create file-operation candidate vault: %w", err)
 	}
 	defer func() { _ = os.RemoveAll(candidateRoot) }()
-	if err := copyFileManagerTree(coordinator.vault, candidateRoot); err != nil {
+	if err := copyFileManagerTree(coordinator.vault, candidateRoot, coordinator.output); err != nil {
 		return TransactionResult{}, fmt.Errorf("copy file-operation candidate vault: %w", err)
 	}
 	_, _, candidateExpected, err := applyFileManagerMutation(candidateRoot, mutation, current)
@@ -410,7 +410,10 @@ func restoreDisplacedPath(displaced, original string) error {
 	}
 }
 
-func copyFileManagerTree(source, destination string) error {
+func copyFileManagerTree(source, destination, excludedPath string) error {
+	if excludedPath != "" {
+		excludedPath = filepath.Clean(excludedPath)
+	}
 	return filepath.WalkDir(source, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -420,6 +423,12 @@ func copyFileManagerTree(source, destination string) error {
 			return err
 		}
 		if rel == "." {
+			return nil
+		}
+		if excludedPath != "" && isSameOrChildPath(current, excludedPath) {
+			if filepath.Clean(current) == excludedPath && entry.IsDir() {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		target := filepath.Join(destination, rel)

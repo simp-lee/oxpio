@@ -167,7 +167,11 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	}
 	defer func() { _ = os.RemoveAll(stageRoot) }()
 	stageOutput := filepath.Join(stageRoot, "public")
-	built, err := internalbuild.BuildWithOptions(coordinator.vault, stageOutput, internalbuild.Options{SourceOverlay: overlay, SourceDeleted: deleted})
+	built, err := internalbuild.BuildWithOptions(coordinator.vault, stageOutput, internalbuild.Options{
+		SourceOverlay:    overlay,
+		SourceDeleted:    deleted,
+		SourceOutputPath: coordinator.output,
+	})
 	if err != nil {
 		return TransactionResult{}, &CandidateBuildError{Path: relPath, Result: built, Err: err}
 	}

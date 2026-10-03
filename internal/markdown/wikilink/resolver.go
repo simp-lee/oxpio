@@ -136,7 +136,7 @@ func LookupRouteTarget(idx *model.VaultIndex, current *model.Note, target string
 	if err != nil {
 		return LookupResult{}
 	}
-	route := parsed.EscapedPath()
+	route := slug.CanonicalRoute(parsed.EscapedPath())
 	if route == "" {
 		route = "/"
 	}
@@ -144,12 +144,12 @@ func LookupRouteTarget(idx *model.VaultIndex, current *model.Note, target string
 		route += "/"
 	}
 	for _, note := range sortedRouteNotes(idx.Notes) {
-		if note != nil && note.Route == route && inVersionScope(current, note) {
+		if note != nil && note.Route != "" && slug.CanonicalRoute(note.Route) == route && inVersionScope(current, note) {
 			return finalizeLookup(resolutionResult{note: note}, fragment)
 		}
 	}
 	for _, section := range sortedRouteSections(idx.SectionsByRoute) {
-		if section != nil && section.Route == route && inSectionVersionScope(current, section) {
+		if section != nil && section.Route != "" && slug.CanonicalRoute(section.Route) == route && inSectionVersionScope(current, section) {
 			return finalizeSectionLookup(section, fragment)
 		}
 	}

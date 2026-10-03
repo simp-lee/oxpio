@@ -96,6 +96,26 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	}
 }
 
+func TestFileManagerCandidateExcludesFormalOutput(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "public")
+	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeEditFile(t, vault, "public/stale.md", "not a source document")
+
+	coordinator, err := NewCoordinator(vault, output, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.CreateFolder("docs", AbsentSourceHash); err != nil {
+		t.Fatalf("CreateFolder() error = %v", err)
+	}
+}
+
 func TestRenamePathNoReplacePreservesDestination(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
