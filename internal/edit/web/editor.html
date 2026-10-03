@@ -197,7 +197,10 @@
 
   <aside id="media-panel" class="media-panel" hidden aria-label="Media library">
     <div class="media-header"><h2>Media library</h2><button id="media-close" type="button">Close</button></div>
-    <label class="upload-button" title="Upload one Markdown or image file"><svg aria-hidden="true"><use href="#icon-upload"></use></svg> Upload file<input id="media-upload" type="file" accept=".md,.png,.jpg,.jpeg,.webp,.svg,image/*,text/markdown" hidden></label>
+    <div id="media-dropzone" class="media-dropzone" tabindex="0" aria-describedby="media-drop-hint">
+      <p id="media-drop-hint">Drop one Markdown or image file here, or choose a file.</p>
+      <label class="upload-button" title="Upload one Markdown or image file"><svg aria-hidden="true"><use href="#icon-upload"></use></svg> Upload file<input id="media-upload" type="file" accept=".md,.png,.jpg,.jpeg,.webp,.svg,image/*,text/markdown" hidden></label>
+    </div>
     <label class="upload-folder">Target folder<input id="upload-folder" type="text" placeholder="Vault root or existing folder"></label>
     <div id="media-list" class="media-list"><p>Loading…</p></div>
   </aside>

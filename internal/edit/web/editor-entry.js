@@ -133,14 +133,15 @@ async function offerDraft(path, hash) {
   }
   if (!record || !record.candidate) return;
   if (confirm(`Restore the unsaved local draft for ${path}?`)) {
+    const baselineFields = JSON.parse(JSON.stringify(state.formBaseline));
     state.mode = record.candidate.mode || "source";
     if (state.mode === "source") {
       state.source = record.candidate.source || state.source;
       setText(state.source);
     } else {
       showForm(record.candidate.fields || formValues());
+      state.formBaseline = baselineFields;
       setText(record.candidate.body || "");
-      state.bodyBaseline = "";
     }
     updateMode();
     dirty(true);
@@ -589,7 +590,7 @@ async function fullPagePreview() {
 }
 function sourceParts(source) {
   const match = source.match(/^(?:\uFEFF)?---(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)(?:---|\.\.\.)(?:\r\n|\r|\n|$)/);
-  if (!match) return {fields: new Map(), body: source};
+  if (!match) return {fields: new Map(), frontmatter: "", body: source};
   const fields = new Map();
   const lines = match[1].split(/\r?\n/);
   for (let index = 0; index < lines.length; index++) {
@@ -604,7 +605,7 @@ function sourceParts(source) {
     }
     fields.set(name, value);
   }
-  return {fields, body: source.slice(match[0].length)};
+  return {fields, frontmatter: match[0], body: source.slice(match[0].length)};
 }
 function diffBlocks(before, after) {
   const rows = Array.from({length: before.length + 1}, () => Array(after.length + 1).fill(0));
@@ -612,13 +613,13 @@ function diffBlocks(before, after) {
   const operations = [];
   let i = 0, j = 0;
   while (i < before.length || j < after.length) {
-    if (i < before.length && j < after.length && before[i] === after[j]) { operations.push({state: "unchanged", value: before[i]}); i++; j++; }
-    else if (j === after.length || (i < before.length && rows[i + 1][j] >= rows[i][j + 1])) { operations.push({state: "deleted", value: before[i++]}); }
-    else { operations.push({state: "added", value: after[j++]}); }
+    if (i < before.length && j < after.length && before[i] === after[j]) { operations.push({state: "unchanged", value: before[i], before: before[i], after: after[j]}); i++; j++; }
+    else if (j === after.length || (i < before.length && rows[i + 1][j] >= rows[i][j + 1])) { operations.push({state: "deleted", value: before[i], before: before[i++], after: null}); }
+    else { operations.push({state: "added", value: after[j], before: null, after: after[j++]}); }
   }
   for (let index = 0; index + 1 < operations.length; index++) {
     if (operations[index].state === "deleted" && operations[index + 1].state === "added") {
-      operations.splice(index, 2, {state: "modified", value: `${operations[index].value} → ${operations[index + 1].value}`});
+      operations.splice(index, 2, {state: "modified", value: `${operations[index].before} → ${operations[index + 1].after}`, before: operations[index].before, after: operations[index + 1].after});
     }
   }
   return operations;
@@ -659,6 +660,44 @@ function appendStructuredDiff(host, baseline, candidate) {
   blocks.append(blockList);
   host.append(fields, blocks);
 }
+async function appendRenderedBlockDiff(host, before, after, operations) {
+  const changed = operations.filter(operation => operation.state !== "unchanged");
+  if (!changed.length) return;
+  const section = document.createElement("section");
+  section.className = "rich-diff-blocks";
+  section.innerHTML = "<h3>Rendered changed blocks</h3>";
+  for (const [index, operation] of changed.entries()) {
+    const item = document.createElement("article");
+    item.className = `rich-diff-block diff-${operation.state}`;
+    const heading = document.createElement("h4");
+    heading.textContent = `${operation.state} block ${index + 1}`;
+    item.append(heading);
+    const panes = document.createElement("div");
+    panes.className = "rich-diff-panes";
+    for (const [label, value, parts] of [["Saved", operation.before, before], ["Candidate", operation.after, after]]) {
+      const pane = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = label;
+      pane.append(title);
+      if (value == null) {
+        const absent = document.createElement("p");
+        absent.className = "diff-absent";
+        absent.textContent = `${label} block not present`;
+        pane.append(absent);
+      } else {
+        const preview = await responseJSON(await mutation("POST", "/_obsite/preview", {path: state.path, source: `${parts.frontmatter}${value}${value.endsWith("\n") ? "" : "\n"}`}));
+        const frame = document.createElement("iframe");
+        frame.title = `${label} rendered ${operation.state} block`;
+        frame.src = preview.contentURL || preview.url;
+        pane.append(frame);
+      }
+      panes.append(pane);
+    }
+    item.append(panes);
+    section.append(item);
+  }
+  host.append(section);
+}
 async function appendRenderedDiff(host, baseline, candidate) {
   const rendered = document.createElement("section");
   rendered.className = "rich-diff";
@@ -677,6 +716,9 @@ async function appendRenderedDiff(host, baseline, candidate) {
     panes.append(pane);
   }
   rendered.append(panes);
+  const before = sourceParts(baseline);
+  const after = sourceParts(candidate);
+  await appendRenderedBlockDiff(rendered, before, after, diffBlocks(before.body.split(/\r?\n\s*\r?\n/).filter(Boolean), after.body.split(/\r?\n\s*\r?\n/).filter(Boolean)));
   host.append(rendered);
 }
 async function showDiff() {
@@ -1044,6 +1086,14 @@ $("#delete").onclick = () => operation("Delete", async () => {
 $("#media").onclick = openMedia;
 $("#media-close").onclick = () => { $("#media-panel").hidden = true; };
 $("#media-upload").onchange = event => { if (event.target.files.length !== 1) { saveState("failed", "Upload failed"); diagnostics([], "Upload exactly one file; no files were written."); status("Upload exactly one file; no files were written."); event.target.value = ""; return; } uploadMedia(event.target.files[0]); };
+const mediaDropzone = $("#media-dropzone");
+["dragenter", "dragover"].forEach(type => mediaDropzone.addEventListener(type, event => { event.preventDefault(); mediaDropzone.classList.add("drag-over"); }));
+["dragleave", "drop"].forEach(type => mediaDropzone.addEventListener(type, event => { event.preventDefault(); mediaDropzone.classList.remove("drag-over"); }));
+mediaDropzone.addEventListener("drop", event => {
+  const files = [...(event.dataTransfer?.files || [])];
+  if (files.length !== 1) { saveState("failed", "Upload failed"); diagnostics([], "Upload exactly one file; no files were written."); status("Upload exactly one file; no files were written."); return; }
+  uploadMedia(files[0]);
+});
 document.querySelectorAll("[data-command]").forEach(button => {
   button.onmousedown = event => event.preventDefault();
   button.onclick = () => command(button.dataset.command);

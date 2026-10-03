@@ -87,7 +87,10 @@ body.editor-fullscreen .editor-preview-grid { min-height: calc(100vh - 4.25rem);
 .media-panel { position: fixed; right: 1rem; top: 5rem; z-index: 10; width: min(28rem, calc(100vw - 2rem)); max-height: calc(100vh - 6rem); overflow: auto; padding: .8rem; background: #fff; border: 1px solid #aeb7c2; border-radius: .5rem; box-shadow: 0 .8rem 2.5rem #0003; }
 .media-header { display: flex; align-items: center; justify-content: space-between; }
 .media-header h2 { margin: 0; font-size: 1rem; }
-.upload-button { display: inline-block; margin: .7rem 0; }
+.media-dropzone { margin: .7rem 0; padding: .8rem; border: 1px dashed #9aa8b6; border-radius: .4rem; background: #f8fafb; text-align: center; }
+.media-dropzone p { margin: 0; color: #687687; font-size: .78rem; }
+.media-dropzone.drag-over { border-color: #1769aa; background: #eaf2f8; }
+.upload-button { display: inline-block; margin: .7rem 0 0; }
 .media-list { display: grid; grid-template-columns: repeat(3, 1fr); gap: .5rem; }
 .media-item { min-width: 0; border: 1px solid #dce1e6; border-radius: .35rem; overflow: hidden; background: #f8fafb; }
 .media-item img { display: block; width: 100%; aspect-ratio: 1; object-fit: contain; background: #eef1f4; }
@@ -160,6 +163,11 @@ dialog::backdrop { background: #0006; }
 .rich-diff-panes { display: grid; grid-template-columns: 1fr 1fr; gap: .6rem; }
 .rich-diff-panes > div { display: grid; gap: .35rem; min-width: 0; }
 .rich-diff-panes iframe { width: 100%; min-height: 18rem; border: 1px solid #c7cdd4; background: #fff; }
+.rich-diff-blocks { display: grid; gap: .6rem; margin-top: .75rem; }
+.rich-diff-block { padding: .6rem; border: 1px solid #dce1e6; border-radius: .35rem; }
+.rich-diff-block h4 { margin: 0 0 .4rem; font-size: .8rem; text-transform: capitalize; }
+.rich-diff-block .rich-diff-panes iframe { min-height: 12rem; }
+.diff-absent { margin: 0; min-height: 3rem; padding: .8rem; color: #687687; font-style: italic; }
 .editor-footer { display: flex; flex-wrap: wrap; gap: 1rem; padding: .45rem .7rem; border-top: 1px solid #dce1e6; color: #687687; font-size: .75rem; }
 .editor-footer span:last-child { margin-left: auto; }
 .upload-folder { display: grid; gap: .2rem; margin-bottom: .55rem; color: #495665; font-size: .78rem; }

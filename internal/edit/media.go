@@ -202,10 +202,6 @@ func validateMediaPath(relPath string) error {
 	return nil
 }
 
-func isUploadedImage(name string, data []byte) bool {
-	return validateUploadImage(name, data) == nil
-}
-
 func validateUploadImage(name string, data []byte) error {
 	ext := strings.ToLower(filepath.Ext(name))
 	switch ext {

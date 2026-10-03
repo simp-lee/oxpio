@@ -431,8 +431,14 @@ test('structured editor exposes metadata forms, draft preview, and media managem
 
   await page.getByRole('button', {name: 'Media library'}).click();
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  await page.evaluate(bytes => {
+    const transfer = new DataTransfer();
+    transfer.items.add(new File([new Uint8Array(bytes)], 'editor-drop.png', {type: 'image/png'}));
+    document.querySelector('#media-dropzone').dispatchEvent(new DragEvent('drop', {bubbles: true, dataTransfer: transfer}));
+  }, [...png]);
+  await expect(page.locator('.media-item')).toContainText('editor-drop.png');
   await page.locator('#media-upload').setInputFiles({name: 'editor-pixel.png', mimeType: 'image/png', buffer: png});
-  await expect(page.locator('.media-item')).toContainText('editor-pixel.png');
+  await expect(page.locator('.media-item').filter({hasText: 'editor-pixel.png'})).toHaveCount(1);
   await expect(page.locator('#status')).toContainText('Uploaded editor-pixel.png');
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
@@ -441,14 +447,14 @@ test('structured editor exposes metadata forms, draft preview, and media managem
 
   await page.getByRole('button', {name: 'Preview draft'}).click();
   const contentPreview = page.frameLocator('#preview-frame');
-  await expect(contentPreview.locator('img')).toHaveCount(1);
-  await expect.poll(async () => contentPreview.locator('img').evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+  await expect(contentPreview.locator('img')).toHaveCount(2);
+  await expect.poll(async () => contentPreview.locator('img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0))).toBe(true);
   const mediaFullPreviewPopup = page.waitForEvent('popup');
   await page.getByRole('button', {name: 'Full page preview'}).click();
   const mediaFullPreview = await mediaFullPreviewPopup;
   await expect(mediaFullPreview).toHaveURL(/_obsite\/preview\/[^/]+\/draft\//);
-  await expect(mediaFullPreview.locator('[data-page-content] img')).toHaveCount(1);
-  await expect.poll(async () => mediaFullPreview.locator('[data-page-content] img').evaluate(image => image.complete && image.naturalWidth > 0)).toBe(true);
+  await expect(mediaFullPreview.locator('[data-page-content] img')).toHaveCount(2);
+  await expect.poll(async () => mediaFullPreview.locator('[data-page-content] img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0))).toBe(true);
   await mediaFullPreview.close();
 
   await page.getByRole('button', {name: 'New folder'}).click();
@@ -503,6 +509,23 @@ test('preview diff uses the bundled merge view and local drafts never publish', 
   await page.reload();
   await expect(page.locator('#status')).toContainText('Local draft restored');
   await expect(page.locator('#editor .cm-content')).toContainText('Local candidate');
+  await context.close();
+});
+
+test('visual local drafts restore metadata changes before save', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.locator('[data-field="title"]').fill('Visual local title');
+  await expect.poll(async () => page.locator('#draft-indicator').textContent()).toContain('Draft saved locally');
+  page.on('dialog', async dialog => { await dialog.accept(); });
+  await page.reload();
+  await expect(page.locator('#status')).toContainText('Local draft restored');
+  await expect(page.locator('[data-field="title"]')).toHaveValue('Visual local title');
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  expect(await fs.readFile(path.join(vault, 'article.md'), 'utf8')).toContain('title: Visual local title');
   await context.close();
 });
 

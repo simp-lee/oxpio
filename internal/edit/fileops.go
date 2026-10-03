@@ -105,7 +105,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	if mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationUpload {
 		if mutation.operation == fileMutationMarkdown || strings.EqualFold(path.Ext(mutation.path), ".md") {
 			if !utf8.Valid(mutation.content) {
-				return TransactionResult{}, fmt.Errorf("Markdown upload %q must contain valid UTF-8", mutation.path)
+				return TransactionResult{}, fmt.Errorf("markdown upload %q must contain valid UTF-8", mutation.path)
 			}
 			if err := validateManagedMarkdownPath(mutation.path); err != nil {
 				return TransactionResult{}, err
@@ -556,7 +556,11 @@ func removeCreatedPath(vault, relPath, expectedHash string) error {
 	if state.hash != expectedHash {
 		return &ConflictError{Path: relPath, Expected: expectedHash, Actual: state.hash}
 	}
-	return os.RemoveAll(filepath.Join(vault, filepath.FromSlash(relPath)))
+	filename := filepath.Join(vault, filepath.FromSlash(relPath))
+	if handled, atomicErr := removeCreatedPathAtomic(filename, relPath, expectedHash, state.isDir); handled {
+		return atomicErr
+	}
+	return os.RemoveAll(filename)
 }
 
 func createFileNoReplace(filename string, content []byte) error {
