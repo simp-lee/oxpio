@@ -206,11 +206,7 @@ func TestRenameRollbackPreservesExternalDestinationAndSource(t *testing.T) {
 	if expected.hash != current.hash {
 		t.Fatalf("rename hash = %q, want %q", expected.hash, current.hash)
 	}
-	replacement := filepath.Join(vault, "replacement.tmp")
-	if err := os.WriteFile(replacement, []byte("external"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(replacement, filepath.Join(vault, "renamed.md")); err != nil {
+	if err := os.WriteFile(filepath.Join(vault, "renamed.md"), []byte("external"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := rollback(); err == nil {
@@ -224,6 +220,41 @@ func TestRenameRollbackPreservesExternalDestinationAndSource(t *testing.T) {
 	}
 	if err := finalize(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestDeleteRollbackCleansDisplacedSourceOnExternalReplacement(t *testing.T) {
+	vault := t.TempDir()
+	source := filepath.Join(vault, "source.md")
+	if err := os.WriteFile(source, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	current, err := inspectFileManagerState(vault, "source.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation := fileManagerMutation{operation: fileMutationDelete, path: "source.md"}
+	rollback, _, _, err := applyFileManagerMutation(vault, mutation, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(source, []byte("external"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := rollback(); err == nil {
+		t.Fatal("rollback unexpectedly ignored external replacement")
+	}
+	if got, err := os.ReadFile(source); err != nil || string(got) != "external" {
+		t.Fatalf("external source after rollback = %q, err=%v", got, err)
+	}
+	entries, err := os.ReadDir(vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".obsite-displaced-") {
+			t.Fatalf("displaced source leaked: %s", entry.Name())
+		}
 	}
 }
 

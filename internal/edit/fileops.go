@@ -329,10 +329,12 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 		}
 		expected = fileManagerState{path: mutation.path, hash: fileManagerHashAbsent, exists: false}
 		rollback = func() error {
-			if state, stateErr := inspectFileManagerState(vault, mutation.path); stateErr != nil {
-				return stateErr
-			} else if state.exists {
-				return &ConflictError{Path: mutation.path, Expected: fileManagerHashAbsent, Actual: state.hash}
+			state, stateErr := inspectFileManagerState(vault, mutation.path)
+			if stateErr != nil {
+				return errors.Join(stateErr, os.RemoveAll(displaced))
+			}
+			if state.exists {
+				return errors.Join(&ConflictError{Path: mutation.path, Expected: fileManagerHashAbsent, Actual: state.hash}, os.RemoveAll(displaced))
 			}
 			if _, err := os.Lstat(displaced); err == nil {
 				return renamePathNoReplace(displaced, source)
@@ -569,19 +571,27 @@ func createFileManagerBackup(filename string, isDir bool) (string, error) {
 	if isDir {
 		return os.MkdirTemp(filepath.Dir(filename), ".obsite-rename-backup-*")
 	}
-	file, err := os.CreateTemp(filepath.Dir(filename), ".obsite-rename-backup-*")
+	input, err := os.Open(filename)
 	if err != nil {
 		return "", err
 	}
-	name := file.Name()
-	if err := file.Close(); err != nil {
+	defer func() { _ = input.Close() }()
+	backup, err := os.CreateTemp(filepath.Dir(filename), ".obsite-rename-backup-*")
+	if err != nil {
+		return "", err
+	}
+	name := backup.Name()
+	cleanup := func() { _ = backup.Close(); _ = os.Remove(name) }
+	if _, err := io.Copy(backup, input); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := backup.Sync(); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := backup.Close(); err != nil {
 		_ = os.Remove(name)
-		return "", err
-	}
-	if err := os.Remove(name); err != nil {
-		return "", err
-	}
-	if err := os.Link(filename, name); err != nil {
 		return "", err
 	}
 	return name, nil

@@ -118,9 +118,11 @@ async function clearDraft(path = state.path) {
     transaction.onerror = resolve;
   });
 }
-async function offerDraft(path, hash) {
-  if (!window.indexedDB) return;
+async function offerDraft(path, hash, token) {
+  const current = () => token === state.loadToken && state.path === path && state.hash === hash;
+  if (!window.indexedDB || !current()) return;
   const exact = await draftRecord(`${path}:${hash}`);
+  if (!current()) return;
   let record = exact;
   if (!record) {
     const db = await openDraftDB();
@@ -131,8 +133,9 @@ async function offerDraft(path, hash) {
       request.onerror = () => reject(request.error);
     });
   }
-  if (!record || !record.candidate) return;
+  if (!record || !record.candidate || !current()) return;
   if (confirm(`Restore the unsaved local draft for ${path}?`)) {
+    if (!current()) return;
     const baselineFields = JSON.parse(JSON.stringify(state.formBaseline));
     state.mode = record.candidate.mode || "source";
     if (state.mode === "source") {
@@ -455,7 +458,8 @@ async function loadSource(path) {
     $("#preview-frame").removeAttribute("src");
     $("#preview-empty").hidden = false;
     status(data.parseError ? `Fix this in source mode: ${data.parseError}` : `Loaded ${path}`);
-    await offerDraft(path, state.hash);
+    await offerDraft(path, state.hash, token);
+    if (token !== state.loadToken) return;
   } catch (error) { status(`Load failed: ${error.message}`); }
   finally {
     if (token === state.loadToken) {
@@ -631,10 +635,21 @@ function diffBlocks(before, after) {
 function splitMarkdownBlocks(body) {
   const blocks = [];
   let current = [];
-  let fenced = false;
+  let fenceCharacter = "";
+  let fenceLength = 0;
   for (const line of body.split(/\r?\n/)) {
-    if (/^ {0,3}(?:```|~~~)/.test(line)) fenced = !fenced;
-    if (!fenced && line.trim() === "") {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
+    if (marker) {
+      const character = marker[1][0];
+      if (!fenceCharacter) {
+        fenceCharacter = character;
+        fenceLength = marker[1].length;
+      } else if (character === fenceCharacter && marker[1].length >= fenceLength) {
+        fenceCharacter = "";
+        fenceLength = 0;
+      }
+    }
+    if (!fenceCharacter && line.trim() === "") {
       if (current.length) { blocks.push(current.join("\n")); current = []; }
     } else current.push(line);
   }
