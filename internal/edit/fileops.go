@@ -102,6 +102,11 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	if mutation.operation != fileMutationFolder && mutation.operation != fileMutationMarkdown && mutation.operation != fileMutationUpload && mutation.operation != fileMutationRename && mutation.operation != fileMutationDelete {
 		return TransactionResult{}, fmt.Errorf("unsupported file operation %q", mutation.operation)
 	}
+	if mutation.operation == fileMutationRename || mutation.operation == fileMutationDelete {
+		if err := ensureNoReplaceRename(); err != nil {
+			return TransactionResult{}, err
+		}
+	}
 	if mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationUpload {
 		if mutation.operation == fileMutationMarkdown || strings.EqualFold(path.Ext(mutation.path), ".md") {
 			if !utf8.Valid(mutation.content) {

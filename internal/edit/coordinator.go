@@ -331,6 +331,11 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 	if err := inspectSourceParent(vault, relPath); err != nil {
 		return fmt.Errorf("inspect source parent: %w", err)
 	}
+	if !creating {
+		if err := ensureNoReplaceRename(); err != nil {
+			return err
+		}
+	}
 	if creating {
 		if exists {
 			return &ConflictError{Path: relPath, Expected: AbsentSourceHash, Actual: actual}
@@ -433,10 +438,8 @@ func moveSourceForCAS(filename string) (string, error) {
 
 func preserveMovedSource(displaced, filename string) {
 	if _, err := os.Lstat(filename); errors.Is(err, os.ErrNotExist) {
-		_ = os.Rename(displaced, filename)
-		return
+		_ = renamePathNoReplace(displaced, filename)
 	}
-	_ = os.Remove(displaced)
 }
 
 func restoreMovedSource(displaced, filename string) error {
@@ -445,7 +448,7 @@ func restoreMovedSource(displaced, filename string) error {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	return os.Rename(displaced, filename)
+	return renamePathNoReplace(displaced, filename)
 }
 
 func rollbackReplacedSource(filename, displaced, expected, relPath string) error {

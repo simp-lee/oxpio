@@ -133,7 +133,7 @@ func removeIdentityPath(filename string, expectedInfo os.FileInfo, expectedHash 
 	}
 	if !os.SameFile(moved, expectedInfo) || movedHash != expectedHash {
 		if _, statErr := os.Lstat(filename); errors.Is(statErr, os.ErrNotExist) {
-			if restoreErr := os.Rename(tombstone, filename); restoreErr != nil {
+			if restoreErr := renamePathNoReplace(tombstone, filename); restoreErr != nil {
 				return errors.Join(fmt.Errorf("rollback identity changed"), restoreErr)
 			}
 		}

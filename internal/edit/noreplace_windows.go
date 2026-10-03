@@ -4,6 +4,8 @@ package edit
 
 import "golang.org/x/sys/windows"
 
+func ensureNoReplaceRename() error { return nil }
+
 func renamePathNoReplace(source, destination string) error {
 	from, err := windows.UTF16PtrFromString(source)
 	if err != nil {

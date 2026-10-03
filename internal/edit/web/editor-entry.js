@@ -628,6 +628,19 @@ function diffBlocks(before, after) {
   }
   return operations;
 }
+function splitMarkdownBlocks(body) {
+  const blocks = [];
+  let current = [];
+  let fenced = false;
+  for (const line of body.split(/\r?\n/)) {
+    if (/^ {0,3}(?:```|~~~)/.test(line)) fenced = !fenced;
+    if (!fenced && line.trim() === "") {
+      if (current.length) { blocks.push(current.join("\n")); current = []; }
+    } else current.push(line);
+  }
+  if (current.length) blocks.push(current.join("\n"));
+  return blocks;
+}
 function appendStructuredDiff(host, baseline, candidate) {
   const before = sourceParts(baseline);
   const after = sourceParts(candidate);
@@ -651,8 +664,8 @@ function appendStructuredDiff(host, baseline, candidate) {
   blocks.className = "structured-diff";
   blocks.innerHTML = "<h3>Markdown blocks</h3>";
   const blockList = document.createElement("ol");
-  const oldBlocks = before.body.split(/\r?\n\s*\r?\n/).filter(Boolean);
-  const newBlocks = after.body.split(/\r?\n\s*\r?\n/).filter(Boolean);
+  const oldBlocks = splitMarkdownBlocks(before.body);
+  const newBlocks = splitMarkdownBlocks(after.body);
   const operations = diffBlocks(oldBlocks, newBlocks);
   for (const operation of operations) {
     const item = document.createElement("li");
@@ -722,7 +735,7 @@ async function appendRenderedDiff(host, baseline, candidate) {
   rendered.append(panes);
   const before = sourceParts(baseline);
   const after = sourceParts(candidate);
-  await appendRenderedBlockDiff(rendered, before, after, diffBlocks(before.body.split(/\r?\n\s*\r?\n/).filter(Boolean), after.body.split(/\r?\n\s*\r?\n/).filter(Boolean)));
+  await appendRenderedBlockDiff(rendered, before, after, diffBlocks(splitMarkdownBlocks(before.body), splitMarkdownBlocks(after.body)));
   host.append(rendered);
 }
 async function showDiff() {
