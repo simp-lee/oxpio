@@ -1,8 +1,11 @@
 package edit
 
 import (
-	"errors"
+	"bytes"
 	"fmt"
+	"image"
+	_ "image/jpeg"
+	_ "image/png"
 	"io"
 	"io/fs"
 	"net/http"
@@ -15,12 +18,10 @@ import (
 
 	internalasset "github.com/simp-lee/obsite/internal/asset"
 	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
+	_ "golang.org/x/image/webp"
 )
 
-const (
-	mediaDirectory = "uploads"
-	maxUploadBytes = 16 << 20
-)
+const maxUploadBytes = 16 << 20
 
 type mediaItem struct {
 	Path string `json:"path"`
@@ -124,6 +125,10 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid or oversized upload", http.StatusBadRequest)
 		return
 	}
+	if len(r.MultipartForm.File) != 1 || len(r.MultipartForm.File["file"]) != 1 {
+		http.Error(w, "upload exactly one file", http.StatusBadRequest)
+		return
+	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
 		http.Error(w, "file is required", http.StatusBadRequest)
@@ -131,8 +136,8 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = file.Close() }()
 	name := path.Base(strings.ReplaceAll(header.Filename, "\\", "/"))
-	if name == "." || name == "" || !internalfsutil.IsPortableSitePath(name) || !internalasset.HasImageExtension(name) {
-		http.Error(w, "only portable image filenames are accepted", http.StatusBadRequest)
+	if name == "." || name == "" || !internalfsutil.IsPortableSitePath(name) {
+		http.Error(w, "only portable filenames are accepted", http.StatusBadRequest)
 		return
 	}
 	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
@@ -140,65 +145,50 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upload exceeds 16 MiB", http.StatusRequestEntityTooLarge)
 		return
 	}
-	if !isUploadedImage(name, data) {
-		http.Error(w, "uploaded content is not a supported image", http.StatusUnsupportedMediaType)
+	folder := strings.TrimSpace(r.FormValue("folder"))
+	if folder != "" {
+		if err := validateManagedRelPath(folder); err != nil {
+			http.Error(w, "target folder is invalid", http.StatusBadRequest)
+			return
+		}
+		if _, _, err := internalfsutil.InspectContainedDirectory(s.vault, folder); err != nil {
+			http.Error(w, "target folder must already exist", http.StatusBadRequest)
+			return
+		}
+	}
+	relPath := name
+	if folder != "" {
+		relPath = path.Join(folder, name)
+	}
+	if strings.EqualFold(path.Ext(name), ".md") {
+		kind := strings.ToLower(strings.TrimSpace(r.FormValue("kind")))
+		if path.Base(name) == "_index.md" && kind != "section" {
+			http.Error(w, "_index.md uploads require section kind", http.StatusBadRequest)
+			return
+		}
+		if path.Base(name) != "_index.md" && kind == "section" {
+			http.Error(w, "section uploads must be named _index.md", http.StatusBadRequest)
+			return
+		}
+	} else if err := validateUploadImage(name, data); err != nil {
+		http.Error(w, err.Error(), http.StatusUnsupportedMediaType)
 		return
 	}
-	if err := s.ensureMediaDirectory(); err != nil {
-		http.Error(w, "could not create media directory", http.StatusInternalServerError)
-		return
-	}
-	relPath := path.Join(mediaDirectory, name)
-	if err := validateMediaPath(relPath); err != nil {
+	if err := validateManagedRelPath(relPath); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	resolved, _, err := internalfsutil.InspectContainedRegularFile(s.vault, relPath)
-	if err == nil {
-		_ = resolved
-		http.Error(w, "a media file with that name already exists", http.StatusConflict)
-		return
+	expected := fileHashHeader(r)
+	if expected == "" {
+		expected = AbsentSourceHash
 	}
-	if !errors.Is(err, os.ErrNotExist) {
-		http.Error(w, "could not inspect media destination", http.StatusInternalServerError)
-		return
-	}
-	parent, _, parentErr := internalfsutil.InspectContainedDirectory(s.vault, mediaDirectory)
-	if parentErr != nil {
-		http.Error(w, "could not inspect media directory", http.StatusInternalServerError)
-		return
-	}
-	filePath := filepath.Join(parent, name)
-	output, err := os.OpenFile(filePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	result, err := s.coordinator.UploadFile(relPath, expected, data)
 	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			http.Error(w, "a media file with that name already exists", http.StatusConflict)
-			return
-		}
-		http.Error(w, "could not create media file", http.StatusInternalServerError)
+		s.writeMutationError(w, err)
 		return
 	}
-	_, writeErr := output.Write(data)
-	closeErr := output.Close()
-	if writeErr != nil || closeErr != nil {
-		_ = os.Remove(filePath)
-		http.Error(w, "could not save media file", http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]any{"path": relPath, "name": name, "size": len(data), "url": "/_obsite/media?path=" + url.QueryEscape(relPath)})
-}
-
-func (s *Server) ensureMediaDirectory() error {
-	if _, _, err := internalfsutil.InspectContainedDirectory(s.vault, mediaDirectory); err == nil {
-		return nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	if err := os.Mkdir(filepath.Join(s.vault, mediaDirectory), 0o755); err != nil && !errors.Is(err, os.ErrExist) {
-		return err
-	}
-	_, _, err := internalfsutil.InspectContainedDirectory(s.vault, mediaDirectory)
-	return err
+	s.NotifyReload()
+	s.writeMutationResult(w, result)
 }
 
 func validateMediaPath(relPath string) error {
@@ -213,12 +203,31 @@ func validateMediaPath(relPath string) error {
 }
 
 func isUploadedImage(name string, data []byte) bool {
-	if strings.EqualFold(filepath.Ext(name), ".svg") {
-		text := strings.ToLower(string(data))
-		return strings.Contains(text, "<svg") || strings.Contains(text, "<?xml")
+	return validateUploadImage(name, data) == nil
+}
+
+func validateUploadImage(name string, data []byte) error {
+	ext := strings.ToLower(filepath.Ext(name))
+	switch ext {
+	case ".svg":
+		if err := internalasset.ValidateLocalSVG(data); err != nil {
+			return fmt.Errorf("invalid SVG image: %w", err)
+		}
+	case ".png", ".jpg", ".jpeg", ".webp":
+		_, format, err := image.DecodeConfig(bytes.NewReader(data))
+		if err != nil {
+			return fmt.Errorf("invalid image data: %w", err)
+		}
+		if (ext == ".png" && format != "png") || ((ext == ".jpg" || ext == ".jpeg") && format != "jpeg") || (ext == ".webp" && format != "webp") {
+			return fmt.Errorf("image content does not match extension")
+		}
+		if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
+			return fmt.Errorf("invalid image data: %w", err)
+		}
+	default:
+		return fmt.Errorf("only PNG, JPEG, WebP, or SVG uploads are supported")
 	}
-	contentType := http.DetectContentType(data)
-	return strings.HasPrefix(contentType, "image/")
+	return nil
 }
 
 func isSameOrChildPath(candidate, root string) bool {

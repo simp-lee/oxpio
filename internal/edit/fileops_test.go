@@ -1,6 +1,7 @@
 package edit
 
 import (
+	"encoding/base64"
 	"errors"
 	"os"
 	"path/filepath"
@@ -82,17 +83,63 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := coordinator.DeletePath("docs", state.hash); err != nil {
-		t.Fatal(err)
+	if _, err := coordinator.DeletePath("docs", state.hash); err == nil || !strings.Contains(err.Error(), "section sources") {
+		t.Fatalf("section-containing folder delete error = %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(vault, "docs")); !os.IsNotExist(err) {
-		t.Fatalf("deleted folder stat = %v", err)
+	if _, err := os.Stat(filepath.Join(vault, "docs", "_index.md")); err != nil {
+		t.Fatalf("section source was removed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(output, "index.html")); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := os.ReadFile(filepath.Join(vault, "article.md")); err != nil || !strings.Contains(string(got), "Article") {
 		t.Fatalf("unrelated source changed: %q, err=%v", got, err)
+	}
+}
+
+func TestUploadFileUsesExistingFolderAndAbsentCAS(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeEditFile(t, vault, "docs/_index.md", "---\ntitle: Docs\npublish: true\n---\nDocs\n")
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(vault, output, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	png, err := base64.StdEncoding.DecodeString("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.UploadFile("docs/pixel.png", AbsentSourceHash, png)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.RelPath != "docs/pixel.png" || result.SourceHash == AbsentSourceHash {
+		t.Fatalf("upload result = %#v", result)
+	}
+	if _, err := os.Stat(filepath.Join(vault, "docs", "pixel.png")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.UploadFile("docs/pixel.png", AbsentSourceHash, png); err == nil {
+		t.Fatal("duplicate upload succeeded")
+	}
+	if _, err := coordinator.UploadFile("missing/pixel.png", AbsentSourceHash, png); err == nil {
+		t.Fatal("upload created a missing parent folder")
+	}
+	if _, err := coordinator.UploadFile("docs/bad.svg", AbsentSourceHash, []byte(`<svg><image href="https://example.test/x"/></svg>`)); err == nil {
+		t.Fatal("unsafe SVG upload succeeded")
+	}
+	markdown := []byte("---\ntitle: Uploaded\npublish: false\ntype: doc\n---\nUploaded\n")
+	if _, err := coordinator.UploadFile("docs/uploaded.md", AbsentSourceHash, markdown); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.UploadFile("docs/invalid.md", AbsentSourceHash, []byte{0xff}); err == nil {
+		t.Fatal("invalid UTF-8 Markdown upload succeeded")
 	}
 }
 

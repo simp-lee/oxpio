@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	internalbuild "github.com/simp-lee/obsite/internal/build"
 	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
@@ -21,6 +22,7 @@ const (
 	fileManagerHashAbsent = AbsentSourceHash
 	fileMutationFolder    = "folder"
 	fileMutationMarkdown  = "markdown"
+	fileMutationUpload    = "upload"
 	fileMutationRename    = "rename"
 	fileMutationDelete    = "delete"
 )
@@ -52,15 +54,21 @@ func (coordinator *Coordinator) CreateMarkdown(relPath, expectedHash string, con
 	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationMarkdown, path: relPath, expected: expectedHash, content: content})
 }
 
+// UploadFile creates one new Markdown or supported image file through the
+// same candidate build and publication transaction as other file operations.
+// Uploads are create-only and therefore require AbsentSourceHash.
+func (coordinator *Coordinator) UploadFile(relPath, expectedHash string, content []byte) (TransactionResult, error) {
+	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationUpload, path: relPath, expected: expectedHash, content: content})
+}
+
 // RenamePath atomically renames one managed file or directory after checking
 // both the source hash and destination absence.
 func (coordinator *Coordinator) RenamePath(relPath, destination, expectedHash string) (TransactionResult, error) {
 	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationRename, path: relPath, destination: destination, expected: expectedHash})
 }
 
-// DeletePath removes one managed file or directory after a CAS check. Directory
-// deletion is recursive and remains reversible until the candidate output is
-// published successfully.
+// DeletePath removes one managed article or empty directory after a CAS check;
+// the mutation remains reversible until candidate output publication succeeds.
 func (coordinator *Coordinator) DeletePath(relPath, expectedHash string) (TransactionResult, error) {
 	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationDelete, path: relPath, expected: expectedHash})
 }
@@ -82,13 +90,31 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		if mutation.path == mutation.destination {
 			return TransactionResult{}, fmt.Errorf("source and destination paths are identical")
 		}
+		if strings.EqualFold(path.Ext(mutation.path), ".md") {
+			if err := validateManagedMarkdownPath(mutation.destination); err != nil {
+				return TransactionResult{}, err
+			}
+			if strings.EqualFold(path.Base(mutation.destination), "_index.md") {
+				return TransactionResult{}, fmt.Errorf("cannot rename an article to a section source")
+			}
+		}
 	}
-	if mutation.operation != fileMutationFolder && mutation.operation != fileMutationMarkdown && mutation.operation != fileMutationRename && mutation.operation != fileMutationDelete {
+	if mutation.operation != fileMutationFolder && mutation.operation != fileMutationMarkdown && mutation.operation != fileMutationUpload && mutation.operation != fileMutationRename && mutation.operation != fileMutationDelete {
 		return TransactionResult{}, fmt.Errorf("unsupported file operation %q", mutation.operation)
 	}
-	if mutation.operation == fileMutationMarkdown {
-		if err := validateManagedMarkdownPath(mutation.path); err != nil {
+	if mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationUpload {
+		if mutation.operation == fileMutationMarkdown || strings.EqualFold(path.Ext(mutation.path), ".md") {
+			if !utf8.Valid(mutation.content) {
+				return TransactionResult{}, fmt.Errorf("Markdown upload %q must contain valid UTF-8", mutation.path)
+			}
+			if err := validateManagedMarkdownPath(mutation.path); err != nil {
+				return TransactionResult{}, err
+			}
+		} else if err := validateUploadImage(mutation.path, mutation.content); err != nil {
 			return TransactionResult{}, err
+		}
+		if mutation.expected != fileManagerHashAbsent {
+			return TransactionResult{}, &ConflictError{Path: mutation.path, Expected: fileManagerHashAbsent, Actual: mutation.expected}
 		}
 	}
 	if err := validateManagedBoundary(coordinator.vault, coordinator.output, mutation.path); err != nil {
@@ -121,7 +147,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 			return TransactionResult{}, &ConflictError{Path: mutation.destination, Expected: fileManagerHashAbsent, Actual: destinationState.hash}
 		}
 	}
-	if mutation.operation == fileMutationFolder || mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationRename {
+	if mutation.operation == fileMutationFolder || mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationUpload || mutation.operation == fileMutationRename {
 		parent := mutation.path
 		if mutation.operation == fileMutationRename {
 			parent = mutation.destination
@@ -130,7 +156,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 			return TransactionResult{}, err
 		}
 	}
-	if mutation.operation == fileMutationFolder || mutation.operation == fileMutationMarkdown {
+	if mutation.operation == fileMutationFolder || mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationUpload {
 		if current.exists {
 			return TransactionResult{}, &ConflictError{Path: mutation.path, Expected: fileManagerHashAbsent, Actual: current.hash}
 		}
@@ -141,6 +167,11 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		}
 	}
 	if current.exists {
+		if mutation.operation == fileMutationRename || mutation.operation == fileMutationDelete {
+			if err := coordinator.validateEditableFileManagerTarget(mutation.path, current.isDir); err != nil {
+				return TransactionResult{}, err
+			}
+		}
 		if err := validateManagedSubtree(coordinator.vault, coordinator.output, mutation.path, current.isDir); err != nil {
 			return TransactionResult{}, err
 		}
@@ -196,21 +227,46 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return rollbackMutation(err)
 	}
 
-	rollbackOutput, finalizeOutput, err := publishOutput(stageOutput, coordinator.output)
+	rollbackOutput, finalizeOutput, cleanupOutput, err := publishOutput(stageOutput, coordinator.output)
 	if err != nil {
 		return rollbackMutation(err)
 	}
 	if err := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollback())
+		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
 	}
 	if err := finalizeOutput(); err != nil {
 		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
 	}
+	if err := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); err != nil {
+		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
+	}
 	if err := finalize(); err != nil {
-		return TransactionResult{}, err
+		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
+	}
+	if err := cleanupOutput(); err != nil {
+		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
 	}
 	coordinator.catalog = cloneCatalog(built.Catalog)
-	return TransactionResult{SourceHash: expectedAfter.hash, Build: built}, nil
+	return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, Build: built}, nil
+}
+
+func (coordinator *Coordinator) validateEditableFileManagerTarget(relPath string, isDir bool) error {
+	if !isDir {
+		entry := catalogEntry(coordinator.catalog, relPath)
+		if entry == nil || entry.Kind != "article" {
+			return fmt.Errorf("only ordinary article sources can be renamed or deleted: %q", relPath)
+		}
+		return nil
+	}
+	root := filepath.Join(coordinator.vault, filepath.FromSlash(relPath))
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return fmt.Errorf("nonempty folders and section sources cannot be renamed or deleted: %q", relPath)
+	}
+	return nil
 }
 
 func buildCandidate(vault, output string) (*internalbuild.BuildResult, error) {
@@ -233,7 +289,7 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 		rollback = func() error { return removeCreatedPath(vault, mutation.path, expected.hash) }
 		return rollback, func() error { return nil }, expected, nil
 
-	case fileMutationMarkdown:
+	case fileMutationMarkdown, fileMutationUpload:
 		if err := createFileNoReplace(source, mutation.content); err != nil {
 			return nil, nil, fileManagerState{}, err
 		}
@@ -246,6 +302,15 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 		return rollback, func() error { return nil }, expected, nil
 
 	case fileMutationDelete:
+		// Retain exact rollback bytes even if displaced-file cleanup succeeds
+		// before a later output-cleanup failure. Directories here are empty.
+		var original []byte
+		if !current.isDir {
+			_, original, _, err = internalfsutil.ReadContainedRegularFile(vault, mutation.path)
+			if err != nil {
+				return nil, nil, fileManagerState{}, err
+			}
+		}
 		displaced, err := movePathForCAS(source)
 		if err != nil {
 			return nil, nil, fileManagerState{}, fmt.Errorf("delete %q: %w", mutation.path, err)
@@ -264,7 +329,15 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 			} else if state.exists {
 				return &ConflictError{Path: mutation.path, Expected: fileManagerHashAbsent, Actual: state.hash}
 			}
-			return renamePathNoReplace(displaced, source)
+			if _, err := os.Lstat(displaced); err == nil {
+				return renamePathNoReplace(displaced, source)
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return err
+			}
+			if current.isDir {
+				return os.Mkdir(source, 0o755)
+			}
+			return createFileNoReplace(source, original)
 		}
 		finalize = func() error { return os.RemoveAll(displaced) }
 		return rollback, finalize, expected, nil
@@ -364,7 +437,7 @@ func verifyFileManagerPrecondition(vault string, mutation fileManagerMutation, e
 			return err
 		}
 	}
-	if mutation.operation == fileMutationFolder || mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationRename {
+	if mutation.operation == fileMutationFolder || mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationUpload || mutation.operation == fileMutationRename {
 		parent := mutation.path
 		if mutation.operation == fileMutationRename {
 			parent = mutation.destination

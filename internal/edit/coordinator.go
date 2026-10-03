@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	internalbuild "github.com/simp-lee/obsite/internal/build"
 	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
@@ -48,6 +49,7 @@ func (err *CandidateBuildError) Unwrap() error { return err.Err }
 // TransactionResult describes a successfully published source mutation.
 type TransactionResult struct {
 	SourceHash string
+	RelPath    string
 	Build      *internalbuild.BuildResult
 }
 
@@ -108,6 +110,9 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 
 	if err := validateSourceRelPath(relPath); err != nil {
 		return TransactionResult{}, err
+	}
+	if !deleting && !utf8.Valid(content) {
+		return TransactionResult{}, fmt.Errorf("source %q must contain valid UTF-8", relPath)
 	}
 	entry := catalogEntry(coordinator.catalog, relPath)
 	if creating {
@@ -211,7 +216,7 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	rollbackSource := func() error {
 		return restoreSource(coordinator.vault, relPath, committedHash, current, exists)
 	}
-	rollbackOutput, finalizeOutput, err := publishOutput(stageOutput, coordinator.output)
+	rollbackOutput, finalizeOutput, cleanupOutput, err := publishOutput(stageOutput, coordinator.output)
 	if err != nil {
 		return TransactionResult{}, errors.Join(rollbackSource(), err)
 	}
@@ -232,8 +237,17 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	if err := finalizeOutput(); err != nil {
 		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), err)
 	}
+	// Recheck the operation bytes after output finalization. The source/output
+	// pair is not committed to the in-memory catalog or reload boundary until
+	// this postcondition still holds.
+	if err := verifyCommittedSource(coordinator.vault, relPath, committedHash); err != nil {
+		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), err)
+	}
+	if err := cleanupOutput(); err != nil {
+		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), err)
+	}
 	coordinator.catalog = cloneCatalog(built.Catalog)
-	return TransactionResult{SourceHash: committedHash, Build: built}, nil
+	return TransactionResult{SourceHash: committedHash, RelPath: relPath, Build: built}, nil
 }
 
 func (coordinator *Coordinator) validateCreateParent(relPath string) error {
@@ -561,34 +575,34 @@ func restoreSource(vault, relPath, expected string, original []byte, existed boo
 	return commitSource(vault, relPath, expected, original, false, expected == AbsentSourceHash)
 }
 
-func publishOutput(stage, output string) (func() error, func() error, error) {
+func publishOutput(stage, output string) (func() error, func() error, func() error, error) {
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	backupRoot, err := os.MkdirTemp(filepath.Dir(output), ".obsite-output-backup-*")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	backup := filepath.Join(backupRoot, "previous")
 	outputInfo, outputErr := os.Lstat(output)
 	hadOutput := outputErr == nil
 	if outputErr == nil && (outputInfo.Mode()&os.ModeSymlink != 0 || !outputInfo.IsDir()) {
 		_ = os.RemoveAll(backupRoot)
-		return nil, nil, fmt.Errorf("formal output %q must be a directory and not a symbolic link", output)
+		return nil, nil, nil, fmt.Errorf("formal output %q must be a directory and not a symbolic link", output)
 	}
 	if outputErr != nil && !errors.Is(outputErr, os.ErrNotExist) {
 		_ = os.RemoveAll(backupRoot)
-		return nil, nil, outputErr
+		return nil, nil, nil, outputErr
 	}
 	if hadOutput {
 		currentInfo, currentErr := os.Lstat(output)
 		if currentErr != nil || !os.SameFile(outputInfo, currentInfo) {
 			_ = os.RemoveAll(backupRoot)
-			return nil, nil, fmt.Errorf("formal output changed before publication")
+			return nil, nil, nil, fmt.Errorf("formal output changed before publication")
 		}
 		if err := os.Rename(output, backup); err != nil {
 			_ = os.RemoveAll(backupRoot)
-			return nil, nil, fmt.Errorf("backup formal output: %w", err)
+			return nil, nil, nil, fmt.Errorf("backup formal output: %w", err)
 		}
 	}
 	if err := os.Rename(stage, output); err != nil {
@@ -616,7 +630,7 @@ func publishOutput(stage, output string) (func() error, func() error, error) {
 				cleanupErr = fmt.Errorf("cleanup formal output backup: %w", err)
 			}
 		}
-		return nil, nil, errors.Join(publishErr, restoreErr, cleanupErr)
+		return nil, nil, nil, errors.Join(publishErr, restoreErr, cleanupErr)
 	}
 	restorePublishedOutput := func() error {
 		var rollbackErr error
@@ -641,7 +655,7 @@ func publishOutput(stage, output string) (func() error, func() error, error) {
 	}
 	publishedInfo, err := os.Lstat(output)
 	if err != nil {
-		return nil, nil, errors.Join(fmt.Errorf("inspect published formal output: %w", err), restorePublishedOutput())
+		return nil, nil, nil, errors.Join(fmt.Errorf("inspect published formal output: %w", err), restorePublishedOutput())
 	}
 	rolledBack := false
 	rollback := func() error {
@@ -678,10 +692,13 @@ func publishOutput(stage, output string) (func() error, func() error, error) {
 		}
 		return rollbackErr
 	}
-	finalize := func() error {
-		return os.RemoveAll(backupRoot)
-	}
-	return rollback, finalize, nil
+	// Keep the backup available through the source/output postcondition checks.
+	// The published directory is already the formal output; this checkpoint is
+	// intentionally separate from cleanup so rollback remains possible until
+	// the caller has verified the committed source bytes.
+	finalize := func() error { return nil }
+	cleanup := func() error { return os.RemoveAll(backupRoot) }
+	return rollback, finalize, cleanup, nil
 }
 
 func hashForAbsentOrBytes(data []byte) string {

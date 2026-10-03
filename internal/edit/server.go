@@ -362,6 +362,9 @@ func (s *Server) serveSourceDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeMutationResult(w http.ResponseWriter, result TransactionResult) {
 	response := map[string]any{"ok": true, "sourceHash": result.SourceHash}
+	if result.RelPath != "" {
+		response["path"] = result.RelPath
+	}
 	if result.Build != nil {
 		response["warningCount"] = result.Build.WarningCount
 		response["diagnostics"] = s.editorDiagnostics(result.Build.Diagnostics)
@@ -442,7 +445,25 @@ func editorDiagnosticText(root, value string) string {
 			value = strings.ReplaceAll(value, prefix, "")
 		}
 	}
-	return value
+	// Build/staging failures can mention paths outside the vault. Keep the
+	// diagnostic useful without returning any machine-local absolute path.
+	parts := strings.Fields(value)
+	for index, part := range parts {
+		leading, trailing := "", ""
+		for len(part) > 0 && strings.ContainsRune("([{\"'", rune(part[0])) {
+			leading += part[:1]
+			part = part[1:]
+		}
+		for len(part) > 0 && strings.ContainsRune(")]},;\"'", rune(part[len(part)-1])) {
+			trailing = part[len(part)-1:] + trailing
+			part = part[:len(part)-1]
+		}
+		if filepath.IsAbs(filepath.FromSlash(part)) || (len(part) > 2 && part[1] == ':' && (part[2] == '/' || part[2] == '\\')) {
+			part = "<path>"
+		}
+		parts[index] = leading + part + trailing
+	}
+	return strings.Join(parts, " ")
 }
 
 func readSourceBody(r *http.Request) ([]byte, error) {

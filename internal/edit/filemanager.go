@@ -217,7 +217,8 @@ func (s *Server) fileManagerEntries() ([]fileManagerEntryResponse, error) {
 			if hashErr != nil {
 				return hashErr
 			}
-			entries = append(entries, fileManagerEntryResponse{Path: rel, Name: path.Base(rel), Kind: "folder", Editable: true, Hash: hash})
+			editable := s.editableFileManagerTarget(rel, true)
+			entries = append(entries, fileManagerEntryResponse{Path: rel, Name: path.Base(rel), Kind: "folder", Editable: editable, Hash: hash})
 			return nil
 		}
 		if entry.Type()&os.ModeType != 0 || !entry.Type().IsRegular() || fileManagerPathHidden(rel) {
@@ -233,7 +234,7 @@ func (s *Server) fileManagerEntries() ([]fileManagerEntryResponse, error) {
 		}
 		entries = append(entries, fileManagerEntryResponse{
 			Path: rel, Name: path.Base(rel), Kind: "file", SourceKind: sourceKinds[rel],
-			Editable: true, Hash: hash, Size: info.Size(),
+			Editable: sourceKinds[rel] == "article", Hash: hash, Size: info.Size(),
 		})
 		return nil
 	})
@@ -251,6 +252,14 @@ func (s *Server) fileManagerEntries() ([]fileManagerEntryResponse, error) {
 		return entries[i].Path < entries[j].Path
 	})
 	return entries, nil
+}
+
+func (s *Server) editableFileManagerTarget(relPath string, isDir bool) bool {
+	if isDir {
+		return s.coordinator == nil || s.coordinator.validateEditableFileManagerTarget(relPath, true) == nil
+	}
+	entry := s.catalogEntryByRelPath(relPath)
+	return entry != nil && entry.Kind == "article"
 }
 
 func fileManagerPathHidden(relPath string) bool {

@@ -200,15 +200,15 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   await page.waitForFunction(() => document.querySelectorAll('#media-list .media-item').length > 0);
   await expect.poll(async () => (await page.locator('#editor .cm-line').allTextContents()).join('\n')).toMatch(/^---[\s\S]*---\r?\n\r?\n!\[/);
   const editorSource = (await page.locator('#editor .cm-line').allTextContents()).join('\n');
-  expect(editorSource.startsWith(`${originalFrontmatter}\n![hero](uploads/hero.png)`)).toBe(true);
+  expect(editorSource.startsWith(`${originalFrontmatter}\n![hero](hero.png)`)).toBe(true);
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   const persisted = await source(context, 'article.md');
-  expect(persisted.body.startsWith(`${originalFrontmatter}\n![hero](uploads/hero.png)`)).toBe(true);
+  expect(persisted.body.startsWith(`${originalFrontmatter}\n![hero](hero.png)`)).toBe(true);
   await page.reload();
   await page.locator('#editor .cm-content').waitFor();
   await page.locator('#mode').click();
-  await expect.poll(async () => (await page.locator('#editor .cm-line').allTextContents()).join('\n')).toContain('![hero](uploads/hero.png)');
+  await expect.poll(async () => (await page.locator('#editor .cm-line').allTextContents()).join('\n')).toContain('![hero](hero.png)');
   await context.close();
 });
 
@@ -221,7 +221,7 @@ test('source media insertion preserves mixed line endings after save and reload'
   await page.goto(`${origin}/_obsite/editor?path=article.md`);
   const delimiter = mixedSource.indexOf('\r\n---\r\n') + '\r\n---\r\n'.length;
   const originalFrontmatter = mixedSource.slice(0, delimiter);
-  const expected = `${originalFrontmatter}\r\n![hero](uploads/hero.png)\r\n\nOriginal\n`;
+  const expected = `${originalFrontmatter}\r\n![hero](hero.png)\r\n\nOriginal\n`;
   await page.locator('#mode').click();
   await page.locator('#media').click();
   await page.locator('#media-upload').setInputFiles(path.join(repoRoot, 'test', 'testdata', 'e2e', 'runtime-vault', 'images', 'hero.png'));
@@ -259,6 +259,7 @@ test('editor dark mode keeps metadata and long file labels readable', async ({br
   const page = await context.newPage();
   await login(page);
   await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.locator('#sidebar-toggle').click();
   await page.locator('#file-refresh').click();
   const label = page.locator('.file-entry-label').filter({hasText: longPath}).first();
   await expect(label).toBeVisible();
@@ -432,7 +433,7 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   await page.locator('#media-upload').setInputFiles({name: 'editor-pixel.png', mimeType: 'image/png', buffer: png});
   await expect(page.locator('.media-item')).toContainText('editor-pixel.png');
-  await expect(page.locator('#status')).toContainText('Uploaded uploads/editor-pixel.png');
+  await expect(page.locator('#status')).toContainText('Uploaded editor-pixel.png');
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   const mediaSaved = await fs.readFile(path.join(vault, 'draft.md'), 'utf8');
@@ -477,10 +478,31 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   await page.locator('#file-delete').click();
   await expect(page.locator('.file-entry[data-path="docs/renamed.md"]')).toHaveCount(0);
   await page.locator('.file-entry[data-path="docs"]').click();
-  page.once('dialog', dialog => dialog.accept());
-  await page.locator('#file-delete').click();
-  await expect(page.locator('.file-entry[data-path="docs"]')).toHaveCount(0);
+  await page.locator('.file-entry[data-path="docs"]').click();
+  await expect(page.locator('#file-delete')).toBeDisabled();
   expect(externalRequests).toEqual([]);
+  await context.close();
+});
+
+test('preview diff uses the bundled merge view and local drafts never publish', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.locator('#mode').click();
+  await page.locator('#editor .cm-content').fill('---\ntitle: Article\npublish: true\ntype: doc\n---\nLocal candidate\n');
+  await page.locator('#diff-tab').click();
+  await expect(page.locator('#diff-editor')).toBeVisible();
+  await expect(page.locator('.diff-summary')).toContainText('article.md');
+  await expect(page.locator('#status')).not.toContainText('Saved and rebuilt');
+  await expect.poll(async () => page.locator('#draft-indicator').textContent()).toContain('Draft saved locally');
+  expect(await fs.readFile(path.join(vault, 'article.md'), 'utf8')).toContain('Original');
+  const storedDraft = await page.evaluate(() => new Promise(resolve => { const request = indexedDB.open('obsite-editor', 1); request.onsuccess = () => { const get = request.result.transaction('drafts', 'readonly').objectStore('drafts').getAll(); get.onsuccess = () => resolve(get.result); }; request.onerror = () => resolve([]); }));
+  expect(storedDraft.length).toBeGreaterThan(0);
+  page.on('dialog', async dialog => { await dialog.accept(); });
+  await page.reload();
+  await expect(page.locator('#status')).toContainText('Local draft restored');
+  await expect(page.locator('#editor .cm-content')).toContainText('Local candidate');
   await context.close();
 });
 

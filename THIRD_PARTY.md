@@ -16,7 +16,8 @@ Version: 11.17.2. License: MIT (`internal/render/vendor/mermaid/LICENSE`).
 
 ## CodeMirror 6 editor
 Pinned browser editor packages in `package-lock.json`, including CodeMirror 6,
-`@codemirror/lang-markdown`, and their Lezer parser dependencies. License: MIT.
+`@codemirror/lang-markdown`, and `@codemirror/merge` 6.12.2
+(`sha512-V8JvyAPjHbPupqP7BeMcsdsYCbyPij74jxIbaIJDORI+VZzW44zFmon8bF+oxGWvOKhcRmkiUMXd8MxHr3YA2w==`), plus their Lezer parser dependencies. License: MIT.
 The bundled editor is embedded at `internal/edit/web/editor.bundle.js` and does
 not load JavaScript from a network at runtime.
 
