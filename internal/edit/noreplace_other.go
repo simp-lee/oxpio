@@ -2,10 +2,17 @@
 
 package edit
 
-import "errors"
+import (
+	"errors"
+	"os"
+)
 
 func ensureNoReplaceRename() error {
 	return errors.New("atomic no-replace rename is unavailable on this platform")
+}
+
+func renamePathReplace(source, destination string) error {
+	return os.Rename(source, destination)
 }
 
 func renamePathNoReplace(source, destination string) error {

@@ -28,7 +28,7 @@ func removeCreatedPathAtomic(filename, relPath, expectedHash string, isDir bool)
 	if err != nil {
 		return true, err
 	}
-	if err := os.Rename(filename, placeholder); err != nil {
+	if err := renamePathReplace(filename, placeholder); err != nil {
 		_ = os.RemoveAll(placeholder)
 		return true, err
 	}
@@ -97,7 +97,7 @@ func removeIdentityPath(filename string, expectedInfo os.FileInfo, expectedHash 
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(filename, tombstone); err != nil {
+	if err := renamePathReplace(filename, tombstone); err != nil {
 		_ = os.RemoveAll(tombstone)
 		return err
 	}
