@@ -360,8 +360,23 @@ func replaceEditorField(block []byte, key string, replacement []string) ([]byte,
 		return append(updated, []byte(strings.Join(editorLinesWithNewlines(replacement, separator), ""))...), nil
 	}
 	end := start + 1
+	indentless := editorFieldHasEmptyValue(lines[start].text)
 	for end < len(lines) {
 		line := lines[end].text
+		if indentless && editorIndentlessSequenceItem(line) {
+			end++
+			continue
+		}
+		if indentless && line == "" {
+			next := end + 1
+			for next < len(lines) && lines[next].text == "" {
+				next++
+			}
+			if next < len(lines) && editorIndentlessSequenceItem(lines[next].text) {
+				end++
+				continue
+			}
+		}
 		if line == "" {
 			next := end + 1
 			for next < len(lines) && lines[next].text == "" {
@@ -418,6 +433,19 @@ func editorPreferredLineEnding(content []byte) string {
 
 func hasEditorLineEnding(content []byte) bool {
 	return bytes.ContainsAny(content, "\r\n")
+}
+
+func editorFieldHasEmptyValue(line string) bool {
+	colon := editorYAMLKeyColon(line)
+	if colon < 0 {
+		return false
+	}
+	value := strings.TrimSpace(strings.TrimSuffix(strings.TrimSuffix(line[colon+1:], "\n"), "\r"))
+	return value == "" || strings.HasPrefix(value, "#")
+}
+
+func editorIndentlessSequenceItem(line string) bool {
+	return len(line) > 0 && line[0] == '-' && (len(line) == 1 || line[1] == ' ' || line[1] == '\t')
 }
 
 func editorTopLevelField(line string) string {

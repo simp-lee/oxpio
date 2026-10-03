@@ -644,7 +644,7 @@ function splitMarkdownBlocks(body) {
       if (!fenceCharacter) {
         fenceCharacter = character;
         fenceLength = marker[1].length;
-      } else if (character === fenceCharacter && marker[1].length >= fenceLength) {
+      } else if (character === fenceCharacter && marker[1].length >= fenceLength && line.slice(marker[0].length).trim() === "") {
         fenceCharacter = "";
         fenceLength = 0;
       }

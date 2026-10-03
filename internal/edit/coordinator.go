@@ -433,8 +433,10 @@ func preserveMovedSource(displaced, filename string) error {
 	if _, err := os.Lstat(filename); errors.Is(err, os.ErrNotExist) {
 		if err := renamePathNoReplace(displaced, filename); err == nil {
 			return nil
-		} else {
+		} else if _, statErr := os.Lstat(filename); statErr == nil {
 			return errors.Join(err, os.RemoveAll(displaced))
+		} else {
+			return err
 		}
 	} else if err != nil {
 		return err

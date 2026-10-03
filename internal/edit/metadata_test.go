@@ -114,6 +114,23 @@ func TestApplyEditorFrontmatterCreatesBlockForBodyOnlySource(t *testing.T) {
 	}
 }
 
+func TestApplyEditorFrontmatterReplacesIndentlessSequences(t *testing.T) {
+	source := []byte("---\ntitle: Guide\ntags:\n- one\n- two\naliases:\n- old\n---\nBody\n")
+	updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Tags: []string{"three"}, Aliases: []string{"new"}}, "article", []string{"tags", "aliases"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(updated)
+	for _, want := range []string{"tags:\n    - three", "aliases:\n    - new"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("updated source missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "- one") || strings.Contains(text, "- old") {
+		t.Fatalf("old indentless sequence items remain:\n%s", text)
+	}
+}
+
 func TestApplyEditorFrontmatterUpdatesQuotedAndFlowFields(t *testing.T) {
 	source := []byte("---\n\"title\": \"Old title\"\ntags: [one, two] # keep this comment\n---\nBody\n")
 	updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Title: "New title", Tags: []string{"three"}}, "article", []string{"title", "tags"})

@@ -14,6 +14,9 @@ import (
 // occurs before the rename, it restores the displaced path only when the
 // destination remains absent; it never overwrites an external replacement.
 func removeCreatedPathAtomic(filename, relPath, expectedHash string, isDir bool) (bool, error) {
+	if err := ensureNoReplaceRename(); err != nil {
+		return false, err
+	}
 	targetInfo, err := os.Lstat(filename)
 	if errors.Is(err, os.ErrNotExist) {
 		return true, nil
