@@ -357,19 +357,15 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 			return fmt.Errorf("delete source %q: %w", relPath, err)
 		}
 		if err := verifyCASSnapshot(displaced, casName, relPath, expected); err != nil {
-			preserveMovedSource(displaced, filename)
-			return err
+			return errors.Join(err, preserveMovedSource(displaced, filename))
 		}
 		if _, err := os.Lstat(filename); err == nil {
-			preserveMovedSource(displaced, filename)
-			return &ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}
+			return errors.Join(&ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}, preserveMovedSource(displaced, filename))
 		} else if !errors.Is(err, os.ErrNotExist) {
-			preserveMovedSource(displaced, filename)
-			return err
+			return errors.Join(err, preserveMovedSource(displaced, filename))
 		}
 		if err := verifySnapshotBytes(casName, expected, relPath); err != nil {
-			preserveMovedSource(displaced, filename)
-			return err
+			return errors.Join(err, preserveMovedSource(displaced, filename))
 		}
 		if err := os.Remove(displaced); err != nil {
 			return errors.Join(fmt.Errorf("delete source %q: %w", relPath, err), restoreMovedSource(displaced, filename))
@@ -391,22 +387,19 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 		return fmt.Errorf("replace source %q: %w", relPath, err)
 	}
 	if err := verifyCASSnapshot(displaced, casName, relPath, expected); err != nil {
-		preserveMovedSource(displaced, filename)
-		return err
+		return errors.Join(err, preserveMovedSource(displaced, filename))
 	}
 	if _, err := os.Lstat(filename); err == nil {
-		preserveMovedSource(displaced, filename)
-		return &ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}
+		return errors.Join(&ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}, preserveMovedSource(displaced, filename))
 	} else if !errors.Is(err, os.ErrNotExist) {
-		preserveMovedSource(displaced, filename)
-		return err
+		return errors.Join(err, preserveMovedSource(displaced, filename))
 	}
 	if err := os.Link(temporaryName, filename); err != nil {
-		preserveMovedSource(displaced, filename)
+		preserveErr := preserveMovedSource(displaced, filename)
 		if errors.Is(err, os.ErrExist) {
-			return &ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}
+			return errors.Join(&ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}, preserveErr)
 		}
-		return fmt.Errorf("replace source %q: %w", relPath, err)
+		return errors.Join(fmt.Errorf("replace source %q: %w", relPath, err), preserveErr)
 	}
 	if err := verifySnapshotBytes(casName, expected, relPath); err != nil {
 		return errors.Join(err, rollbackReplacedSource(filename, displaced, hashForAbsentOrBytes(content), relPath))
@@ -436,10 +429,17 @@ func moveSourceForCAS(filename string) (string, error) {
 	return name, nil
 }
 
-func preserveMovedSource(displaced, filename string) {
+func preserveMovedSource(displaced, filename string) error {
 	if _, err := os.Lstat(filename); errors.Is(err, os.ErrNotExist) {
-		_ = renamePathNoReplace(displaced, filename)
+		if err := renamePathNoReplace(displaced, filename); err == nil {
+			return nil
+		} else {
+			return errors.Join(err, os.RemoveAll(displaced))
+		}
+	} else if err != nil {
+		return err
 	}
+	return os.RemoveAll(displaced)
 }
 
 func restoreMovedSource(displaced, filename string) error {

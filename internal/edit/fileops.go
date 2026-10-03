@@ -349,36 +349,33 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 
 	case fileMutationRename:
 		destination := filepath.Join(vault, filepath.FromSlash(mutation.destination))
+		backup, err := createFileManagerBackup(source, current.isDir)
+		if err != nil {
+			return nil, nil, fileManagerState{}, err
+		}
+		cleanupBackup := func() error { return os.RemoveAll(backup) }
 		displaced, err := movePathForCAS(source)
 		if err != nil {
-			return nil, nil, fileManagerState{}, fmt.Errorf("rename %q: %w", mutation.path, err)
+			return nil, nil, fileManagerState{}, errors.Join(fmt.Errorf("rename %q: %w", mutation.path, err), cleanupBackup())
 		}
 		if actual, hashErr := hashMovedPath(displaced, current.isDir); hashErr != nil || actual != current.hash {
 			restoreErr := restoreDisplacedPath(displaced, source)
 			if hashErr != nil {
-				return nil, nil, fileManagerState{}, errors.Join(hashErr, restoreErr)
+				return nil, nil, fileManagerState{}, errors.Join(hashErr, restoreErr, cleanupBackup())
 			}
-			return nil, nil, fileManagerState{}, errors.Join(&ConflictError{Path: mutation.path, Expected: current.hash, Actual: actual}, restoreErr)
+			return nil, nil, fileManagerState{}, errors.Join(&ConflictError{Path: mutation.path, Expected: current.hash, Actual: actual}, restoreErr, cleanupBackup())
 		}
 		if err := renamePathNoReplace(displaced, destination); err != nil {
 			restoreErr := restoreDisplacedPath(displaced, source)
-			return nil, nil, fileManagerState{}, errors.Join(fmt.Errorf("rename %q to %q: %w", mutation.path, mutation.destination, err), restoreErr)
+			return nil, nil, fileManagerState{}, errors.Join(fmt.Errorf("rename %q to %q: %w", mutation.path, mutation.destination, err), restoreErr, cleanupBackup())
 		}
 		expected = fileManagerState{path: mutation.destination, hash: current.hash, exists: true, isDir: current.isDir}
 		rollback = func() error {
-			state, stateErr := inspectFileManagerState(vault, mutation.destination)
-			if stateErr != nil {
-				return stateErr
-			}
-			if !state.exists {
-				return renamePathNoReplace(destination, source)
-			}
-			if state.hash != expected.hash {
-				return &ConflictError{Path: mutation.destination, Expected: expected.hash, Actual: state.hash}
-			}
-			return renamePathNoReplace(destination, source)
+			restoreErr := restoreFileManagerBackup(backup, source)
+			removeErr := removeCreatedPath(vault, mutation.destination, expected.hash)
+			return errors.Join(restoreErr, removeErr)
 		}
-		return rollback, func() error { return nil }, expected, nil
+		return rollback, cleanupBackup, expected, nil
 	}
 	return nil, nil, fileManagerState{}, fmt.Errorf("unsupported file operation %q", mutation.operation)
 }
@@ -566,6 +563,37 @@ func removeCreatedPath(vault, relPath, expectedHash string) error {
 		return atomicErr
 	}
 	return os.RemoveAll(filename)
+}
+
+func createFileManagerBackup(filename string, isDir bool) (string, error) {
+	if isDir {
+		return os.MkdirTemp(filepath.Dir(filename), ".obsite-rename-backup-*")
+	}
+	file, err := os.CreateTemp(filepath.Dir(filename), ".obsite-rename-backup-*")
+	if err != nil {
+		return "", err
+	}
+	name := file.Name()
+	if err := file.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", err
+	}
+	if err := os.Remove(name); err != nil {
+		return "", err
+	}
+	if err := os.Link(filename, name); err != nil {
+		return "", err
+	}
+	return name, nil
+}
+
+func restoreFileManagerBackup(backup, filename string) error {
+	if _, err := os.Lstat(filename); err == nil {
+		return fmt.Errorf("source changed before rename rollback")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return renamePathNoReplace(backup, filename)
 }
 
 func createFileNoReplace(filename string, content []byte) error {

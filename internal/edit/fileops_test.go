@@ -188,6 +188,45 @@ func TestCreatedPathRollbackRemovesOnlyCreatedIdentity(t *testing.T) {
 	}
 }
 
+func TestRenameRollbackPreservesExternalDestinationAndSource(t *testing.T) {
+	vault := t.TempDir()
+	source := filepath.Join(vault, "source.md")
+	if err := os.WriteFile(source, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	current, err := inspectFileManagerState(vault, "source.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mutation := fileManagerMutation{operation: fileMutationRename, path: "source.md", destination: "renamed.md"}
+	rollback, finalize, expected, err := applyFileManagerMutation(vault, mutation, current)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if expected.hash != current.hash {
+		t.Fatalf("rename hash = %q, want %q", expected.hash, current.hash)
+	}
+	replacement := filepath.Join(vault, "replacement.tmp")
+	if err := os.WriteFile(replacement, []byte("external"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(replacement, filepath.Join(vault, "renamed.md")); err != nil {
+		t.Fatal(err)
+	}
+	if err := rollback(); err == nil {
+		t.Fatal("rollback unexpectedly ignored external destination")
+	}
+	if got, err := os.ReadFile(source); err != nil || string(got) != "original" {
+		t.Fatalf("source after rollback = %q, err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(vault, "renamed.md")); err != nil || string(got) != "external" {
+		t.Fatalf("external destination after rollback = %q, err=%v", got, err)
+	}
+	if err := finalize(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestRenamePathNoReplacePreservesDestination(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
