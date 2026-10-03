@@ -57,30 +57,32 @@ func removeCreatedPathAtomic(filename, relPath, expectedHash string, isDir bool)
 		}
 		return exchange()
 	}
-	removePlaceholder := func() error {
-		current, statErr := os.Lstat(placeholder)
+	removeIdentity := func(filename string, expectedInfo os.FileInfo) error {
+		current, statErr := os.Lstat(filename)
 		if statErr != nil {
 			return statErr
 		}
-		if !os.SameFile(current, placeholderInfo) {
-			return fmt.Errorf("rollback placeholder changed")
+		if !os.SameFile(current, expectedInfo) {
+			return fmt.Errorf("rollback path changed")
 		}
-		return os.RemoveAll(placeholder)
+		return os.RemoveAll(filename)
 	}
 
 	movedInfo, statErr := os.Lstat(placeholder)
 	if statErr != nil {
 		restoreErr := restore()
-		return true, errors.Join(statErr, restoreErr)
+		cleanupErr := removeIdentity(placeholder, placeholderInfo)
+		return true, errors.Join(statErr, restoreErr, cleanupErr)
 	}
 	movedHash, hashErr := hashMovedPath(placeholder, isDir)
 	if hashErr != nil {
 		restoreErr := restore()
-		return true, errors.Join(hashErr, restoreErr)
+		cleanupErr := removeIdentity(placeholder, placeholderInfo)
+		return true, errors.Join(hashErr, restoreErr, cleanupErr)
 	}
 	if movedHash != expectedHash || !os.SameFile(movedInfo, targetInfo) {
 		restoreErr := restore()
-		cleanupErr := removePlaceholder()
+		cleanupErr := removeIdentity(placeholder, placeholderInfo)
 		return true, errors.Join(&ConflictError{Path: relPath, Expected: expectedHash, Actual: movedHash}, restoreErr, cleanupErr)
 	}
 
@@ -95,7 +97,7 @@ func removeCreatedPathAtomic(filename, relPath, expectedHash string, isDir bool)
 			return true, err
 		}
 	}
-	return true, removePlaceholder()
+	return true, removeIdentity(placeholder, targetInfo)
 }
 
 func createRollbackPlaceholder(parent string, isDir bool) (string, error) {

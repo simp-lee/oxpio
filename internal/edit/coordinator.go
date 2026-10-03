@@ -568,7 +568,7 @@ func restoreSource(vault, relPath, expected string, original []byte, existed boo
 	}
 	if !existed {
 		if nowExists {
-			return os.Remove(filepath.Join(vault, filepath.FromSlash(relPath)))
+			return removeCreatedPath(vault, relPath, expected)
 		}
 		return nil
 	}

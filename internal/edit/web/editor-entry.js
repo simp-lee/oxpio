@@ -602,6 +602,10 @@ function sourceParts(source) {
       const block = [];
       while (index + 1 < lines.length && /^(?:[ \t]+|$)/.test(lines[index + 1])) block.push(lines[++index].trim());
       value += ` ${block.join(value === "|" ? "\\n" : " ")}`;
+    } else if (value === "" && index + 1 < lines.length && /^[ \t]+/.test(lines[index + 1])) {
+      const block = [];
+      while (index + 1 < lines.length && /^[ \t]+/.test(lines[index + 1])) block.push(lines[++index].trim());
+      value = block.join("\\n");
     }
     fields.set(name, value);
   }

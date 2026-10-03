@@ -163,6 +163,31 @@ func TestFileManagerCandidateExcludesFormalOutput(t *testing.T) {
 	}
 }
 
+func TestCreatedPathRollbackRemovesOnlyCreatedIdentity(t *testing.T) {
+	vault := t.TempDir()
+	filename := filepath.Join(vault, "created.md")
+	if err := createFileNoReplace(filename, []byte("created")); err != nil {
+		t.Fatal(err)
+	}
+	state, err := inspectFileManagerState(vault, "created.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := removeCreatedPath(vault, "created.md", state.hash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(filename); !os.IsNotExist(err) {
+		t.Fatalf("created path remains after rollback: %v", err)
+	}
+	entries, err := os.ReadDir(vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("rollback left temporary entries: %#v", entries)
+	}
+}
+
 func TestRenamePathNoReplacePreservesDestination(t *testing.T) {
 	root := t.TempDir()
 	source := filepath.Join(root, "source")
