@@ -199,6 +199,7 @@
     <div class="media-header"><h2>Media library</h2><button id="media-close" type="button">Close</button></div>
     <div id="media-dropzone" class="media-dropzone" tabindex="0" aria-describedby="media-drop-hint">
       <p id="media-drop-hint">Drop one Markdown or image file here, or choose a file.</p>
+      <label class="upload-kind">Markdown source kind<select id="upload-kind"><option value="article">Article</option><option value="section">Section index</option></select></label>
       <label class="upload-button" title="Upload one Markdown or image file"><svg aria-hidden="true"><use href="#icon-upload"></use></svg> Upload file<input id="media-upload" type="file" accept=".md,.png,.jpg,.jpeg,.webp,.svg,image/*,text/markdown" hidden></label>
     </div>
     <label class="upload-folder">Target folder<input id="upload-folder" type="text" placeholder="Vault root or existing folder"></label>

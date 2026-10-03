@@ -602,9 +602,9 @@ function sourceParts(source) {
       const block = [];
       while (index + 1 < lines.length && /^(?:[ \t]+|$)/.test(lines[index + 1])) block.push(lines[++index].trim());
       value += ` ${block.join(value === "|" ? "\\n" : " ")}`;
-    } else if (value === "" && index + 1 < lines.length && /^[ \t]+/.test(lines[index + 1])) {
+    } else if (value === "" && index + 1 < lines.length && /^(?:[ \t]+|-\s?)/.test(lines[index + 1])) {
       const block = [];
-      while (index + 1 < lines.length && /^[ \t]+/.test(lines[index + 1])) block.push(lines[++index].trim());
+      while (index + 1 < lines.length && /^(?:[ \t]+|-\s?)/.test(lines[index + 1])) block.push(lines[++index].trim());
       value = block.join("\\n");
     }
     fields.set(name, value);
@@ -920,7 +920,12 @@ async function uploadMedia(file) {
     form.append("file", file);
     const folder = $("#upload-folder").value.trim() || (state.fileKind === "folder" ? state.filePath : "");
     if (folder) form.append("folder", folder);
-    if (/\.md$/iu.test(file.name)) form.append("kind", /^_index\.md$/iu.test(file.name) ? "section" : "article");
+    if (/\.md$/iu.test(file.name)) {
+      const kind = $("#upload-kind").value;
+      const isSectionFile = /^_index\.md$/iu.test(file.name);
+      if (isSectionFile !== (kind === "section")) throw new Error(isSectionFile ? "Choose Section index for _index.md uploads." : "Choose Article for ordinary Markdown uploads.");
+      form.append("kind", kind);
+    }
     const result = await mutation("POST", "/_obsite/media", form, {"X-Obsite-File-Hash": "absent"});
     await loadMedia();
     await refreshFiles(result.path);

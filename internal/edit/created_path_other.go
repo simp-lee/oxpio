@@ -56,15 +56,7 @@ func removeCreatedPathAtomic(filename, relPath, expectedHash string, isDir bool)
 		return true, errors.Join(&ConflictError{Path: relPath, Expected: expectedHash, Actual: movedHash}, restoreErr)
 	}
 
-	if current, statErr := os.Lstat(filename); statErr == nil {
-		// An external replacement owns the public path; retain it.
-		if !os.SameFile(current, targetInfo) {
-			return true, removeIdentityOther(placeholder, targetInfo)
-		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return true, statErr
-	}
-	return true, removeIdentityOther(placeholder, targetInfo)
+	return true, removeIdentityPath(placeholder, targetInfo, expectedHash, isDir)
 }
 
 func createRollbackPlaceholder(parent string, isDir bool) (string, error) {
@@ -83,13 +75,47 @@ func createRollbackPlaceholder(parent string, isDir bool) (string, error) {
 	return name, nil
 }
 
-func removeIdentityOther(filename string, expectedInfo os.FileInfo) error {
+func removeIdentityPath(filename string, expectedInfo os.FileInfo, expectedHash string, isDir bool) error {
 	current, err := os.Lstat(filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return err
 	}
 	if !os.SameFile(current, expectedInfo) {
 		return fmt.Errorf("rollback path changed")
 	}
-	return os.RemoveAll(filename)
+	actualHash, err := hashMovedPath(filename, isDir)
+	if err != nil {
+		return err
+	}
+	if actualHash != expectedHash {
+		return fmt.Errorf("rollback path contents changed")
+	}
+	tombstone, err := createRollbackPlaceholder(filepath.Dir(filename), isDir)
+	if err != nil {
+		return err
+	}
+	if err := os.Rename(filename, tombstone); err != nil {
+		_ = os.RemoveAll(tombstone)
+		return err
+	}
+	moved, err := os.Lstat(tombstone)
+	if err != nil {
+		return err
+	}
+	movedHash, err := hashMovedPath(tombstone, isDir)
+	if err != nil {
+		return err
+	}
+	if !os.SameFile(moved, expectedInfo) || movedHash != expectedHash {
+		if _, statErr := os.Lstat(filename); errors.Is(statErr, os.ErrNotExist) {
+			if restoreErr := os.Rename(tombstone, filename); restoreErr != nil {
+				return errors.Join(fmt.Errorf("rollback identity changed"), restoreErr)
+			}
+		}
+		return fmt.Errorf("rollback identity changed")
+	}
+	return os.RemoveAll(tombstone)
 }

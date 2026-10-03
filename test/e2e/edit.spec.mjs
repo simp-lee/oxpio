@@ -496,10 +496,11 @@ test('preview diff uses the bundled merge view and local drafts never publish', 
   await login(page);
   await page.goto(`${origin}/_obsite/editor?path=article.md`);
   await page.locator('#mode').click();
-  await page.locator('#editor .cm-content').fill('---\ntitle: Article\npublish: true\ntype: doc\n---\nLocal candidate\n');
+  await page.locator('#editor .cm-content').fill('---\ntitle: Article\npublish: true\ntype: doc\ntags:\n- local\n---\nLocal candidate\n');
   await page.locator('#diff-tab').click();
   await expect(page.locator('#diff-editor')).toBeVisible();
   await expect(page.locator('.diff-summary')).toContainText('article.md');
+  await expect(page.locator('.structured-diff').first()).toContainText('added: tags');
   await expect(page.locator('#status')).not.toContainText('Saved and rebuilt');
   await expect.poll(async () => page.locator('#draft-indicator').textContent()).toContain('Draft saved locally');
   expect(await fs.readFile(path.join(vault, 'article.md'), 'utf8')).toContain('Original');
