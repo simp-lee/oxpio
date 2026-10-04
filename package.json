@@ -3,6 +3,7 @@
   "private": true,
   "scripts": {
     "build:editor": "esbuild internal/edit/web/editor-entry.js --bundle --minify --outfile=internal/edit/web/editor.bundle.js",
+    "verify:editor-bundle": "sh scripts/verify-editor-bundle.sh",
     "capture:ui": "node scripts/capture-ui.mjs",
     "test:e2e": "playwright test"
   },

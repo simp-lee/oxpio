@@ -97,6 +97,49 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	}
 }
 
+func TestFileOperationKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeEditFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\nArticle\n")
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(vault, output, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupFailure := errors.New("simulated partial backup cleanup failure")
+	originalRemove := editOutputRemoveAll
+	editOutputRemoveAll = func(name string) error {
+		if strings.Contains(filepath.Base(name), ".obsite-output-backup-") {
+			if err := os.RemoveAll(name); err != nil {
+				return err
+			}
+			return cleanupFailure
+		}
+		return originalRemove(name)
+	}
+	defer func() { editOutputRemoveAll = originalRemove }()
+
+	result, err := coordinator.CreateFolder("docs", AbsentSourceHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Build == nil || !errors.Is(result.Build.OutputCleanupError, cleanupFailure) {
+		t.Fatalf("build cleanup error = %#v, want %v", result.Build, cleanupFailure)
+	}
+	if _, err := os.Stat(filepath.Join(vault, "docs")); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(output, "article", "index.html")); err != nil || !strings.Contains(string(got), "Article") {
+		t.Fatalf("committed output = %q, err=%v", got, err)
+	}
+}
+
 func TestUploadFileUsesExistingFolderAndAbsentCAS(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")

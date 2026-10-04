@@ -244,7 +244,10 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
 	}
 	if err := cleanupOutput(); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
+		// Publication has already committed the new source/output pair. A
+		// backup cleanup failure must not roll back through a partially
+		// removed backup and destroy the committed output.
+		built.OutputCleanupError = err
 	}
 	if err := finalize(); err != nil {
 		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)

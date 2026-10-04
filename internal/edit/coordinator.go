@@ -21,6 +21,8 @@ import (
 // exist when a create operation starts.
 const AbsentSourceHash = "absent"
 
+var editOutputRemoveAll = os.RemoveAll
+
 // ConflictError is returned when the source changed since the client read it.
 type ConflictError struct {
 	Path     string
@@ -244,7 +246,10 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), err)
 	}
 	if err := cleanupOutput(); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), err)
+		// Publication has already committed the new source/output pair. A
+		// backup cleanup failure must not roll back through a partially
+		// removed backup and destroy the committed output.
+		built.OutputCleanupError = err
 	}
 	coordinator.catalog = cloneCatalog(built.Catalog)
 	return TransactionResult{SourceHash: committedHash, RelPath: relPath, Build: built}, nil
@@ -702,7 +707,7 @@ func publishOutput(stage, output string) (func() error, func() error, func() err
 	// intentionally separate from cleanup so rollback remains possible until
 	// the caller has verified the committed source bytes.
 	finalize := func() error { return nil }
-	cleanup := func() error { return os.RemoveAll(backupRoot) }
+	cleanup := func() error { return editOutputRemoveAll(backupRoot) }
 	return rollback, finalize, cleanup, nil
 }
 

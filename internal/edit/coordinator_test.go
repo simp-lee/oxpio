@@ -174,6 +174,48 @@ func TestCoordinatorEditsScannerAcceptedUppercaseMarkdownRelPath(t *testing.T) {
 	}
 }
 
+func TestCoordinatorKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
+	writeEditFile(t, vault, "article.md", original)
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(vault, output, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupFailure := errors.New("simulated partial backup cleanup failure")
+	originalRemove := editOutputRemoveAll
+	editOutputRemoveAll = func(name string) error {
+		if strings.Contains(filepath.Base(name), ".obsite-output-backup-") {
+			if err := os.RemoveAll(name); err != nil {
+				return err
+			}
+			return cleanupFailure
+		}
+		return originalRemove(name)
+	}
+	defer func() { editOutputRemoveAll = originalRemove }()
+
+	updated := "---\ntitle: Article\npublish: true\ntype: doc\n---\nUpdated\n"
+	result, err := coordinator.Save("article.md", sourceHash([]byte(original)), []byte(updated))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Build == nil || !errors.Is(result.Build.OutputCleanupError, cleanupFailure) {
+		t.Fatalf("build cleanup error = %#v, want %v", result.Build, cleanupFailure)
+	}
+	if got, err := os.ReadFile(filepath.Join(output, "article", "index.html")); err != nil || !strings.Contains(string(got), "Updated") {
+		t.Fatalf("committed output = %q, err=%v", got, err)
+	}
+}
+
 func sourceHash(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])

@@ -76,7 +76,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
-      - run: npm run build:editor
+      - run: npm run verify:editor-bundle
       - name: Install lockfile-pinned Chromium
         run: npx --no-install playwright install --with-deps chromium
       - run: npm run test:e2e
@@ -99,6 +99,14 @@ jobs:
         with:
           go-version: ${{ env.GO_VERSION }}
           cache: true
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - name: Verify committed editor bundle
+        run: |
+          npm ci
+          npm run verify:editor-bundle
       - name: Check GoReleaser configuration
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
