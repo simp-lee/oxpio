@@ -368,6 +368,11 @@ func (s *Server) writeMutationResult(w http.ResponseWriter, result TransactionRe
 	if result.Build != nil {
 		response["warningCount"] = result.Build.WarningCount
 		response["diagnostics"] = s.editorDiagnostics(result.Build.Diagnostics)
+		if result.Build.OutputCleanupError != nil {
+			// This is a post-commit operational status. Do not expose filesystem
+			// paths or turn a committed source/output pair into a failure.
+			response["outputCleanupWarning"] = true
+		}
 	}
 	writeJSON(w, response)
 }

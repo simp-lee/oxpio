@@ -241,6 +241,9 @@ async function responseJSON(response) {
   }
   return data;
 }
+function postCommitWarning(result) {
+  return result?.outputCleanupWarning ? " Output cleanup needs attention." : "";
+}
 async function mutation(method, url, body, headers = {}) {
   const session = await responseJSON(await fetch("/_obsite/csrf"));
   headers = {...headers, "X-Obsite-CSRF": session.csrf};
@@ -558,8 +561,9 @@ async function save() {
       } catch (error) { diagnostics(error.diagnostics, `Preview refresh failed: ${error.message}`); }
     }
     diagnostics(result.diagnostics);
-    saveState("saved", result.warningCount ? "Saved with warnings" : "Saved");
-    status(result.warningCount ? "Saved and rebuilt with warnings." : "Saved and rebuilt.");
+    const cleanupWarning = postCommitWarning(result);
+    saveState("saved", result.warningCount || cleanupWarning ? "Saved with warnings" : "Saved");
+    status(result.warningCount ? `Saved and rebuilt with warnings.${cleanupWarning}` : `Saved and rebuilt.${cleanupWarning}`);
   });
 }
 async function preview() {
@@ -959,7 +963,7 @@ async function uploadMedia(file) {
     await refreshFiles(result.path);
     if (/\.md$/iu.test(file.name)) await loadCatalog(result.path);
     else insertMedia(result.path);
-    status(`Uploaded ${result.path} and rebuilt successfully.`);
+    status(`Uploaded ${result.path} and rebuilt successfully.${postCommitWarning(result)}`);
   } catch (error) { diagnostics(error.diagnostics, `Upload failed: ${error.message}`); saveState("failed", "Build failed"); status(`Upload failed: ${error.message}`); }
   finally { $("#media-upload").value = ""; }
 }
@@ -988,14 +992,14 @@ async function runFileMutation(label, action, preferred = state.filePath, reload
   if (state.busy) return;
   busy(true);
   try {
-    await action();
+    const result = await action();
     if (reloadSource) {
       dirty(false);
       await loadCatalog(preferred);
     } else {
       await refreshFiles(preferred);
     }
-    status(`${label} completed and rebuilt.`);
+    status(`${label} completed and rebuilt.${postCommitWarning(result)}`);
   } catch (error) {
     diagnostics(error.diagnostics, `${label} failed: ${error.message}`);
     saveState("failed", `${label} failed`);
@@ -1071,8 +1075,9 @@ $("#file-delete").onclick = () => {
   const affectsCurrent = pathContains(pathValue, state.path);
   const preferred = affectsCurrent ? "" : state.path;
   runFileMutation("Delete", async () => {
-    await mutation("DELETE", `/_obsite/file?path=${encodeURIComponent(pathValue)}&confirm=true`, null, {"X-Obsite-File-Hash": fileHash});
+    const result = await mutation("DELETE", `/_obsite/file?path=${encodeURIComponent(pathValue)}&confirm=true`, null, {"X-Obsite-File-Hash": fileHash});
     await clearDraft(pathValue);
+    return result;
   }, preferred, affectsCurrent).catch(() => {});
 };
 $("#file-form").onsubmit = async event => {
@@ -1108,17 +1113,18 @@ $("#new-form").onsubmit = async event => {
   event.preventDefault();
   const form = new URLSearchParams(new FormData(event.target));
   try {
-    await mutation("POST", "/_obsite/source", form, {"X-Obsite-Source-Hash": "absent"});
+    const result = await mutation("POST", "/_obsite/source", form, {"X-Obsite-Source-Hash": "absent"});
     $("#new-dialog").close(); dirty(false);
     await loadCatalog(form.get("path"));
+    status(`Created and rebuilt.${postCommitWarning(result)}`);
   } catch (error) { diagnostics(error.diagnostics, error.message); saveState("failed", "Build failed"); $("#new-dialog").close(); status(`Create failed: ${error.message}`); }
 };
 $("#delete").onclick = () => operation("Delete", async () => {
   if (state.kind !== "article" || !confirm("Delete this article?")) return;
   const deletedPath = state.path;
-  await mutation("DELETE", `/_obsite/source?path=${encodeURIComponent(deletedPath)}&confirm=true`, null, {"X-Obsite-Source-Hash": state.hash});
+  const result = await mutation("DELETE", `/_obsite/source?path=${encodeURIComponent(deletedPath)}&confirm=true`, null, {"X-Obsite-Source-Hash": state.hash});
   await clearDraft(deletedPath);
-  dirty(false); await loadCatalog(""); status("Deleted and rebuilt.");
+  dirty(false); await loadCatalog(""); status(`Deleted and rebuilt.${postCommitWarning(result)}`);
 });
 $("#media").onclick = openMedia;
 $("#media-close").onclick = () => { $("#media-panel").hidden = true; };

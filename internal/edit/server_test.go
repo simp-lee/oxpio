@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -14,9 +15,29 @@ import (
 	"testing"
 	"time"
 
+	internalbuild "github.com/simp-lee/obsite/internal/build"
 	internalconfig "github.com/simp-lee/obsite/internal/config"
 	"github.com/simp-lee/obsite/internal/model"
 )
+
+func TestMutationResultReportsPostCommitOutputCleanupWarning(t *testing.T) {
+	server := &Server{}
+	recorder := httptest.NewRecorder()
+	server.writeMutationResult(recorder, TransactionResult{Build: &internalbuild.BuildResult{OutputCleanupError: errors.New("/private/vault/.obsite-output-backup")}})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if warning, ok := response["outputCleanupWarning"].(bool); !ok || !warning {
+		t.Fatalf("response = %s, want outputCleanupWarning=true", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "/private/vault") {
+		t.Fatalf("response leaked cleanup path: %s", recorder.Body.String())
+	}
+}
 
 func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	vault := t.TempDir()
