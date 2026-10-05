@@ -181,7 +181,7 @@ func TestStrictBuildPlansNoScriptFallbackResources(t *testing.T) {
 				if n.Type != xhtml.ElementNode || n.Data != "img" {
 					return false
 				}
-			class, _ := strictHTMLAttribute(n, "class")
+				class, _ := strictHTMLAttribute(n, "class")
 				return !strings.Contains(class, "site-logo")
 			})
 			if len(images) != 1 {

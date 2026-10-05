@@ -233,7 +233,7 @@ func TestStrictBuildPlansThemeAssets(t *testing.T) {
 				".oxpio/theme/assets/cafe\u0301.txt": second,
 				".oxpio/theme/theme.css":             ":root { color: red; }",
 				".oxpio/theme/assets/theme.css":      ":root { color: blue; }",
-				"images/café.txt":                     first,
+				"images/café.txt":                    first,
 			}
 			for source, data := range sources {
 				writeStrictFile(t, vault, source, data)

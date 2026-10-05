@@ -19,7 +19,7 @@ const (
 	obsidianConfigDir  = ".obsidian"
 	obsidianAppJSON    = ".obsidian/app.json"
 	nodeModulesDirName = "node_modules"
-	oxpioDirName      = ".oxpio"
+	oxpioDirName       = ".oxpio"
 )
 
 // ScanResult is the Step 11 handoff for later frontmatter parsing and index building.
