@@ -12,9 +12,9 @@ import (
 	"sync"
 	"unicode/utf8"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/model"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 // AbsentSourceHash is the compare-and-swap sentinel for a source that does not
@@ -168,7 +168,7 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	} else {
 		overlay[relPath] = append([]byte(nil), content...)
 	}
-	stageRoot, err := os.MkdirTemp(filepath.Dir(coordinator.output), ".obsite-edit-stage-*")
+	stageRoot, err := os.MkdirTemp(filepath.Dir(coordinator.output), ".oxpio-edit-stage-*")
 	if err != nil {
 		return TransactionResult{}, fmt.Errorf("create edit staging directory: %w", err)
 	}
@@ -416,7 +416,7 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 }
 
 func moveSourceForCAS(filename string) (string, error) {
-	temporary, err := os.CreateTemp(filepath.Dir(filename), ".obsite-displaced-*")
+	temporary, err := os.CreateTemp(filepath.Dir(filename), ".oxpio-displaced-*")
 	if err != nil {
 		return "", err
 	}
@@ -489,7 +489,7 @@ func createSourceNoReplace(filename, relPath string, content []byte) error {
 }
 
 func writeSourceTransactionFile(parent string, content []byte) (*os.File, error) {
-	temporary, err := os.CreateTemp(parent, ".obsite-source-*")
+	temporary, err := os.CreateTemp(parent, ".oxpio-source-*")
 	if err != nil {
 		return nil, fmt.Errorf("create source transaction file: %w", err)
 	}
@@ -516,7 +516,7 @@ func writeSourceTransactionFile(parent string, content []byte) (*os.File, error)
 }
 
 func makeCASSnapshot(filename string) (string, error) {
-	temporary, err := os.CreateTemp(filepath.Dir(filename), ".obsite-cas-*")
+	temporary, err := os.CreateTemp(filepath.Dir(filename), ".oxpio-cas-*")
 	if err != nil {
 		return "", fmt.Errorf("create source CAS marker: %w", err)
 	}
@@ -589,7 +589,7 @@ func publishOutput(stage, output string) (func() error, func() error, func() err
 	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
 		return nil, nil, nil, err
 	}
-	backupRoot, err := os.MkdirTemp(filepath.Dir(output), ".obsite-output-backup-*")
+	backupRoot, err := os.MkdirTemp(filepath.Dir(output), ".oxpio-output-backup-*")
 	if err != nil {
 		return nil, nil, nil, err
 	}

@@ -9,7 +9,7 @@ import (
 
 func TestStrictBuildResolvesSectionSourceLinksAndFragments(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Section Links\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Section Links\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n## Welcome\n\n[Root](_index.md) [Root heading](_index.md#Welcome) [[_index#Welcome|Root wikilink]]\n\n[Markdown](guide/_index.md#Install)\n\n[[guide/_index#Install|Wikilink]]\n")
 	writeStrictFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\n## Install\n\n![[Embedded]]\n")
 	writeStrictFile(t, vault, "guide/embedded.md", "---\ntitle: Embedded\npublish: true\ntype: page\n---\n[[guide/_index#Install|Back]]\n")
@@ -45,7 +45,7 @@ func TestStrictBuildResolvesSectionSourceLinksAndFragments(t *testing.T) {
 
 func TestStrictBuildUsesCollectionOrderForTagPages(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Tag Order\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Tag Order\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
 	writeStrictFile(t, vault, "b.md", "---\ntitle: B\npublish: true\ntype: doc\norder: 1\ntags: [shared]\n---\nB\n")
 	writeStrictFile(t, vault, "a.md", "---\ntitle: A\npublish: true\ntype: doc\norder: 2\ntags: [shared]\n---\nA\n")

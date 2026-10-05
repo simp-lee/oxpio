@@ -1,14 +1,14 @@
 #!/bin/sh
 set -eu
 
-[ "$#" -eq 1 ] || { echo "usage: $0 OBSITE_BINARY" >&2; exit 2; }
+[ "$#" -eq 1 ] || { echo "usage: $0 OXPIO_BINARY" >&2; exit 2; }
 case "$1" in
   /*) BINARY=$1 ;;
   *) BINARY=$(CDPATH= cd -- "$(dirname -- "$1")" && pwd)/$(basename -- "$1") ;;
 esac
 [ -x "$BINARY" ] || { echo "release binary is not executable: $BINARY" >&2; exit 1; }
 
-TMP=${TMPDIR:-/tmp}/obsite-release-smoke-$$
+TMP=${TMPDIR:-/tmp}/oxpio-release-smoke-$$
 VAULT=$TMP/vault
 SERVER_PID=
 cleanup() {
@@ -24,7 +24,7 @@ mkdir -p "$VAULT"
 VERSION=$("$BINARY" version)
 VERSION_FLAG=$("$BINARY" --version)
 [ "$VERSION" = "$VERSION_FLAG" ] || { echo "version forms differ" >&2; exit 1; }
-printf '%s\n' "$VERSION" | grep -E '^obsite version=[^ ]+ commit=[^ ]+ date=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z type=(snapshot|release)$' >/dev/null || {
+printf '%s\n' "$VERSION" | grep -E '^oxpio version=[^ ]+ commit=[^ ]+ date=[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z type=(snapshot|release)$' >/dev/null || {
   echo "invalid release-shaped version: $VERSION" >&2
   exit 1
 }

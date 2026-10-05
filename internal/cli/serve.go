@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	internalanalyze "github.com/simp-lee/obsite/internal/analyze"
-	internalasset "github.com/simp-lee/obsite/internal/asset"
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalconfig "github.com/simp-lee/obsite/internal/config"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	internalserver "github.com/simp-lee/obsite/internal/server"
+	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	internalserver "github.com/simp-lee/oxpio/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -722,7 +722,7 @@ func obsidianAppInputMayHaveChanged(vaultPath string, op fsnotify.Op, wasWatched
 func isWatchableVaultPath(relPath string) bool {
 	parts := splitWatchPath(relPath)
 	for _, part := range parts {
-		if part == "node_modules" || part == ".obsidian" || part == ".obsite" {
+		if part == "node_modules" || part == ".obsidian" || part == ".oxpio" {
 			return false
 		}
 	}
@@ -749,7 +749,7 @@ func (loop *serveWatchLoop) shouldWatchVaultDirectory(path string) bool {
 
 	parts := splitWatchPath(relPath)
 	for _, part := range parts {
-		if part == "node_modules" || part == ".obsite" {
+		if part == "node_modules" || part == ".oxpio" {
 			return false
 		}
 	}

@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="{{.Language}}" data-obsite-base-path="/" data-obsite-content-preview{{if .Math}} data-obsite-math{{end}}{{if .Mermaid}} data-obsite-mermaid{{end}}>
+<html lang="{{.Language}}" data-oxpio-base-path="/" data-oxpio-content-preview{{if .Math}} data-oxpio-math{{end}}{{if .Mermaid}} data-oxpio-mermaid{{end}}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -11,6 +11,7 @@
 <body>
   <main class="content-preview-shell">
     <article class="content-preview-page">
+      <div class="content-preview-brand"><img src="/_oxpio/logo.svg" alt="OXPIO"></div>
       <header class="content-preview-header">
         <h1>{{.Title}}</h1>
       </header>

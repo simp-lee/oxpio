@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/resourcepath"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/resourcepath"
 	gast "github.com/yuin/goldmark/ast"
 	gmwikilink "go.abhg.dev/goldmark/wikilink"
 )

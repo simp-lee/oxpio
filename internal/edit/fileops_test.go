@@ -8,13 +8,13 @@ import (
 	"strings"
 	"testing"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
 )
 
 func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\nArticle\n")
 	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
@@ -100,7 +100,7 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 func TestFileOperationKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\nArticle\n")
 	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
@@ -115,7 +115,7 @@ func TestFileOperationKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 	cleanupFailure := errors.New("simulated partial backup cleanup failure")
 	originalRemove := editOutputRemoveAll
 	editOutputRemoveAll = func(name string) error {
-		if strings.Contains(filepath.Base(name), ".obsite-output-backup-") {
+		if strings.Contains(filepath.Base(name), ".oxpio-output-backup-") {
 			if err := os.RemoveAll(name); err != nil {
 				return err
 			}
@@ -143,7 +143,7 @@ func TestFileOperationKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 func TestUploadFileUsesExistingFolderAndAbsentCAS(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "docs/_index.md", "---\ntitle: Docs\npublish: true\n---\nDocs\n")
 	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
@@ -189,7 +189,7 @@ func TestUploadFileUsesExistingFolderAndAbsentCAS(t *testing.T) {
 func TestFileManagerCandidateExcludesFormalOutput(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(vault, "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
 	if err != nil {
@@ -295,7 +295,7 @@ func TestDeleteRollbackCleansDisplacedSourceOnExternalReplacement(t *testing.T) 
 		t.Fatal(err)
 	}
 	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".obsite-displaced-") {
+		if strings.HasPrefix(entry.Name(), ".oxpio-displaced-") {
 			t.Fatalf("displaced source leaked: %s", entry.Name())
 		}
 	}
@@ -323,7 +323,7 @@ func TestRenamePathNoReplacePreservesDestination(t *testing.T) {
 }
 
 func TestValidateManagedPathsRejectReservedAndTraversal(t *testing.T) {
-	for _, pathValue := range []string{"../escape.md", "/absolute.md", ".obsite/theme.css", "obsite.yaml", "OBSITE.YAML", "node_modules/pkg", "NODE_MODULES/pkg", "docs/../guide.md"} {
+	for _, pathValue := range []string{"../escape.md", "/absolute.md", ".oxpio/theme.css", "oxpio.yaml", "OXPIO.YAML", "node_modules/pkg", "NODE_MODULES/pkg", "docs/../guide.md"} {
 		if err := validateManagedRelPath(pathValue); err == nil {
 			t.Fatalf("validateManagedRelPath(%q) succeeded", pathValue)
 		}

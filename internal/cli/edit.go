@@ -3,9 +3,9 @@ package cli
 import (
 	"fmt"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internaledit "github.com/simp-lee/obsite/internal/edit"
-	internalserver "github.com/simp-lee/obsite/internal/server"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internaledit "github.com/simp-lee/oxpio/internal/edit"
+	internalserver "github.com/simp-lee/oxpio/internal/server"
 	"github.com/spf13/cobra"
 )
 

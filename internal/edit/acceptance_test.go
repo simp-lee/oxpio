@@ -15,8 +15,8 @@ import (
 	"sync"
 	"testing"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalconfig "github.com/simp-lee/obsite/internal/config"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
 )
 
 func TestEditHTTPAcceptanceMatrix(t *testing.T) {
@@ -26,7 +26,7 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\nGuide\n")
 	original := "---\n# keep this comment\ntitle: \"Article\"\npublish: true\ntype: doc\n---\n\nOriginal\n"
@@ -78,11 +78,11 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 	}
 
 	assertStatusBody(http.MethodGet, "/article/", http.StatusOK, "Original", "edit-page-link")
-	assertStatusBody(http.MethodGet, "/_obsite/source?path=article.md", http.StatusUnauthorized, "", "Original")
-	assertStatusBody(http.MethodGet, "/_obsite/editor?path=article.md", http.StatusUnauthorized, "", "Obsite editor")
+	assertStatusBody(http.MethodGet, "/_oxpio/source?path=article.md", http.StatusUnauthorized, "", "Original")
+	assertStatusBody(http.MethodGet, "/_oxpio/editor?path=article.md", http.StatusUnauthorized, "", "OXPIO editor")
 	assertStatusBody(http.MethodGet, "/draft/", http.StatusNotFound, "", "Private")
 
-	loginRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/_obsite/login", strings.NewReader("username=admin&password=secret"))
+	loginRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/_oxpio/login", strings.NewReader("username=admin&password=secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 	assertStatusBody(http.MethodGet, "/article/", http.StatusOK, "edit-page-link", "")
 	assertStatusBody(http.MethodGet, "/guide/", http.StatusOK, "edit-page-link", "")
 
-	response, err = httpClient.Get(ts.URL + "/_obsite/sources")
+	response, err = httpClient.Get(ts.URL + "/_oxpio/sources")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -114,12 +114,12 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 		t.Fatalf("source catalog = %d %s", response.StatusCode, sourcesBody)
 	}
 
-	readResponse, err := httpClient.Get(ts.URL + "/_obsite/source?path=article.md")
+	readResponse, err := httpClient.Get(ts.URL + "/_oxpio/source?path=article.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	readBody, _ := io.ReadAll(readResponse.Body)
-	oldHash := readResponse.Header.Get("X-Obsite-Source-Hash")
+	oldHash := readResponse.Header.Get("X-OXPIO-Source-Hash")
 	_ = readResponse.Body.Close()
 	if string(readBody) != original || oldHash == "" {
 		t.Fatalf("source read = %q, hash=%q", readBody, oldHash)
@@ -134,7 +134,7 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 		}
 		request.Header.Set("Origin", origin)
 		request.Header.Set(csrfHeaderName, session.CSRF)
-		request.Header.Set("X-Obsite-Source-Hash", expectedHash)
+		request.Header.Set("X-OXPIO-Source-Hash", expectedHash)
 		if method == http.MethodPost {
 			request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		}
@@ -150,11 +150,11 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 		return response, data
 	}
 
-	response, body := mutation(http.MethodPut, "/_obsite/source?path=article.md", strings.NewReader(updated), oldHash, "https://evil.example")
+	response, body := mutation(http.MethodPut, "/_oxpio/source?path=article.md", strings.NewReader(updated), oldHash, "https://evil.example")
 	if response.StatusCode != http.StatusForbidden || !strings.Contains(string(body), "csrf validation failed") {
 		t.Fatalf("cross-origin save = %d %s", response.StatusCode, body)
 	}
-	response, body = mutation(http.MethodPut, "/_obsite/source?path=article.md", strings.NewReader(updated), oldHash, ts.URL)
+	response, body = mutation(http.MethodPut, "/_oxpio/source?path=article.md", strings.NewReader(updated), oldHash, ts.URL)
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"ok":true`) {
 		t.Fatalf("source save = %d %s", response.StatusCode, body)
 	}
@@ -162,7 +162,7 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 		t.Fatalf("source-preserving save = %q, err=%v", got, err)
 	}
 
-	response, body = mutation(http.MethodPut, "/_obsite/source?path=article.md", strings.NewReader("stale"), oldHash, ts.URL)
+	response, body = mutation(http.MethodPut, "/_oxpio/source?path=article.md", strings.NewReader("stale"), oldHash, ts.URL)
 	if response.StatusCode != http.StatusConflict || !strings.Contains(string(body), "source conflict") {
 		t.Fatalf("stale save = %d %s, want conflict", response.StatusCode, body)
 	}
@@ -171,7 +171,7 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response, body = mutation(http.MethodPut, "/_obsite/source?path=article.md", strings.NewReader("---\ntitle: broken\npublish: true\ntype: invalid\n---\nfailed\n"), sourceHashForTest([]byte(updated)), ts.URL)
+	response, body = mutation(http.MethodPut, "/_oxpio/source?path=article.md", strings.NewReader("---\ntitle: broken\npublish: true\ntype: invalid\n---\nfailed\n"), sourceHashForTest([]byte(updated)), ts.URL)
 	if response.StatusCode == http.StatusOK || !strings.Contains(string(body), "article.md") || strings.Contains(string(body), vault) {
 		t.Fatalf("failed save = %d %s", response.StatusCode, body)
 	}
@@ -180,7 +180,7 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 	}
 
 	form := url.Values{"path": {"new.md"}, "title": {"New draft"}, "type": {"doc"}}
-	response, body = mutation(http.MethodPost, "/_obsite/source", strings.NewReader(form.Encode()), AbsentSourceHash, ts.URL)
+	response, body = mutation(http.MethodPost, "/_oxpio/source", strings.NewReader(form.Encode()), AbsentSourceHash, ts.URL)
 	responseBody := string(body)
 	if response.StatusCode != http.StatusOK || !strings.Contains(responseBody, `"ok":true`) {
 		t.Fatalf("create draft = %d %s", response.StatusCode, body)
@@ -194,12 +194,12 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 	}
 	assertStatusBody(http.MethodGet, "/new/", http.StatusNotFound, "", "New draft")
 
-	response, body = mutation(http.MethodPost, "/_obsite/source", strings.NewReader(form.Encode()), AbsentSourceHash, ts.URL)
+	response, body = mutation(http.MethodPost, "/_oxpio/source", strings.NewReader(form.Encode()), AbsentSourceHash, ts.URL)
 	if response.StatusCode == http.StatusOK {
 		t.Fatalf("duplicate create unexpectedly succeeded: %s", body)
 	}
 	postForm := url.Values{"path": {"dated.md"}, "title": {"A post"}, "type": {"post"}, "date": {"2025-01-02"}}
-	response, body = mutation(http.MethodPost, "/_obsite/source", strings.NewReader(postForm.Encode()), AbsentSourceHash, ts.URL)
+	response, body = mutation(http.MethodPost, "/_oxpio/source", strings.NewReader(postForm.Encode()), AbsentSourceHash, ts.URL)
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("create post = %d %s", response.StatusCode, body)
 	}
@@ -211,20 +211,20 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 		t.Fatalf("post source = %q", postSource)
 	}
 	missingDate := url.Values{"path": {"missing-date.md"}, "title": {"Bad post"}, "type": {"post"}}
-	response, body = mutation(http.MethodPost, "/_obsite/source", strings.NewReader(missingDate.Encode()), AbsentSourceHash, ts.URL)
+	response, body = mutation(http.MethodPost, "/_oxpio/source", strings.NewReader(missingDate.Encode()), AbsentSourceHash, ts.URL)
 	if response.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "date is required") {
 		t.Fatalf("missing post date = %d %s", response.StatusCode, body)
 	}
 
-	response, body = mutation(http.MethodDelete, "/_obsite/source?path=guide/_index.md&confirm=true", nil, sourceHashForTest([]byte("---\ntitle: Guide\npublish: true\n---\nGuide\n")), ts.URL)
+	response, body = mutation(http.MethodDelete, "/_oxpio/source?path=guide/_index.md&confirm=true", nil, sourceHashForTest([]byte("---\ntitle: Guide\npublish: true\n---\nGuide\n")), ts.URL)
 	if response.StatusCode == http.StatusOK || !strings.Contains(string(body), "cannot delete section") {
 		t.Fatalf("section delete = %d %s", response.StatusCode, body)
 	}
-	response, body = mutation(http.MethodDelete, "/_obsite/source?path=new.md", nil, sourceHashForTest(newDraft), ts.URL)
+	response, body = mutation(http.MethodDelete, "/_oxpio/source?path=new.md", nil, sourceHashForTest(newDraft), ts.URL)
 	if response.StatusCode != http.StatusBadRequest || !strings.Contains(string(body), "confirmation") {
 		t.Fatalf("unconfirmed delete = %d %s", response.StatusCode, body)
 	}
-	response, body = mutation(http.MethodDelete, "/_obsite/source?path=new.md&confirm=true", nil, sourceHashForTest(newDraft), ts.URL)
+	response, body = mutation(http.MethodDelete, "/_oxpio/source?path=new.md&confirm=true", nil, sourceHashForTest(newDraft), ts.URL)
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(body), `"ok":true`) {
 		t.Fatalf("delete = %d %s", response.StatusCode, body)
 	}
@@ -232,12 +232,12 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 		t.Fatalf("deleted source stat = %v", err)
 	}
 
-	response, body = mutation(http.MethodPost, "/_obsite/source", strings.NewReader(url.Values{"path": {"../escape.md"}, "title": {"Escape"}, "type": {"doc"}}.Encode()), AbsentSourceHash, ts.URL)
+	response, body = mutation(http.MethodPost, "/_oxpio/source", strings.NewReader(url.Values{"path": {"../escape.md"}, "title": {"Escape"}, "type": {"doc"}}.Encode()), AbsentSourceHash, ts.URL)
 	if response.StatusCode == http.StatusOK || !strings.Contains(string(body), "contained normalized Markdown path") {
 		t.Fatalf("traversal create = %d %s", response.StatusCode, body)
 	}
 
-	logout, err := http.NewRequest(http.MethodPost, ts.URL+"/_obsite/logout", nil)
+	logout, err := http.NewRequest(http.MethodPost, ts.URL+"/_oxpio/logout", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,13 +251,13 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 	if response.StatusCode != http.StatusOK {
 		t.Fatalf("logout = %d", response.StatusCode)
 	}
-	assertStatusBody(http.MethodGet, "/_obsite/source?path=article.md", http.StatusUnauthorized, "", "Changed")
+	assertStatusBody(http.MethodGet, "/_oxpio/source?path=article.md", http.StatusUnauthorized, "", "Changed")
 }
 
 func TestCoordinatorSerializesConcurrentCASMutations(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
 	writeEditFile(t, vault, "article.md", original)
@@ -324,13 +324,13 @@ func TestCoordinatorSerializesConcurrentCASMutations(t *testing.T) {
 func TestEditSetupFailureDoesNotWriteConfig(t *testing.T) {
 	vault := t.TempDir()
 	original := []byte("title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
-	writeEditFile(t, vault, "obsite.yaml", string(original))
+	writeEditFile(t, vault, "oxpio.yaml", string(original))
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	var output bytes.Buffer
 	if err := Setup(vault, strings.NewReader("admin\nsecret\n"), &output); err == nil || !strings.Contains(err.Error(), "interactive terminal") {
 		t.Fatalf("non-interactive setup error = %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(vault, "obsite.yaml"))
+	got, err := os.ReadFile(filepath.Join(vault, "oxpio.yaml"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -369,7 +369,7 @@ func TestEditNewArticleTemplatesAndMutationGuards(t *testing.T) {
 
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\nGuide\n")
 	writeEditFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\nArticle\n")
@@ -406,7 +406,7 @@ func acceptanceSession(t *testing.T, client *http.Client, origin string) struct 
 	CSRF string `json:"csrf"`
 } {
 	t.Helper()
-	response, err := client.Get(origin + "/_obsite/session")
+	response, err := client.Get(origin + "/_oxpio/session")
 	if err != nil {
 		t.Fatal(err)
 	}

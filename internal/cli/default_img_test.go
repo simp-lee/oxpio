@@ -15,7 +15,7 @@ import (
 	"strings"
 	"testing"
 
-	internalserver "github.com/simp-lee/obsite/internal/server"
+	internalserver "github.com/simp-lee/oxpio/internal/server"
 )
 
 func TestCLIBuildPublishesDefaultImageAndServesLocalAsset(t *testing.T) {
@@ -38,7 +38,7 @@ func TestCLIBuildPublishesDefaultImageAndServesLocalAsset(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			vault := t.TempDir()
 			output := filepath.Join(t.TempDir(), "public")
-			writeValidateFile(t, vault, "obsite.yaml", fmt.Sprintf("title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: %q\n", tt.defaultImg))
+			writeValidateFile(t, vault, "oxpio.yaml", fmt.Sprintf("title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: %q\n", tt.defaultImg))
 			writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 			if tt.wantLocal {
 				writeValidateFile(t, vault, "images/default.png", string(imageData))
@@ -111,7 +111,7 @@ func TestCLIFailsDefaultImageBuildAndPreservesPublishedOutput(t *testing.T) {
 		{
 			name: "missing",
 			mutate: func(t *testing.T, vault string) {
-				writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/missing.png\n")
+				writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/missing.png\n")
 			},
 		},
 		{
@@ -123,7 +123,7 @@ func TestCLIFailsDefaultImageBuildAndPreservesPublishedOutput(t *testing.T) {
 				if err := os.MkdirAll(filepath.Join(vault, "images", "default.png"), 0o755); err != nil {
 					t.Fatal(err)
 				}
-				writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/default.png\n")
+				writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/default.png\n")
 			},
 		},
 		{
@@ -142,14 +142,14 @@ func TestCLIFailsDefaultImageBuildAndPreservesPublishedOutput(t *testing.T) {
 				if err := os.Symlink(outside, filepath.Join(vault, "images", "default.png")); err != nil {
 					t.Fatal(err)
 				}
-				writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/default.png\n")
+				writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/default.png\n")
 			},
 		},
 		{
 			name: "undecodable",
 			mutate: func(t *testing.T, vault string) {
 				writeValidateFile(t, vault, "images/default.png", "not an image")
-				writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/default.png\n")
+				writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/default.png\n")
 			},
 		},
 	}
@@ -159,7 +159,7 @@ func TestCLIFailsDefaultImageBuildAndPreservesPublishedOutput(t *testing.T) {
 			vault := t.TempDir()
 			outputRoot := t.TempDir()
 			output := filepath.Join(outputRoot, "public")
-			writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/default.png\n")
+			writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/site/\nnavigation: []\ndefaultImg: images/default.png\n")
 			writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nPublished baseline\n")
 			writeValidateFile(t, vault, "images/default.png", string(imageData))
 			if _, stderr, err := executeForTest(t, defaultCommandDependencies(), []string{"build", "--vault", vault, "--output", output}); err != nil {

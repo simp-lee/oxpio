@@ -83,7 +83,7 @@ func TestScanExcludesResolvedOutputAndInternalInputDirectories(t *testing.T) {
 	writeVaultFile(t, vaultPath, "assets/kept.png", "kept")
 	writeVaultFile(t, vaultPath, "public/generated.md", "# Generated")
 	writeVaultFile(t, vaultPath, "public/assets/generated.png", "generated")
-	writeVaultFile(t, vaultPath, ".obsite/theme/theme.css", "body{}")
+	writeVaultFile(t, vaultPath, ".oxpio/theme/theme.css", "body{}")
 	writeVaultFile(t, vaultPath, ".obsidian/workspace.json", "{}")
 	writeVaultFile(t, vaultPath, "node_modules/pkg/index.md", "# Dependency")
 	writeVaultFile(t, vaultPath, ".hidden/private.md", "# Hidden")

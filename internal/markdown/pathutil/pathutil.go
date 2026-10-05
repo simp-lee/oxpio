@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 // RelativeToNoteOutput returns siteRelPath relative to the output directory of note.

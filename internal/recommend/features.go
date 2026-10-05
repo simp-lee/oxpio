@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 	"golang.org/x/text/unicode/norm"
 )
 

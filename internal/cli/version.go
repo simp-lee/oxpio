@@ -23,7 +23,7 @@ type versionMetadata struct {
 	Type    string
 }
 
-const releaseMetadataPrefix = "obsite-release-metadata:"
+const releaseMetadataPrefix = "oxpio-release-metadata:"
 
 func currentVersionMetadata() versionMetadata {
 	if metadata, ok := injectedVersionMetadata(); ok {
@@ -92,7 +92,7 @@ func injectedVersionMetadata() (versionMetadata, bool) {
 
 func formatVersion() string {
 	metadata := currentVersionMetadata()
-	return "obsite version=" + metadata.Version + " commit=" + metadata.Commit + " date=" + metadata.Date + " type=" + metadata.Type
+	return "oxpio version=" + metadata.Version + " commit=" + metadata.Commit + " date=" + metadata.Date + " type=" + metadata.Type
 }
 
 func knownValue(value string) string {

@@ -9,16 +9,16 @@ import (
 
 	textparse "text/template/parse"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
-const themeSlotsRootName = "obsite-theme-slots-primary"
+const themeSlotsRootName = "oxpio-theme-slots-primary"
 
 var themeSlotNames = [...]string{
-	"obsite-head-end",
-	"obsite-header-end",
-	"obsite-main-end",
-	"obsite-footer-end",
+	"oxpio-head-end",
+	"oxpio-header-end",
+	"oxpio-main-end",
+	"oxpio-footer-end",
 }
 
 // SlotSiteData is the complete site projection available to theme slots.

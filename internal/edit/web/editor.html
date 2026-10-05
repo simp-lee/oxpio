@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Obsite Editor</title>
-  <link rel="stylesheet" href="/_obsite/editor.css">
+  <title>OXPIO Editor</title>
+  <link rel="stylesheet" href="/_oxpio/editor.css">
 </head>
 <body>
   <svg class="icon-sprite" aria-hidden="true" focusable="false">
@@ -15,7 +15,6 @@
     <symbol id="icon-link" viewBox="0 0 24 24"><path d="M9.2 14.8 7.8 16.2a3 3 0 1 1-4.2-4.2l3.2-3.2A3 3 0 0 1 12 9l-1.4 1.4a1 1 0 0 0-2.4-.2L5 13.4a1 1 0 0 0 1.4 1.4l1.4-1.4 1.4 1.4Zm5.6-5.6 1.4-1.4a3 3 0 1 1 4.2 4.2l-3.2 3.2A3 3 0 0 1 12 15l1.4-1.4a1 1 0 0 0 2.4.2l3.2-3.2a1 1 0 0 0-1.4-1.4l-1.4 1.4-1.4-1.4ZM8 17.4l9.4-9.4 1.4 1.4-9.4 9.4L8 17.4Z"/></symbol>
     <symbol id="icon-image" viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm2 2v12h12V6H6Zm2 9 2.5-3 2 2.4 1.5-1.8 2 2.4H8Zm2-5.5A1.5 1.5 0 1 1 10 6.5a1.5 1.5 0 0 1 0 3Z"/></symbol>
     <symbol id="icon-eye" viewBox="0 0 24 24"><path d="M12 5c5 0 8.8 4.2 10 7-1.2 2.8-5 7-10 7S3.2 14.8 2 12c1.2-2.8 5-7 10-7Zm0 2c-3.5 0-6.3 2.7-7.6 5 1.3 2.3 4.1 5 7.6 5s6.3-2.7 7.6-5C18.3 9.7 15.5 7 12 7Zm0 1.8A3.2 3.2 0 1 1 12 15a3.2 3.2 0 0 1 0-6.2Zm0 2A1.2 1.2 0 1 0 12 13a1.2 1.2 0 0 0 0-2.2Z"/></symbol>
-    <symbol id="icon-columns" viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm2 2v12h5V6H6Zm7 0v12h5V6h-5Z"/></symbol>
     <symbol id="icon-fullscreen" viewBox="0 0 24 24"><path d="M4 4h6v2H6v4H4V4Zm10 0h6v6h-2V6h-4V4ZM4 14h2v4h4v2H4v-6Zm14 0h2v6h-6v-2h4v-4Z"/></symbol>
     <symbol id="icon-help" viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20Zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16Zm-.1-5.2h.2v2h-.2v-2Zm.2-8c2 0 3.4 1.2 3.4 3 0 1.4-.7 2.2-1.9 3-.8.5-1.2.9-1.2 1.7h-2c0-1.7.8-2.5 1.8-3.2.8-.5 1.3-.9 1.3-1.6 0-.7-.5-1.1-1.4-1.1-1 0-1.6.5-1.7 1.5h-2c.1-2 1.5-3.3 3.7-3.3Z"/></symbol>
     <symbol id="icon-code" viewBox="0 0 24 24"><path d="m8.7 6.3-5.7 5.7 5.7 5.7 1.4-1.4L5.8 12l4.3-4.3-1.4-1.4Zm6.6 0-1.4 1.4 4.3 4.3-4.3 4.3 1.4 1.4 5.7-5.7-5.7-5.7Z"/></symbol>
@@ -35,39 +34,49 @@
     <symbol id="icon-status" viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm3 3v10h10V7H7Z"/></symbol>
     <symbol id="icon-source" viewBox="0 0 24 24"><path d="m8 5-7 7 7 7 1.4-1.4L3.8 12l5.6-5.6L8 5Zm8 0-1.4 1.4 5.6 5.6-5.6 5.6L16 19l7-7-7-7Z"/></symbol>
     <symbol id="icon-copy" viewBox="0 0 24 24"><path d="M8 8h12v13H8V8Zm2 2v9h8v-9h-8ZM4 3h12v3H6v12H3V3h1Z"/></symbol>
+    <symbol id="icon-write" viewBox="0 0 24 24"><path d="m4 16.8 9.7-9.7 3.4 3.4-9.7 9.7H4v-3.4ZM15 5.6l1.3-1.3a1 1 0 0 1 1.4 0l2 2a1 1 0 0 1 0 1.4l-1.3 1.3-3.4-3.4ZM4 21h16v-2H4v2Z"/></symbol>
+    <symbol id="icon-settings" viewBox="0 0 24 24"><path d="m19.4 13.5 1.6 1.2-2 3.4-1.9-.8a7.5 7.5 0 0 1-1.8 1l-.3 2H11l-.3-2a7.5 7.5 0 0 1-1.8-1l-1.9.8-2-3.4 1.6-1.2a7 7 0 0 1 0-2.1L5 10.2l2-3.4 1.9.8a7.5 7.5 0 0 1 1.8-1l.3-2h4l.3 2a7.5 7.5 0 0 1 1.8 1l1.9-.8 2 3.4-1.6 1.2a7 7 0 0 1 0 2.1ZM12 15.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"/></symbol>
+    <symbol id="icon-arrow-left" viewBox="0 0 24 24"><path d="M20 11H7.8l4.6-4.6L11 5l-7 7 7 7 1.4-1.4L7.8 13H20v-2Z"/></symbol>
+    <symbol id="icon-external" viewBox="0 0 24 24"><path d="M14 4h6v6h-2V7.4l-8.3 8.3-1.4-1.4L16.6 6H14V4ZM5 5h6v2H7v10h10v-4h2v6H5V5Z"/></symbol>
+    <symbol id="icon-save" viewBox="0 0 24 24"><path d="M5 3h12l3 3v15H4V3h1Zm1 2v5h10V5H6Zm2 12v2h8v-2H8Zm10 2V7l-2-2v7H6V5H6v14h12Z"/></symbol>
+    <symbol id="icon-plus" viewBox="0 0 24 24"><path d="M11 4h2v7h7v2h-7v7h-2v-7H4v-2h7V4Z"/></symbol>
+    <symbol id="icon-diff" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="5" cy="6" r="3"/><path d="M12 6h5a2 2 0 0 1 2 2v7m-4-6-3-3 3-3"/><circle cx="19" cy="18" r="3"/><path d="M12 18H7a2 2 0 0 1-2-2V9m4 6 3 3-3 3"/></g></symbol>
+    <symbol id="icon-wrap" viewBox="0 0 24 24"><path d="M4 5h16v2H4V5Zm0 6h10v2H4v-2Zm0 6h16v2H4v-2Zm12-8 4 3-4 3v-2h-4v-2h4V9Z"/></symbol>
+    <symbol id="icon-file" viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6V3Zm7 2v4h4v10H8V5h5Zm-3 7v2h6v-2h-6Zm0 4v2h4v-2h-4Z"/></symbol>
+    <symbol id="icon-description" viewBox="0 0 24 24"><path d="M4 4h16v16H4V4Zm2 3v2h12V7H6Zm0 4v2h12v-2H6Zm0 4v2h8v-2H6Z"/></symbol>
+    <symbol id="icon-tags" viewBox="0 0 24 24"><path d="M3 5h8l8 8-6 6-8-8V5Zm5 2.5A1.5 1.5 0 1 0 8 10.5a1.5 1.5 0 0 0 0-3Zm5.4 3.1 1.4 1.4-4.2 4.2-1.4-1.4 4.2-4.2Z"/></symbol>
+    <symbol id="icon-layers" viewBox="0 0 24 24"><path d="m12 3 9 5-9 5-9-5 9-5Zm0 7.7 6.4-3.6L12 3.6 5.6 7.1 12 10.7ZM3 12l9 5 9-5v2l-9 5-9-5v-2Zm0 5 9 5 9-5v-2l-9 5-9-5v2Z"/></symbol>
+    <symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m6.7 15.7 5.3-5.3 5.3 5.3 1.4-1.4-6.7-6.7-6.7 6.7 1.4 1.4Z"/></symbol>
+    <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6.7 8.3 5.3 5.3 5.3-5.3 1.4 1.4-6.7 6.7-6.7-6.7 1.4-1.4Z"/></symbol>
   </svg>
 
   <header class="editor-header">
     <div class="product-bar">
-      <a class="brand" href="__OBSITE_BASE_PATH__" aria-label="Obsite home" title="Obsite home">O</a>
-      <nav class="product-nav" aria-label="Editor products"><a class="active" href="#content-editor">Content editor</a><button id="media-nav" type="button">Media</button><button id="settings" type="button">Settings</button></nav>
+      <a class="brand" href="__OXPIO_BASE_PATH__" aria-label="OXPIO home" title="OXPIO home"><img src="/_oxpio/logo.svg" alt="OXPIO"></a>
+      <nav class="product-nav" aria-label="Editor products"><a class="active" href="#content-editor"><svg aria-hidden="true"><use href="#icon-write"></use></svg><span>Content editor</span></a><button id="settings" type="button"><svg aria-hidden="true"><use href="#icon-settings"></use></svg><span>Settings</span></button></nav>
       <button id="sidebar-toggle" type="button" class="icon-button" aria-expanded="false" aria-label="Open documents" title="Open documents"><svg><use href="#icon-menu"></use></svg></button>
     </div>
-    <div class="editor-heading"><a class="back-link" href="__OBSITE_BASE_PATH__">Back to site</a><h1>Content editor</h1></div>
+    <div class="editor-heading"><a class="back-link" href="__OXPIO_BASE_PATH__"><svg aria-hidden="true"><use href="#icon-arrow-left"></use></svg><span>Back to site</span></a><h1>Content editor</h1></div>
     <div class="workspace-tools">
       <label class="workspace-search" aria-label="Search documents"><svg><use href="#icon-search"></use></svg><input id="document-search" type="search" placeholder="Search Documents"></label>
-      <button id="help" type="button">Help</button>
       <details id="user-menu"><summary><svg><use href="#icon-user"></use></svg><span>User</span></summary><button id="logout" type="button">Log out</button></details>
     </div>
     <div class="header-actions">
       <span id="save-state" class="save-state" data-state="saved">Saved</span>
-      <button id="preview" type="button">Preview draft</button>
-      <button id="full-page-preview" type="button">Full page preview</button>
-      <button id="mode" type="button">Source mode</button>
-      <button id="save" type="button" class="primary" aria-label="Save changes">Save changes</button>
-      <button id="new" type="button" aria-label="New article">New article</button>
-      <button id="delete" type="button" class="danger" aria-label="Delete article">Delete article</button>
+      <button id="save" type="button" class="primary button-with-icon" aria-label="Save"><svg aria-hidden="true"><use href="#icon-save"></use></svg><span>Save</span></button>
+      <button id="new" type="button" class="button-with-icon" aria-label="New"><svg aria-hidden="true"><use href="#icon-plus"></use></svg><span>New</span></button>
+      <button id="delete" type="button" class="danger button-with-icon" aria-label="Delete"><svg aria-hidden="true"><use href="#icon-delete"></use></svg><span>Delete</span></button>
     </div>
   </header>
 
   <main id="content-editor" class="editor-layout">
     <aside class="source-sidebar" aria-label="Document list">
       <div class="sidebar-content">
-      <div class="sidebar-title"><strong>Documents</strong><span class="sidebar-hint">Markdown</span></div>
+      <div class="sidebar-title"><strong>Documents</strong><div class="sidebar-title-tools"><span class="sidebar-hint">Markdown</span><span class="tooltip-anchor"><button id="help-tooltip" type="button" class="icon-button" aria-label="Editor help" aria-expanded="false" aria-controls="help-tooltip-content"><svg><use href="#icon-help"></use></svg></button><span id="help-tooltip-content" class="help-tooltip" role="tooltip" aria-hidden="true">Content documents are editable article and section sources. Vault files support folders and file operations. Full builds run before saving; drafts are not published. Shortcuts: Ctrl/Cmd+B, Ctrl/Cmd+I, Ctrl/Cmd+K, Ctrl/Cmd+S.</span></span></div></div>
       <label for="source">Content documents</label>
       <div id="source-tree" class="source-tree" role="tree" aria-label="Markdown source tree"></div>
       <select id="source" size="14" aria-label="Select content document" hidden></select>
-      <button id="refresh" type="button">Refresh list</button>
+      <button id="refresh" type="button" class="button-with-icon"><svg aria-hidden="true"><use href="#icon-refresh"></use></svg><span>Refresh list</span></button>
       <section class="file-manager" aria-label="Vault files">
         <div class="file-manager-header"><strong>Vault files</strong><button id="file-refresh" type="button" class="icon-button" aria-label="Refresh files" title="Refresh files"><svg><use href="#icon-refresh"></use></svg></button></div>
         <div id="file-tree" class="file-tree" role="tree"></div>
@@ -78,11 +87,6 @@
           <button id="file-delete" type="button" class="danger" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#icon-delete"></use></svg> Delete</button>
         </div>
       </section>
-      <div class="sidebar-help">
-        <strong>Help / shortcuts</strong>
-        <p>Content documents are editable article and section sources. Vault files also include folders and support file operations.</p>
-        <p>A full build runs before saving. Drafts are not published.</p>
-      </div>
       </div>
     </aside>
 
@@ -90,38 +94,38 @@
       <p id="status" class="status" role="status">Loading content…</p>
 
       <form id="metadata" class="metadata" autocomplete="off">
-        <div class="metadata-card-heading"><div><span class="eyebrow">Metadata</span><strong id="metadata-title">Current source</strong></div><span id="publish-badge" class="state-badge draft">Draft</span><span id="type-badge" class="type-badge">Document</span></div>
-        <div class="metadata-grid">
-          <label class="wide">Title<input data-field="title" required></label>
-          <label class="publish-field"><input data-field="publish" type="checkbox"> Publish</label>
-          <label data-field-wrap="type">Type
+        <div class="metadata-card-heading"><div><span class="eyebrow">Metadata</span><strong id="metadata-title">Current source</strong></div><span id="publish-badge" class="state-badge draft">Draft</span><span id="type-badge" class="type-badge">Document</span><button id="metadata-toggle" type="button" class="icon-button metadata-toggle" aria-expanded="true" aria-controls="metadata-fields" aria-label="Hide metadata" title="Hide metadata"><svg><use id="metadata-toggle-icon" href="#icon-chevron-up"></use></svg></button></div>
+        <div id="metadata-fields" class="metadata-grid">
+          <label class="wide"><span class="field-label"><svg aria-hidden="true"><use href="#icon-write"></use></svg><span>Title</span></span><input data-field="title" required></label>
+          <label class="publish-field"><input data-field="publish" type="checkbox"><span class="field-label"><svg aria-hidden="true"><use href="#icon-status"></use></svg><span>Publish</span></span></label>
+          <label data-field-wrap="type"><span class="field-label"><svg aria-hidden="true"><use href="#icon-file"></use></svg><span>Type</span></span>
             <select data-field="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select>
           </label>
-          <label data-field-wrap="date">Publish date<input data-field="date" placeholder="YYYY-MM-DD or RFC3339"></label>
-          <label>Description<input data-field="description"></label>
-          <label>Author<input data-field="author"></label>
-          <label>Updated<input data-field="updated" placeholder="YYYY-MM-DD or RFC3339"></label>
+          <label data-field-wrap="date"><span class="field-label"><svg aria-hidden="true"><use href="#icon-calendar"></use></svg><span>Publish date</span></span><input data-field="date" type="date"></label>
+          <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-description"></use></svg><span>Description</span></span><input data-field="description"></label>
+          <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-author"></use></svg><span>Author</span></span><input data-field="author"></label>
+          <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-refresh"></use></svg><span>Updated</span></span><input data-field="updated" type="date"></label>
           <details class="metadata-advanced">
             <summary>More metadata</summary>
             <div class="metadata-advanced-grid">
-              <label>Reviewed<input data-field="reviewed" placeholder="YYYY-MM-DD or RFC3339"></label>
-              <label>Tags<input data-field="tags" placeholder="Comma-separated"></label>
-              <label>Aliases<input data-field="aliases" placeholder="Comma-separated"></label>
-              <label>Slug<input data-field="slug"></label>
-              <label>Order<input data-field="order" type="number"></label>
-              <label>Status<select data-field="status"><option value="">Not set</option><option value="stable">Stable</option><option value="experimental">Experimental</option><option value="deprecated">Deprecated</option></select></label>
-              <label>Audience<input data-field="audience"></label>
-              <label>Product version<input data-field="productVersion"></label>
-              <label>Series<input data-field="series"></label>
-              <label>Cover<input data-field="cover" placeholder="Choose from media library or enter path"></label>
-              <label>Banner<input data-field="banner" placeholder="Choose from media library or enter path"></label>
-              <label>Banner alt text<input data-field="bannerAlt"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-calendar"></use></svg><span>Reviewed</span></span><input data-field="reviewed" type="date"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-tags"></use></svg><span>Tags</span></span><input data-field="tags" placeholder="Comma-separated"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-link"></use></svg><span>Aliases</span></span><input data-field="aliases" placeholder="Comma-separated"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-link"></use></svg><span>Slug</span></span><input data-field="slug"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-ordered-list"></use></svg><span>Order</span></span><input data-field="order" type="number"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-status"></use></svg><span>Status</span></span><select data-field="status"><option value="">Not set</option><option value="stable">Stable</option><option value="experimental">Experimental</option><option value="deprecated">Deprecated</option></select></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-author"></use></svg><span>Audience</span></span><input data-field="audience"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-tags"></use></svg><span>Product version</span></span><input data-field="productVersion"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-layers"></use></svg><span>Series</span></span><input data-field="series"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-image"></use></svg><span>Cover</span></span><input data-field="cover" placeholder="Choose from media library or enter path"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-image"></use></svg><span>Banner</span></span><input data-field="banner" placeholder="Choose from media library or enter path"></label>
+              <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-description"></use></svg><span>Banner alt text</span></span><input data-field="bannerAlt"></label>
             </div>
           </details>
         </div>
       </form>
 
-      <div class="editor-tabs" role="tablist" aria-label="Editor mode"><button id="write-mode" type="button" role="tab" aria-selected="true">Write</button><button id="source-mode" type="button" role="tab" aria-selected="false">Source</button><span class="format-hint">Markdown · UTF-8 · source formatting preserved</span></div>
+      <div class="editor-tabs" role="tablist" aria-label="Editor mode"><button id="write-mode" type="button" role="tab" aria-selected="true" aria-controls="editor-mode-panel" tabindex="0"><svg aria-hidden="true"><use href="#icon-write"></use></svg><span>Live preview</span></button><button id="source-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1"><svg aria-hidden="true"><use href="#icon-source"></use></svg><span>Source</span></button><button id="read-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1"><svg aria-hidden="true"><use href="#icon-eye"></use></svg><span>Read</span></button><button id="diff-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1"><svg aria-hidden="true"><use href="#icon-diff"></use></svg><span>Diff</span></button><span class="format-hint">Markdown · UTF-8 · source formatting preserved</span></div>
       <div class="toolbar" role="toolbar" aria-label="Markdown toolbar">
         <div class="toolbar-group">
           <button class="toolbar-button text-icon" type="button" data-command="bold" aria-label="Bold" title="Bold">B</button>
@@ -143,26 +147,22 @@
         </div>
         <span class="toolbar-separator" role="separator"></span>
         <div class="toolbar-group">
-          <button class="toolbar-button" id="toolbar-preview" type="button" aria-label="Preview" title="Preview"><svg><use href="#icon-eye"></use></svg></button>
-          <button class="toolbar-button" id="toolbar-split" type="button" aria-label="Focus preview" title="Focus preview"><svg><use href="#icon-columns"></use></svg></button>
           <button class="toolbar-button" id="toolbar-fullscreen" type="button" aria-label="Toggle fullscreen" title="Toggle fullscreen"><svg><use href="#icon-fullscreen"></use></svg></button>
         </div>
-        <span class="toolbar-separator" role="separator"></span>
-        <button class="toolbar-button" id="toolbar-help" type="button" aria-label="Editor help" title="Markdown shortcuts: Ctrl/Cmd+B, Ctrl/Cmd+I, Ctrl/Cmd+K"><svg><use href="#icon-help"></use></svg></button>
-        <span class="toolbar-hint">Ctrl/Cmd+B · Ctrl/Cmd+I · Ctrl/Cmd+K</span>
+        <span class="toolbar-hint">Ctrl/Cmd+B · Ctrl/Cmd+I · Ctrl/Cmd+K · Ctrl/Cmd+S</span>
       </div>
 
-      <div class="editor-preview-grid">
+      <div id="editor-mode-panel" class="editor-preview-grid" role="tabpanel" aria-labelledby="write-mode" tabindex="0">
         <div class="editor-pane">
-          <div class="pane-title"><span>Markdown</span><span id="indent-setting">Indent: 2 spaces</span></div>
+          <div class="pane-title"><span id="editor-pane-title">Live preview</span><span id="indent-setting">Indent: 2 spaces</span></div>
           <div id="editor" aria-label="Markdown editor"></div>
           <div id="editor-footer" class="editor-footer"><span id="line-count">Lines: 0</span><span id="word-count">Words: 0</span><span id="file-info">No file</span><span>Markdown</span><span id="draft-indicator">Saved</span></div>
         </div>
         <div class="preview-pane">
-          <div class="pane-title preview-controls"><div class="preview-tabs"><button id="preview-tab" type="button" aria-selected="true">Preview</button><button id="diff-tab" type="button" aria-selected="false">Diff</button></div><div class="preview-actions"><button id="preview-refresh" type="button" class="icon-button" aria-label="Refresh preview" title="Refresh preview"><svg><use href="#icon-refresh"></use></svg></button><button id="preview-new-window" type="button">Open new window</button><button id="sync-scroll" type="button" aria-pressed="false">Sync scroll</button><button id="device-desktop" type="button" class="device-button active" aria-label="Desktop preview" title="Desktop preview"><svg><use href="#icon-device"></use></svg></button><button id="device-tablet" type="button" class="device-button" aria-label="Tablet preview" title="Tablet preview"><svg><use href="#icon-tablet"></use></svg></button><button id="device-mobile" type="button" class="device-button" aria-label="Mobile preview" title="Mobile preview"><svg><use href="#icon-mobile"></use></svg></button></div></div>
-          <iframe id="preview-frame" title="Draft preview" hidden></iframe>
+          <div class="pane-title preview-controls"><div class="preview-title"><svg aria-hidden="true"><use id="preview-title-icon" href="#icon-eye"></use></svg><span id="preview-title">Preview</span></div><div class="preview-actions"><button id="preview-refresh" type="button" class="icon-button" aria-label="Refresh preview" title="Refresh preview"><svg><use href="#icon-refresh"></use></svg></button><button id="diff-wrap" type="button" class="button-with-icon" aria-pressed="false" aria-label="Wrap long lines" title="Wrap long lines" hidden><svg aria-hidden="true"><use href="#icon-wrap"></use></svg><span>Wrap lines</span></button></div></div>
+          <iframe id="preview-frame" title="Rendered content preview" hidden></iframe>
           <div id="diff-editor" class="diff-editor" hidden></div>
-          <div id="preview-empty" class="preview-empty">Select Preview draft to see the rendered article content.</div>
+          <div id="preview-empty" class="preview-empty">Select Read to render a complete preview.</div>
         </div>
       </div>
       <div id="diagnostics" class="diagnostics" hidden></div>
@@ -177,7 +177,7 @@
       <div id="markdown-file-fields">
         <label>Title<input id="file-title" name="title"></label>
         <label>Type<select id="file-type" name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
-        <label>Publish date<input id="file-date" name="date" placeholder="YYYY-MM-DD"></label>
+        <label>Publish date<input id="file-date" name="date" type="date"></label>
         <label>Source kind<select id="file-kind" name="kind"><option value="article">Article</option><option value="section">Section index</option></select></label>
       </div>
       <div class="dialog-actions"><button value="cancel">Cancel</button><button id="file-submit" value="default" class="primary">Create</button></div>
@@ -190,7 +190,7 @@
       <label>Path<input name="path" placeholder="For example: news/new.md" required></label>
       <label>Title<input name="title" required></label>
       <label>Type<select name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
-      <label id="new-date-wrap">Publish date<input name="date" placeholder="YYYY-MM-DD"></label>
+      <label id="new-date-wrap">Publish date<input name="date" type="date"></label>
       <div class="dialog-actions"><button value="cancel">Cancel</button><button id="new-submit" value="default" class="primary">Create draft</button></div>
     </form>
   </dialog>
@@ -207,6 +207,6 @@
   </aside>
 
   <dialog id="settings-dialog"><form method="dialog" class="new-form"><h2>Editor settings</h2><label>Theme<select id="preference-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><label>Indent spaces<input id="preference-indent" type="number" min="1" max="8" value="2"></label><label><input id="preference-preview" type="checkbox" checked> Keep preview open</label><div class="dialog-actions"><button value="cancel">Close</button><button id="settings-save" value="default" class="primary">Save preferences</button></div></form></dialog>
-  <script type="module" src="/_obsite/editor.js"></script>
+  <script type="module" src="/_oxpio/editor.js"></script>
 </body>
 </html>

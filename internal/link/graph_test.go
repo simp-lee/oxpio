@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/diag"
-	internalmarkdown "github.com/simp-lee/obsite/internal/markdown"
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/diag"
+	internalmarkdown "github.com/simp-lee/oxpio/internal/markdown"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestEmbedLinksDoNotPropagateToRecommendations(t *testing.T) {

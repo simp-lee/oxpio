@@ -1,4 +1,4 @@
-module github.com/simp-lee/obsite
+module github.com/simp-lee/oxpio
 
 go 1.25.0
 
@@ -20,6 +20,7 @@ require (
 	golang.org/x/crypto v0.50.0
 	golang.org/x/image v0.25.0
 	golang.org/x/net v0.53.0
+	golang.org/x/sys v0.43.0
 	golang.org/x/term v0.42.0
 	golang.org/x/text v0.36.0
 )
@@ -31,5 +32,4 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/spf13/pflag v1.0.10 // indirect
 	github.com/stretchr/testify v1.11.1 // indirect
-	golang.org/x/sys v0.43.0 // indirect
 )

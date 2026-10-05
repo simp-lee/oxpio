@@ -1,51 +1,58 @@
-# Obsite
+# OXPIO
+
+<p align="center"><img src="internal/branding/logo.svg" alt="OXPIO" width="393"></p>
 
 ```bash
-cd vault && obsite init && obsite build && obsite serve --watch
+cd vault && oxpio init && oxpio build && oxpio serve --watch
 ```
 
-Obsite is a self-contained Go CLI that publishes one Obsidian vault as a deterministic static site. The vault is the only content source and `<vault>/obsite.yaml` is the only site configuration. The generated site is written transactionally to `<vault>/public` by default.
+OXPIO is a self-contained Go CLI that publishes one Obsidian vault as a deterministic static site. The vault is the only content source and `<vault>/oxpio.yaml` is the only site configuration. The generated site is written transactionally to `<vault>/public` by default.
 
 ## Online editing
 
-Obsite is also a focused online writing workspace. Run `obsite edit`, open a Markdown source, edit frontmatter and content visually, preview the content-only server-rendered draft, or switch to source mode when you need full control.
+OXPIO is also a focused online writing workspace. Run `oxpio edit`, open a Markdown source, edit frontmatter and content visually, preview the content-only server-rendered draft, or switch to source mode when you need full control.
 
 ```bash
-obsite edit --vault ./vault --port 8080
+oxpio edit --vault ./vault --port 8080
 ```
 
-The editor keeps the vault as the source of truth and publishes only after validation and a successful build. It includes a local CodeMirror Markdown editor, metadata form, toolbar, file manager, content-only draft preview, optional full-page preview, media library, responsive layout, Write/Source and Preview/Diff views, and safe save/rollback behavior. The default preview isolates the rendered article content from navigation, Sidebar, Footer, theme CSS, custom CSS, and related articles; **Full page preview** opens the complete generated page in a new window for final visual checks. The English showcase article below intentionally exercises inline and block math, a Go code block, a Markdown table, a callout, and a local image.
+The editor keeps the vault as the source of truth and publishes only after validation and a successful build. It includes a local CodeMirror Markdown editor, metadata form, toolbar, file manager, content-only draft preview, media library, responsive layout, Live preview/Source/Read/Diff views, and safe save/rollback behavior. Live preview stays in one editor surface: the line under the pointer or cursor exposes Markdown while surrounding lines keep their rendered treatment. Use Read for a complete server-rendered view. The English showcase article below intentionally exercises inline and block math, a Go code block, a Markdown table, a callout, and a local image.
 
 <div align="center">
-  <a href="docs/images/editor-preview.png"><img src="docs/images/editor-preview.png" alt="Obsite editor with a content-only server-rendered draft preview" width="49%"></a>
-  <a href="docs/images/editor-source.png"><img src="docs/images/editor-source.png" alt="Obsite editor source mode with frontmatter and content-only Markdown preview" width="49%"></a>
+  <a href="docs/images/editor-live.png"><img src="docs/images/editor-live.png" alt="OXPIO editor single-surface Live preview with the active Markdown line exposed" width="49%"></a>
+  <a href="docs/images/editor-preview.png"><img src="docs/images/editor-preview.png" alt="OXPIO editor full-width reading mode with rendered Markdown, formula, code block, and table" width="49%"></a>
 </div>
 
-<p align="center"><em>The first frame shows a short content-only draft preview; the next frame shows the longer showcase article in source mode.</em></p>
+<div align="center">
+  <a href="docs/images/editor-source.png"><img src="docs/images/editor-source.png" alt="OXPIO editor full-width source mode with frontmatter and Markdown content" width="49%"></a>
+  <a href="docs/images/editor-diff.png"><img src="docs/images/editor-diff.png" alt="OXPIO editor full-width Diff mode with source comparison and visible deletions" width="49%"></a>
+</div>
+
+<p align="center"><em>The captures show single-surface Live preview, the complete Read view, full Markdown source, and source Diff for an unsaved candidate.</em></p>
 
 ## Commands
 
 ```text
-obsite init [--vault PATH]
-obsite build [--vault PATH] [--output PATH] [--strict]
-obsite validate [--vault PATH] [--output PATH]
-obsite serve [--vault PATH] [--output PATH] [--port NUM] [--watch]
-obsite edit [--vault PATH] [--output PATH] [--port NUM] [--setup]
-obsite version
-obsite --version
+oxpio init [--vault PATH]
+oxpio build [--vault PATH] [--output PATH] [--strict]
+oxpio validate [--vault PATH] [--output PATH]
+oxpio serve [--vault PATH] [--output PATH] [--port NUM] [--watch]
+oxpio edit [--vault PATH] [--output PATH] [--port NUM] [--setup]
+oxpio version
+oxpio --version
 ```
 
-`init` accepts only a nonexistent or completely empty directory. It creates a strict `obsite.yaml` and a root `_index.md`, and never overwrites existing files. `validate` is read-only and returns a failure for either errors or warnings. It resolves `--output` exactly like `build` (default `<vault>/public`); pass the same value when validating a custom-output build. Only that resolved path is excluded as the formal output boundary. Obsite does not infer additional output boundaries from directory names or existing `.obsite-output` markers; the normal fixed vault-input exclusions still apply. Normal builds show warnings and continue; `build --strict` fails before publication for either severity. `serve --watch` uses the same strict build and reloads only after a successful rebuild. `serve` never registers editor or login routes.
+`init` accepts only a nonexistent or completely empty directory. It creates a strict `oxpio.yaml` and a root `_index.md`, and never overwrites existing files. `validate` is read-only and returns a failure for either errors or warnings. It resolves `--output` exactly like `build` (default `<vault>/public`); pass the same value when validating a custom-output build. Only that resolved path is excluded as the formal output boundary. OXPIO does not infer additional output boundaries from directory names or existing `.oxpio-output` markers; the normal fixed vault-input exclusions still apply. Normal builds show warnings and continue; `build --strict` fails before publication for either severity. `serve --watch` uses the same strict build and reloads only after a successful rebuild. `serve` never registers editor or login routes.
 
 ### Optional edit mode
 
 Enable the single-account editor explicitly with:
 
 ```bash
-obsite edit --vault ./vault --port 8080
+oxpio edit --vault ./vault --port 8080
 ```
 
-The command builds before listening and serves the generated site anonymously. Configure an account interactively once with `obsite edit --setup --vault ./vault`; setup requires a terminal, refuses an existing or invalid account, writes only an Argon2id PHC hash atomically, and never prints the password. The strict `edit` section contains only `username` and `passwordHash`:
+The command builds before listening and serves the generated site anonymously. Configure an account interactively once with `oxpio edit --setup --vault ./vault`; setup requires a terminal, refuses an existing or invalid account, writes only an Argon2id PHC hash atomically, and never prints the password. The strict `edit` section contains only `username` and `passwordHash`:
 
 ```yaml
 edit:
@@ -53,7 +60,7 @@ edit:
   passwordHash: $argon2id$v=19$m=65536,t=3,p=1$...
 ```
 
-After login, mapped article and section pages show an in-memory edit link. The embedded editor uses a locally bundled CodeMirror 6 Markdown editor with Markdown shortcuts, a toolbar, a frontmatter form that hides YAML by default, and a source mode for advanced edits. It supports server-rendered draft previews, an authenticated single-file Markdown/image upload to the Vault root or a selected existing folder, and local assets without CDN requests. Uploads never overwrite files or create parent folders implicitly. Preview/Diff uses the bundled CodeMirror Merge extension while rich preview continues through Obsite's Go renderer; uncommitted candidates use same-origin IndexedDB and browser preferences use local browser storage only, never triggering a build. Draft recovery offers restore or discard when the server version changes; discard and successful save clean the path's drafts, and storage-quota failures remain visible. It preserves submitted source bytes, validates and rebuilds before an atomic source/output transaction, and reports warnings or build failures. New articles are drafts by default (`title`, `publish: false`, `type: doc`); posts require an explicit date. The File Manager supports creating folders and Markdown files, renaming managed article sources, and confirmed deletion with section/resource protection, path validation, and SHA-256 CAS checks. Failures do not reload the public site. `serve`, including `serve --watch`, remains read-only.
+After login, mapped article and section pages show an in-memory edit link. The embedded editor uses a locally bundled CodeMirror 6 Markdown editor with Markdown shortcuts, a toolbar, a frontmatter form that hides YAML by default, and a source mode for advanced edits. It supports server-rendered draft previews, an authenticated single-file Markdown/image upload to the Vault root or a selected existing folder, and local assets without CDN requests. Uploads never overwrite files or create parent folders implicitly. Preview/Diff uses the bundled CodeMirror Merge extension while rich preview continues through OXPIO's Go renderer; uncommitted candidates use same-origin IndexedDB and browser preferences use local browser storage only, never triggering a build. Draft recovery offers restore or discard when the server version changes; discard and successful save clean the path's drafts, and storage-quota failures remain visible. It preserves submitted source bytes, validates and rebuilds before an atomic source/output transaction, and reports warnings or build failures. New articles are drafts by default (`title`, `publish: false`, `type: doc`); posts require an explicit date. The File Manager supports creating folders and Markdown files, renaming managed article sources, and confirmed deletion with section/resource protection, path validation, and SHA-256 CAS checks. Failures do not reload the public site. `serve`, including `serve --watch`, remains read-only.
 
 ## Vault and section model
 
@@ -95,7 +102,7 @@ YAML keys, values, nulls, and nested structures are strict. Unknown keys, duplic
 
 ```yaml
 baseURL: https://example.com/docs/
-title: My Obsite Site
+title: My OXPIO Site
 author: Site Team
 description: Project documentation.
 language: en
@@ -143,13 +150,13 @@ Explicit `versions` create independent section trees, sidebars, routes, canonica
 1. An absolute HTTP(S) URL with a host is an explicit hosted image URL.
 2. A normalized vault-relative path is a local planned asset.
 
-Empty means no default image. Local paths must be contained regular files and cannot contain query/fragment syntax, backslashes, traversal, or symlinks. Obsite never downloads an image.
+Empty means no default image. Local paths must be contained regular files and cannot contain query/fragment syntax, backslashes, traversal, or symlinks. OXPIO never downloads an image.
 
 ## Rendering and metadata
 
 The fixed HTML shell is server-rendered and usable without JavaScript. It includes global navigation, section/version context, breadcrumbs, Sidebar data, source links, semantic landmarks, canonical URLs, descriptions, Open Graph/Twitter metadata, JSON-LD, RSS, Sitemap, robots, 404, and a shared offline runtime. Markdown supports the built-in wikilink, embed, callout, hashtag, heading/TOC, highlighting, raw-HTML, math, Mermaid, and attachment behavior; unresolved links and unsupported syntax become deterministic diagnostics without hiding authored content.
 
-YouTube/Vimeo URLs in Markdown image syntax remain image destinations; Obsite does not convert them into remote players. Use ordinary Markdown links for online videos. Authored external images and raw HTML can still initiate browser requests; fully offline content must use local resources.
+YouTube/Vimeo URLs in Markdown image syntax remain image destinations; OXPIO does not convert them into remote players. Use ordinary Markdown links for online videos. Authored external images and raw HTML can still initiate browser requests; fully offline content must use local resources.
 
 The optional article metadata fields are `date`, `updated`, `tags`, `aliases`, `slug`, `order`, `author`, `reviewed`, `status`, `audience`, `productVersion`, `series`, `cover`, `banner`, and `bannerAlt`. Dates are normalized to UTC. A banner requires a non-empty matching `bannerAlt`, is published once through the asset planner, and appears only in its owning section or article header. Banners use a responsive `16:5` display ratio with `object-fit: cover` and a 280px maximum height. Covers are local PNG, JPEG, or WebP files and are used only as social-card source images.
 
@@ -177,9 +184,9 @@ productVersion?, series?, coverHash?, generator
 
 ## Assets, themes, and offline runtime
 
-All source assets pass through one contained asset planner. The planner owns Markdown images/embeds, raw HTML resources, recursive local CSS dependencies, banners, covers, local `defaultImg`, theme assets, and output collision checks. The generated output contains one shared content-addressed runtime, offline KaTeX/Mermaid resources, one optional Sidebar JSON, structural CSS, optional `.obsite/theme/theme.css`, and optional vault-root `custom.css`. Themes can change variables and append-only slots but cannot replace the HTML shell or renderer. No runtime resource is downloaded and no public Go SDK is provided.
+All source assets pass through one contained asset planner. The planner owns Markdown images/embeds, raw HTML resources, recursive local CSS dependencies, banners, covers, local `defaultImg`, theme assets, and output collision checks. The generated output contains one shared content-addressed runtime, offline KaTeX/Mermaid resources, one optional Sidebar JSON, structural CSS, optional `.oxpio/theme/theme.css`, and optional vault-root `custom.css`. Themes can change variables and append-only slots but cannot replace the HTML shell or renderer. No runtime resource is downloaded and no public Go SDK is provided.
 
-Theme resources are planned during validation and published with content-addressed URLs. In slots, use `{{themeAssetURL .SiteRootRel "logo.svg"}}` for `.obsite/theme/assets/logo.svg`. Relative CSS URLs and imports are rewritten to planned resources: `theme.css` resolves them from `assets/`, and nested stylesheets from their own directory. Missing references and cyclic stylesheet dependencies are validation errors.
+Theme resources are planned during validation and published with content-addressed URLs. In slots, use `{{themeAssetURL .SiteRootRel "logo.svg"}}` for `.oxpio/theme/assets/logo.svg`. Relative CSS URLs and imports are rewritten to planned resources: `theme.css` resolves them from `assets/`, and nested stylesheets from their own directory. Missing references and cyclic stylesheet dependencies are validation errors.
 
 ## Related recommendations
 
@@ -192,7 +199,7 @@ The normative [related recommendation acceptance contract](docs/related-recommen
 Release archives contain one `CGO_ENABLED=0` executable, the project license, and third-party notices. Verify the published SHA-256 checksums. Source installation requires Go 1.25 or newer:
 
 ```bash
-go install github.com/simp-lee/obsite/cmd/obsite@vX.Y.Z
+go install github.com/simp-lee/oxpio/cmd/oxpio@vX.Y.Z
 ```
 
 Development checks use pinned Go, Node.js, Playwright, GoReleaser, actionlint, golangci-lint, gofumpt, and goimports versions:
@@ -207,4 +214,4 @@ npx --no-install playwright install chromium
 npm run test:e2e
 ```
 
-Obsite does not provide site search, migration of old vault formats, complete template replacement, online search, a database, or external runtime downloads.
+OXPIO does not provide site search, migration of old vault formats, complete template replacement, online search, a database, or external runtime downloads.

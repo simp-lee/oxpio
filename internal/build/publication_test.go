@@ -76,7 +76,7 @@ func TestPublisherKeepsPublishedOutputWhenBackupCleanupPartiallyFails(t *testing
 func TestStrictBuildReportsPostCommitCleanupWithoutReturningFailure(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "site")
-	writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nOld body\n")
 	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
 		t.Fatal(err)
@@ -212,7 +212,7 @@ func TestPublisherPreservesAllOutputAndCleansStagingOnPublicationFailures(t *tes
 			if err := writeManagedOutputMarker(output); err != nil {
 				t.Fatal(err)
 			}
-			for _, name := range []string{"index.html", ".obsite-cache/manifest.json", "assets/social/old/card.png"} {
+			for _, name := range []string{"index.html", ".oxpio-cache/manifest.json", "assets/social/old/card.png"} {
 				if err := writeOutputFile(output, name, []byte("previous "+name)); err != nil {
 					t.Fatal(err)
 				}

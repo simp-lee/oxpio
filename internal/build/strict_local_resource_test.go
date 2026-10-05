@@ -13,7 +13,7 @@ import (
 func TestStrictBuildPlansRawHTMLAndCustomCSSLocalResources(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "site")
-	writeStrictFile(t, vault, "obsite.yaml", "title: Resources\nbaseURL: https://example.test/docs/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Resources\nbaseURL: https://example.test/docs/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeStrictFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\nGuide\n")
 	writeStrictFile(t, vault, "guide/article.md", `---
@@ -113,7 +113,7 @@ body { background: url("images/custom-bg.bin?v=2#main"); }
 func TestStrictBuildPreservesRawTextAndUnquotedResourceAttributes(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "site")
-	writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", `---
 title: Home
 publish: true
@@ -159,7 +159,7 @@ func TestStrictBuildPlansNoScriptFallbackResources(t *testing.T) {
 		t.Run(prefix, func(t *testing.T) {
 			vault := t.TempDir()
 			output := filepath.Join(t.TempDir(), "site")
-			writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+			writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 			writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n"+prefix+`<noscript><img src="pic.png"></noscript>`+"\n")
 			writeStrictFile(t, vault, "pic.png", "fallback picture")
 			result, err := BuildWithOptions(vault, output, Options{Strict: true})
@@ -177,7 +177,13 @@ func TestStrictBuildPlansNoScriptFallbackResources(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			images := strictHTMLNodes(document, func(n *xhtml.Node) bool { return n.Type == xhtml.ElementNode && n.Data == "img" })
+			images := strictHTMLNodes(document, func(n *xhtml.Node) bool {
+				if n.Type != xhtml.ElementNode || n.Data != "img" {
+					return false
+				}
+			class, _ := strictHTMLAttribute(n, "class")
+				return !strings.Contains(class, "site-logo")
+			})
 			if len(images) != 1 {
 				t.Fatalf("no-JavaScript image count = %d", len(images))
 			}
@@ -219,7 +225,7 @@ func TestLocalResourcePlanningFailuresPreservePublishedOutput(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			vault := t.TempDir()
 			output := filepath.Join(t.TempDir(), "site")
-			writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+			writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 			writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nPublished body\n")
 			if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
 				t.Fatal(err)

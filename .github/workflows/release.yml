@@ -106,14 +106,14 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          binary=$(find dist -type f -name obsite | head -n 1)
+          binary=$(find dist -type f -name oxpio | head -n 1)
           test -n "$binary"
           scripts/smoke-release.sh "$binary"
       - name: Smoke init, build, and serve
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $binary = (Get-ChildItem -Path dist -Recurse -Filter obsite.exe | Select-Object -First 1).FullName
+          $binary = (Get-ChildItem -Path dist -Recurse -Filter oxpio.exe | Select-Object -First 1).FullName
           if (-not $binary) { throw 'native release binary not found' }
           ./scripts/smoke-release.ps1 -Binary $binary
 

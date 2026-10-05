@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/http"
 
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/model"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 type sourceMetaResponse struct {

@@ -13,7 +13,7 @@ import (
 func TestGenerateHasFixedCanonicalInputAndPNGSnapshot(t *testing.T) {
 	order := 7
 	result, err := Generate(Input{
-		CanonicalURL: "https://example.test/docs/start/", SiteTitle: "Obsite", Title: "Deterministic title", Context: "Docs / v1",
+		CanonicalURL: "https://example.test/docs/start/", SiteTitle: "OXPIO", Title: "Deterministic title", Context: "Docs / v1",
 		Description: "A description", Date: "2026-04-06T00:00:00Z", Updated: "2026-04-07T00:00:00Z",
 		Tags: []string{"guide", "go"}, Aliases: []string{"start"}, Slug: "start", Type: "doc", Order: &order,
 		Author: "Alice", Reviewed: "2026-04-08T00:00:00Z", Status: "stable", Audience: "developers",
@@ -22,8 +22,8 @@ func TestGenerateHasFixedCanonicalInputAndPNGSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const wantJSON = `{"canonicalURL":"https://example.test/docs/start/","siteTitle":"Obsite","title":"Deterministic title","context":"Docs / v1","description":"A description","date":"2026-04-06T00:00:00Z","updated":"2026-04-07T00:00:00Z","tags":["guide","go"],"aliases":["start"],"slug":"start","type":"doc","order":7,"author":"Alice","reviewed":"2026-04-08T00:00:00Z","status":"stable","audience":"developers","productVersion":"v1","series":"getting-started","generator":"obsite-social-card-v2"}`
-	const wantPNGHash = "a1c67b2af0fff7428d056a28b04dee38e9ad3dc347d40de57b7e8bed65da4a90"
+	const wantJSON = `{"canonicalURL":"https://example.test/docs/start/","siteTitle":"OXPIO","title":"Deterministic title","context":"Docs / v1","description":"A description","date":"2026-04-06T00:00:00Z","updated":"2026-04-07T00:00:00Z","tags":["guide","go"],"aliases":["start"],"slug":"start","type":"doc","order":7,"author":"Alice","reviewed":"2026-04-08T00:00:00Z","status":"stable","audience":"developers","productVersion":"v1","series":"getting-started","generator":"oxpio-social-card-v2"}`
+	const wantPNGHash = "7d192fe729bcd4a558ab89208997c0b240ec2dd05a2163897d8b8519cbf1e12d"
 	if string(result.CanonicalJSON) != wantJSON {
 		t.Fatalf("canonical JSON = %s, want %s", result.CanonicalJSON, wantJSON)
 	}
@@ -31,7 +31,7 @@ func TestGenerateHasFixedCanonicalInputAndPNGSnapshot(t *testing.T) {
 	if got := hex.EncodeToString(hash[:]); got != wantPNGHash {
 		t.Fatalf("PNG hash = %s, want %s", got, wantPNGHash)
 	}
-	if want := "assets/social/2647f899c632ffe86c58d0dc5bea3d840e2aaec648cbcac1706defb3f772b7ea/2c11b81a6529d3c612985da4dcb33063af2b7d101ee165b58de61b7afb91b17b-" + wantPNGHash + ".png"; result.Path != want {
+	if want := "assets/social/2647f899c632ffe86c58d0dc5bea3d840e2aaec648cbcac1706defb3f772b7ea/c1c19b1f3bca09f1e42fd386dc4d27d06d5a5f62e90a6bd7d66cbec2f9bc76ef-" + wantPNGHash + ".png"; result.Path != want {
 		t.Fatalf("path = %s, want %s", result.Path, want)
 	}
 }
@@ -41,7 +41,7 @@ func TestGenerateEnforcesFixedColorsAndNoCoverGeometry(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	const wantJSON = `{"canonicalURL":"https://example.test/no-cover/","siteTitle":"Site","title":"Title","context":"","generator":"obsite-social-card-v2"}`
+	const wantJSON = `{"canonicalURL":"https://example.test/no-cover/","siteTitle":"Site","title":"Title","context":"","generator":"oxpio-social-card-v2"}`
 	if string(result.CanonicalJSON) != wantJSON {
 		t.Fatalf("canonical JSON = %s, want %s", result.CanonicalJSON, wantJSON)
 	}
@@ -129,11 +129,11 @@ func TestGenerateIsDeterministicAndContentAddressed(t *testing.T) {
 }
 
 func TestGenerateSupportsEmbeddedCJKFallbackText(t *testing.T) {
-	first, err := Generate(Input{CanonicalURL: "https://example.test/cjk/", SiteTitle: "Obsite", Title: "中文文档"})
+	first, err := Generate(Input{CanonicalURL: "https://example.test/cjk/", SiteTitle: "OXPIO", Title: "中文文档"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := Generate(Input{CanonicalURL: "https://example.test/cjk/", SiteTitle: "Obsite", Title: "汉字指南"})
+	second, err := Generate(Input{CanonicalURL: "https://example.test/cjk/", SiteTitle: "OXPIO", Title: "汉字指南"})
 	if err != nil {
 		t.Fatal(err)
 	}

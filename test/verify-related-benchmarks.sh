@@ -74,7 +74,7 @@ PY
   rss)
     for count in 500 1000 5000; do
       run_and_capture "$tmp/rss-${count}.txt" env \
-        OBSITE_RELATED_END_TO_END_RSS_HELPER="mixed:${count}" GOMAXPROCS=4 \
+        OXPIO_RELATED_END_TO_END_RSS_HELPER="mixed:${count}" GOMAXPROCS=4 \
         go test ./internal/build -run '^TestRSSHelperIsolation$' -count=1 -v -timeout=15m
     done
     python3 - "$tmp/rss-500.txt" "$tmp/rss-1000.txt" "$tmp/rss-5000.txt" <<'PY'

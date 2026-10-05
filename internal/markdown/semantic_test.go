@@ -3,7 +3,7 @@ package markdown
 import (
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/diag"
+	"github.com/simp-lee/oxpio/internal/diag"
 	"github.com/yuin/goldmark/text"
 )
 

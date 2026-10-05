@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/recommend"
+	"github.com/simp-lee/oxpio/internal/recommend"
 )
 
 func TestPerformanceFixtureManifest(t *testing.T) {

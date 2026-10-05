@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/simp-lee/obsite/internal/cli"
+	"github.com/simp-lee/oxpio/internal/cli"
 )
 
 func main() {

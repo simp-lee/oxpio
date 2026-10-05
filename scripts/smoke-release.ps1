@@ -5,27 +5,27 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $Binary = (Resolve-Path -LiteralPath $Binary).Path
-$Root = Join-Path ([System.IO.Path]::GetTempPath()) ("obsite-release-smoke-" + [guid]::NewGuid().ToString('N'))
+$Root = Join-Path ([System.IO.Path]::GetTempPath()) ("oxpio-release-smoke-" + [guid]::NewGuid().ToString('N'))
 $Vault = Join-Path $Root 'vault'
 $Server = $null
 New-Item -ItemType Directory -Path $Vault | Out-Null
 
 try {
     $Version = (& $Binary version | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "obsite version exited $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "oxpio version exited $LASTEXITCODE" }
     $VersionFlag = (& $Binary --version | Out-String).Trim()
-    if ($LASTEXITCODE -ne 0) { throw "obsite --version exited $LASTEXITCODE" }
+    if ($LASTEXITCODE -ne 0) { throw "oxpio --version exited $LASTEXITCODE" }
     if ($Version -ne $VersionFlag) { throw 'version forms differ' }
-    if ($Version -notmatch '^obsite version=[^ ]+ commit=(?!unknown)[^ ]+ date=(?!unknown)[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z type=(snapshot|release)$') {
+    if ($Version -notmatch '^oxpio version=[^ ]+ commit=(?!unknown)[^ ]+ date=(?!unknown)[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z type=(snapshot|release)$') {
         throw "invalid release-shaped version: $Version"
     }
 
     Push-Location $Vault
     try {
         & $Binary init
-        if ($LASTEXITCODE -ne 0) { throw "obsite init exited $LASTEXITCODE" }
+        if ($LASTEXITCODE -ne 0) { throw "oxpio init exited $LASTEXITCODE" }
         & $Binary build
-        if ($LASTEXITCODE -ne 0) { throw "obsite build exited $LASTEXITCODE" }
+        if ($LASTEXITCODE -ne 0) { throw "oxpio build exited $LASTEXITCODE" }
     }
     finally {
         Pop-Location

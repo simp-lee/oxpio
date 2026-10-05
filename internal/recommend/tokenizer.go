@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/simp-lee/obsite/internal/recommend/chinese"
+	"github.com/simp-lee/oxpio/internal/recommend/chinese"
 	"golang.org/x/text/unicode/norm"
 )
 
@@ -94,7 +94,7 @@ func scanNonHanToken(runes []rune, start int) (string, int) {
 }
 
 func appendFilteredToken(dst *[]string, token string, segmenter *chinese.Segmenter) {
-	if dst == nil || token == "" || isSingleHanToken(token) || isObsiteStopword(token) {
+	if dst == nil || token == "" || isSingleHanToken(token) || isOXPIOStopword(token) {
 		return
 	}
 	if segmenter != nil && segmenter.IsStopword(token) {

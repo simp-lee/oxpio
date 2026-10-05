@@ -14,7 +14,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	internalbuild "github.com/simp-lee/obsite/internal/build"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
 )
 
 func TestServeCommandDefaultsToCurrentVaultPublicOutput(t *testing.T) {
@@ -370,7 +370,7 @@ func TestServeWatchCommandUsesRealBuildFailureTransaction(t *testing.T) {
 	outputRoot := t.TempDir()
 	outputPath := filepath.Join(outputRoot, "site")
 	articlePath := filepath.Join(vaultPath, "article.md")
-	writeValidateFile(t, vaultPath, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vaultPath, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeValidateFile(t, vaultPath, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeArticle := func(status, body string) {
 		t.Helper()
@@ -512,11 +512,11 @@ func TestStartServeWatchLoopTracksOnlyActualOutputTransactionPaths(t *testing.T)
 	configPath := filepath.Join(vaultPath, defaultConfigFilename)
 	outputPath := filepath.Join(vaultPath, "public")
 	userDirs := []string{
-		filepath.Join(vaultPath, ".public-obsite-stage-user-notes"),
-		filepath.Join(vaultPath, ".public-obsite-backup-user-notes"),
-		filepath.Join(vaultPath, ".public-obsite-failed-user-notes"),
+		filepath.Join(vaultPath, ".public-oxpio-stage-user-notes"),
+		filepath.Join(vaultPath, ".public-oxpio-backup-user-notes"),
+		filepath.Join(vaultPath, ".public-oxpio-failed-user-notes"),
 	}
-	transactionDir := filepath.Join(vaultPath, ".public-obsite-stage-actual")
+	transactionDir := filepath.Join(vaultPath, ".public-oxpio-stage-actual")
 	userNotePath := filepath.Join(userDirs[0], "note.md")
 	files := []string{configPath, userNotePath, filepath.Join(transactionDir, "index.html")}
 	for _, userDir := range userDirs[1:] {
@@ -662,7 +662,7 @@ func TestStartServeWatchLoopRefreshesPartialPlanInputsAfterFailedRebuild(t *test
 
 func TestSyncFixedWatchInputsReaddsInvalidatedDirectory(t *testing.T) {
 	vaultPath := t.TempDir()
-	themeDir := filepath.Join(vaultPath, ".obsite", "theme")
+	themeDir := filepath.Join(vaultPath, ".oxpio", "theme")
 	iconsDir := filepath.Join(themeDir, "assets", "icons")
 	if err := os.MkdirAll(iconsDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -860,7 +860,7 @@ func TestStartServeWatchLoopFiltersNonBuildOpsAndHiddenFiles(t *testing.T) {
 	notePath := filepath.Join(vaultPath, "notes", "guide.md")
 	yamlPath := filepath.Join(vaultPath, "notes", "frontmatter.yaml")
 	imagePath := filepath.Join(vaultPath, "attachments", "hero.png")
-	hiddenPath := filepath.Join(vaultPath, ".obsite", "scratch.txt")
+	hiddenPath := filepath.Join(vaultPath, ".oxpio", "scratch.txt")
 	configPath := filepath.Join(vaultPath, defaultConfigFilename)
 	outputPath := filepath.Join(vaultPath, "public")
 	for _, filePath := range []string{notePath, yamlPath, imagePath, hiddenPath, configPath} {

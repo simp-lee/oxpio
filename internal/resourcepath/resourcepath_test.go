@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestIsLocalTargetDistinguishesLocalResourcesFromExternalDestinations(t *testing.T) {

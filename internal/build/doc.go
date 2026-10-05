@@ -1,2 +1,2 @@
-// Package build orchestrates the end-to-end Obsite site build pipeline.
+// Package build orchestrates the end-to-end OXPIO site build pipeline.
 package build

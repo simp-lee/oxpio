@@ -1,7 +1,7 @@
 // Copyright 2013 Sun Junyi
 // Copyright 2016 ego authors
 //
-// Modified by the Obsite authors in 2026 to load this model lazily and keep it
+// Modified by the OXPIO authors in 2026 to load this model lazily and keep it
 // immutable after initialization.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");

@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestStrictCacheManifestSeparatesInputsFromOutputs(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeStrictFile(t, vault, "custom.css", "body { color: red; }\n")
 	output := t.TempDir()
@@ -44,7 +44,7 @@ func TestStrictCacheManifestSeparatesInputsFromOutputs(t *testing.T) {
 
 func TestStrictCacheInvalidatesListingMetadata(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeStrictFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: post\ndate: 2026-01-02\ndescription: Initial summary\n---\nArticle\n")
 	output := t.TempDir()
@@ -77,7 +77,7 @@ func TestStrictCacheInvalidatesListingMetadata(t *testing.T) {
 
 func TestStrictCacheTracksRecursiveCustomCSSDependencies(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeStrictFile(t, vault, "custom.css", `@import "styles/nested.css";`)
 	writeStrictFile(t, vault, "styles/nested.css", `@font-face { src: url("../fonts/site.woff2"); }`)

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
 )
 
 func TestBuildCommandUsesAnalyzerOwnedBuildInput(t *testing.T) {

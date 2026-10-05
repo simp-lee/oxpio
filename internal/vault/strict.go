@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/slug"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/slug"
 	"gopkg.in/yaml.v3"
 )
 

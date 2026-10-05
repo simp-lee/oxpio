@@ -1,2 +1,2 @@
-// Package vault is a placeholder for Obsite vault access.
+// Package vault is a placeholder for OXPIO vault access.
 package vault

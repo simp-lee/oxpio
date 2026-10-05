@@ -15,15 +15,15 @@ import (
 	"testing"
 	"time"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalconfig "github.com/simp-lee/obsite/internal/config"
-	"github.com/simp-lee/obsite/internal/model"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestMutationResultReportsPostCommitOutputCleanupWarning(t *testing.T) {
 	server := &Server{}
 	recorder := httptest.NewRecorder()
-	server.writeMutationResult(recorder, TransactionResult{Build: &internalbuild.BuildResult{OutputCleanupError: errors.New("/private/vault/.obsite-output-backup")}})
+	server.writeMutationResult(recorder, TransactionResult{Build: &internalbuild.BuildResult{OutputCleanupError: errors.New("/private/vault/.oxpio-output-backup")}})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusOK)
 	}
@@ -46,19 +46,19 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/docs/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
-	writeEditFile(t, output, "index.html", `<!doctype html><body data-obsite-base-path="/docs/">public</body></html>`)
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/docs/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, output, "index.html", `<!doctype html><body data-oxpio-base-path="/docs/">public</body></html>`)
 	server, err := New(vault, output, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
 	login := httptest.NewRecorder()
-	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/_obsite/login", nil))
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/_oxpio/login", nil))
 	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `href="/docs/"`) {
 		t.Fatalf("login = %d %s", login.Code, login.Body.String())
 	}
 	server.sessions["test-session"] = session{username: "admin", expires: time.Now().Add(time.Hour)}
-	request := httptest.NewRequest(http.MethodGet, "/_obsite/editor", nil)
+	request := httptest.NewRequest(http.MethodGet, "/_oxpio/editor", nil)
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 	editor := httptest.NewRecorder()
 	server.ServeHTTP(editor, request)
@@ -74,7 +74,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
 	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("<!doctype html><body>public</body></html>"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -104,7 +104,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	httpClient := listener.Client()
 	httpClient.Jar = client
 
-	response, err := httpClient.Get(listener.URL + "/_obsite/login")
+	response, err := httpClient.Get(listener.URL + "/_oxpio/login")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	if response.StatusCode != http.StatusOK || !strings.Contains(string(loginBody), "Welcome back") || !strings.Contains(string(loginBody), "login.css") {
 		t.Fatalf("login page = %d %q", response.StatusCode, loginBody)
 	}
-	response, err = httpClient.Get(listener.URL + "/_obsite/login.css")
+	response, err = httpClient.Get(listener.URL + "/_oxpio/login.css")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,7 +133,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 		t.Fatalf("anonymous public response = %d %q", response.StatusCode, body)
 	}
 
-	response, err = httpClient.Get(listener.URL + "/_obsite/sources")
+	response, err = httpClient.Get(listener.URL + "/_oxpio/sources")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,7 +142,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	response, err = httpClient.Get(listener.URL + "/_obsite/session")
+	response, err = httpClient.Get(listener.URL + "/_oxpio/session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +151,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	loginRequest, err := http.NewRequest(http.MethodPost, listener.URL+"/_obsite/login", strings.NewReader("username=admin&password=secret"))
+	loginRequest, err := http.NewRequest(http.MethodPost, listener.URL+"/_oxpio/login", strings.NewReader("username=admin&password=secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,7 +166,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	loginRequest, err = http.NewRequest(http.MethodPost, listener.URL+"/_obsite/login", strings.NewReader("username=admin&password=secret"))
+	loginRequest, err = http.NewRequest(http.MethodPost, listener.URL+"/_oxpio/login", strings.NewReader("username=admin&password=secret"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	response, err = httpClient.Get(listener.URL + "/_obsite/session")
+	response, err = httpClient.Get(listener.URL + "/_oxpio/session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -205,7 +205,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 		t.Fatalf("authenticated article response = %d %q", response.StatusCode, articleBody)
 	}
 
-	response, err = httpClient.Get(listener.URL + "/_obsite/sources")
+	response, err = httpClient.Get(listener.URL + "/_oxpio/sources")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -215,18 +215,18 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 		t.Fatalf("sources body = %s", sourcesBody)
 	}
 
-	response, err = httpClient.Get(listener.URL + "/_obsite/source?path=article.md")
+	response, err = httpClient.Get(listener.URL + "/_oxpio/source?path=article.md")
 	if err != nil {
 		t.Fatal(err)
 	}
 	sourceBody, _ := io.ReadAll(response.Body)
-	sourceHash := response.Header.Get("X-Obsite-Source-Hash")
+	sourceHash := response.Header.Get("X-OXPIO-Source-Hash")
 	_ = response.Body.Close()
 	if response.StatusCode != http.StatusOK || string(sourceBody) != "---\ntitle: Article\npublish: true\ntype: doc\n---\nBody\n" || sourceHash == "" {
 		t.Fatalf("source response = %d %q", response.StatusCode, sourceBody)
 	}
 
-	response, err = httpClient.Get(listener.URL + "/_obsite/session")
+	response, err = httpClient.Get(listener.URL + "/_oxpio/session")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,13 +239,13 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 		t.Fatalf("session JSON = %s; err=%v", sessionBody, err)
 	}
 
-	request, err := http.NewRequest(http.MethodPut, listener.URL+"/_obsite/source?path=article.md", strings.NewReader("---\ntitle: Article\npublish: true\ntype: doc\n---\nChanged\n"))
+	request, err := http.NewRequest(http.MethodPut, listener.URL+"/_oxpio/source?path=article.md", strings.NewReader("---\ntitle: Article\npublish: true\ntype: doc\n---\nChanged\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	request.Header.Set("Origin", listener.URL)
 	request.Header.Set(csrfHeaderName, sessionData.CSRF)
-	request.Header.Set("X-Obsite-Source-Hash", sourceHash)
+	request.Header.Set("X-OXPIO-Source-Hash", sourceHash)
 	response, err = httpClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -260,13 +260,13 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 		t.Fatalf("saved source = %q, err=%v", got, err)
 	}
 
-	request, err = http.NewRequest(http.MethodPut, listener.URL+"/_obsite/source?path=article.md", strings.NewReader("---\ntitle: Article\npublish: true\ntype: invalid\n---\nRejected\n"))
+	request, err = http.NewRequest(http.MethodPut, listener.URL+"/_oxpio/source?path=article.md", strings.NewReader("---\ntitle: Article\npublish: true\ntype: invalid\n---\nRejected\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	request.Header.Set("Origin", listener.URL)
 	request.Header.Set(csrfHeaderName, sessionData.CSRF)
-	request.Header.Set("X-Obsite-Source-Hash", sourceHashForTest([]byte("---\ntitle: Article\npublish: true\ntype: doc\n---\nChanged\n")))
+	request.Header.Set("X-OXPIO-Source-Hash", sourceHashForTest([]byte("---\ntitle: Article\npublish: true\ntype: doc\n---\nChanged\n")))
 	response, err = httpClient.Do(request)
 	if err != nil {
 		t.Fatal(err)
@@ -277,7 +277,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 		t.Fatalf("diagnostic response = %d %s", response.StatusCode, diagnosticBody)
 	}
 
-	request, err = http.NewRequest(http.MethodPost, listener.URL+"/_obsite/logout", nil)
+	request, err = http.NewRequest(http.MethodPost, listener.URL+"/_oxpio/logout", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +291,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
-	request, err = http.NewRequest(http.MethodPost, listener.URL+"/_obsite/logout", nil)
+	request, err = http.NewRequest(http.MethodPost, listener.URL+"/_oxpio/logout", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

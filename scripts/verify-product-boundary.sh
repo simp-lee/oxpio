@@ -12,7 +12,7 @@ cleanup() {
 trap cleanup EXIT HUP INT TERM
 
 check_search() {
-  matches=$(git grep -in -E 'pagefind|_pagefind|HasSearch|SearchConfig|data-obsite-search-ui|obsite-search-root|install-pagefind|cfg\.Search' -- . \
+  matches=$(git grep -in -E 'pagefind|_pagefind|HasSearch|SearchConfig|data-oxpio-search-ui|oxpio-search-root|install-pagefind|cfg\.Search' -- . \
     ':(exclude)internal/render/vendor/**' \
     ':(exclude)scripts/verify-product-boundary.sh' \
     ':(exclude)scripts/verify-release.sh' || true)
@@ -26,26 +26,26 @@ check_search() {
 
 check_packages() {
   packages=$(go list -f '{{.ImportPath}} {{.Name}}' ./...)
-  public=$(printf '%s\n' "$packages" | awk '$1 !~ /\/internal\// && $1 != "github.com/simp-lee/obsite/cmd/obsite" {print}')
+  public=$(printf '%s\n' "$packages" | awk '$1 !~ /\/internal\// && $1 != "github.com/simp-lee/oxpio/cmd/oxpio" {print}')
   if [ -n "$public" ]; then
     printf 'public product packages remain:\n%s\n' "$public" >&2
     exit 1
   fi
 
   imports=$(go list -f '{{.ImportPath}}|{{join .Imports " "}}' ./...)
-  cmd_product_imports=$(printf '%s\n' "$imports" | awk -F'|' '$1 == "github.com/simp-lee/obsite/cmd/obsite" {print $2}' | tr ' ' '\n' | grep '^github.com/simp-lee/obsite/' || true)
-  if [ "$cmd_product_imports" != "github.com/simp-lee/obsite/internal/cli" ]; then
-    printf 'cmd/obsite product imports must contain only internal/cli, got:\n%s\n' "$cmd_product_imports" >&2
+  cmd_product_imports=$(printf '%s\n' "$imports" | awk -F'|' '$1 == "github.com/simp-lee/oxpio/cmd/oxpio" {print $2}' | tr ' ' '\n' | grep '^github.com/simp-lee/oxpio/' || true)
+  if [ "$cmd_product_imports" != "github.com/simp-lee/oxpio/internal/cli" ]; then
+    printf 'cmd/oxpio product imports must contain only internal/cli, got:\n%s\n' "$cmd_product_imports" >&2
     exit 1
   fi
 
-  invalid_cli=$(printf '%s\n' "$imports" | awk -F'|' '$1 != "github.com/simp-lee/obsite/cmd/obsite" && $2 ~ /github.com\/simp-lee\/obsite\/internal\/cli/ {print $1}')
+  invalid_cli=$(printf '%s\n' "$imports" | awk -F'|' '$1 != "github.com/simp-lee/oxpio/cmd/oxpio" && $2 ~ /github.com\/simp-lee\/oxpio\/internal\/cli/ {print $1}')
   if [ -n "$invalid_cli" ]; then
-    printf 'packages outside cmd/obsite import internal/cli:\n%s\n' "$invalid_cli" >&2
+    printf 'packages outside cmd/oxpio import internal/cli:\n%s\n' "$invalid_cli" >&2
     exit 1
   fi
 
-  invalid_build=$(printf '%s\n' "$imports" | awk -F'|' '$1 != "github.com/simp-lee/obsite/internal/build" && $1 != "github.com/simp-lee/obsite/internal/cli" && $1 != "github.com/simp-lee/obsite/internal/edit" && $2 ~ /github.com\/simp-lee\/obsite\/internal\/build/ {print $1}')
+  invalid_build=$(printf '%s\n' "$imports" | awk -F'|' '$1 != "github.com/simp-lee/oxpio/internal/build" && $1 != "github.com/simp-lee/oxpio/internal/cli" && $1 != "github.com/simp-lee/oxpio/internal/edit" && $2 ~ /github.com\/simp-lee\/oxpio\/internal\/build/ {print $1}')
   if [ -n "$invalid_build" ]; then
     printf 'lower packages import internal/build:\n%s\n' "$invalid_build" >&2
     exit 1
@@ -112,13 +112,13 @@ check_workflows() {
 }
 
 check_artifacts() {
-  tmp=$(mktemp -d "${TMPDIR:-/tmp}/obsite-boundary-XXXXXX")
-  binary=$tmp/obsite
+  tmp=$(mktemp -d "${TMPDIR:-/tmp}/oxpio-boundary-XXXXXX")
+  binary=$tmp/oxpio
   vault=$tmp/vault
   mkdir -p "$vault"
   (
     cd "$root"
-    go build -trimpath -o "$binary" ./cmd/obsite
+    go build -trimpath -o "$binary" ./cmd/oxpio
   )
 
   for marker in '_pagefind' 'testdata/quality' 'Rebuilding State from an Event Log' 'cal-zh-hans-00'; do
@@ -182,7 +182,7 @@ if violations:
     raise SystemExit(f'generated framework has external runtime resources: {violations}')
 PY
 
-  runtimes=$(find "$output/assets/obsite" -type f -name 'runtime.*.js' -print)
+  runtimes=$(find "$output/assets/oxpio" -type f -name 'runtime.*.js' -print)
   if [ "$(printf '%s\n' "$runtimes" | awk 'NF {count++} END {print count+0}')" -ne 1 ]; then
     printf 'shared runtime count is not one:\n%s\n' "$runtimes" >&2
     exit 1

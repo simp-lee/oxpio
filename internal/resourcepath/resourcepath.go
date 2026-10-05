@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	internalasset "github.com/simp-lee/obsite/internal/asset"
-	"github.com/simp-lee/obsite/internal/model"
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 // LookupResult describes a shared resource lookup attempt.

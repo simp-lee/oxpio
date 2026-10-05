@@ -16,8 +16,8 @@ import (
 	"sort"
 	"strings"
 
-	internalasset "github.com/simp-lee/obsite/internal/asset"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	_ "golang.org/x/image/webp"
 )
 
@@ -85,7 +85,7 @@ func (s *Server) serveMediaList(w http.ResponseWriter) {
 		if infoErr != nil {
 			return infoErr
 		}
-		items = append(items, mediaItem{Path: rel, Name: filepath.Base(rel), Size: info.Size(), URL: "/_obsite/media?path=" + url.QueryEscape(rel)})
+		items = append(items, mediaItem{Path: rel, Name: filepath.Base(rel), Size: info.Size(), URL: "/_oxpio/media?path=" + url.QueryEscape(rel)})
 		return nil
 	})
 	if err != nil {

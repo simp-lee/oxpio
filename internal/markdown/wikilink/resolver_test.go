@@ -4,8 +4,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/model"
 	gmwikilink "go.abhg.dev/goldmark/wikilink"
 )
 

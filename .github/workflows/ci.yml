@@ -52,7 +52,7 @@ jobs:
     name: Fixed related performance budgets
     runs-on: ubuntu-24.04
     env:
-      OBSITE_RELATED_PERF: "1"
+      OXPIO_RELATED_PERF: "1"
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-go@d35c59abb061a4a6fb18e82ac0862c26744d6ab5 # v5.5.0
@@ -163,13 +163,13 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          binary=$(find dist -type f -name obsite | head -n 1)
+          binary=$(find dist -type f -name oxpio | head -n 1)
           test -n "$binary"
           scripts/smoke-release.sh "$binary"
       - name: Smoke init, build, and serve
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $binary = (Get-ChildItem -Path dist -Recurse -Filter obsite.exe | Select-Object -First 1).FullName
+          $binary = (Get-ChildItem -Path dist -Recurse -Filter oxpio.exe | Select-Object -First 1).FullName
           if (-not $binary) { throw 'native release binary not found' }
           ./scripts/smoke-release.ps1 -Binary $binary

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	internalconfig "github.com/simp-lee/obsite/internal/config"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
 )
 
 func TestInitCommandDefaultsToCurrentVaultAndSeedsStrictRoot(t *testing.T) {

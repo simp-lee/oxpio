@@ -8,15 +8,17 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/simp-lee/oxpio/internal/branding"
 	"github.com/tdewolff/minify/v2"
 	mincss "github.com/tdewolff/minify/v2/css"
 )
 
 const (
-	katexCSSOutputPath  = "assets/obsite-runtime/katex.min.css"
-	katexJSOutputPath   = "assets/obsite-runtime/katex.min.js"
-	katexAutoOutputPath = "assets/obsite-runtime/auto-render.min.js"
-	mermaidJSOutputPath = "assets/obsite-runtime/mermaid.min.js"
+	katexCSSOutputPath  = "assets/oxpio-runtime/katex.min.css"
+	katexJSOutputPath   = "assets/oxpio-runtime/katex.min.js"
+	katexAutoOutputPath = "assets/oxpio-runtime/auto-render.min.js"
+	mermaidJSOutputPath = "assets/oxpio-runtime/mermaid.min.js"
+	logoOutputPath      = "assets/oxpio/logo.svg"
 )
 
 type embeddedOutputAsset struct {
@@ -33,7 +35,7 @@ var runtimeTemplateAssets = func() []embeddedOutputAsset {
 	}
 	fonts, _ := fs.Glob(embeddedSiteFS, "vendor/katex/fonts/*")
 	for _, name := range fonts {
-		assets = append(assets, embeddedOutputAsset{name: name, outputPath: path.Join("assets/obsite-runtime/fonts", path.Base(name))})
+		assets = append(assets, embeddedOutputAsset{name: name, outputPath: path.Join("assets/oxpio-runtime/fonts", path.Base(name))})
 	}
 	return assets
 }()
@@ -55,7 +57,7 @@ var loadSharedRuntimeFile = sync.OnceValues(func() (sharedRuntimeFile, error) {
 		return sharedRuntimeFile{}, err
 	}
 	hash := sha256.Sum256(data)
-	return sharedRuntimeFile{outputPath: fmt.Sprintf("assets/obsite/runtime.%x.js", hash), data: data}, nil
+	return sharedRuntimeFile{outputPath: fmt.Sprintf("assets/oxpio/runtime.%x.js", hash), data: data}, nil
 })
 
 // StyleCSSData returns the fixed built-in stylesheet for owner-registry publication.
@@ -75,7 +77,7 @@ func StyleCSSData() ([]byte, error) {
 
 // RuntimeAssetData returns all fixed offline runtime files for owner-registry publication.
 func RuntimeAssetData() ([]RuntimeAsset, error) {
-	result := make([]RuntimeAsset, 0, len(runtimeTemplateAssets)+1)
+	result := make([]RuntimeAsset, 0, len(runtimeTemplateAssets)+2)
 	for _, asset := range runtimeTemplateAssets {
 		data, err := readEmbeddedAsset(asset.name)
 		if err != nil {
@@ -88,8 +90,12 @@ func RuntimeAssetData() ([]RuntimeAsset, error) {
 		return nil, fmt.Errorf("read shared runtime: %w", err)
 	}
 	result = append(result, RuntimeAsset{OutputPath: runtimeFile.outputPath, Data: append([]byte(nil), runtimeFile.data...)})
+	result = append(result, RuntimeAsset{OutputPath: logoOutputPath, Data: branding.LogoSVG()})
 	return result, nil
 }
+
+// LogoOutputPath returns the fixed output path for the built-in OXPIO logo.
+func LogoOutputPath() string { return logoOutputPath }
 
 // SharedRuntimeOutputPath returns the content-addressed shared runtime path.
 func SharedRuntimeOutputPath() (string, error) {
@@ -114,10 +120,10 @@ func readEmbeddedAsset(name string) ([]byte, error) {
 
 // EmbeddedRuntimeAssetNames returns the fixed runtime inventory.
 func EmbeddedRuntimeAssetNames() []string {
-	result := make([]string, 0, len(runtimeTemplateAssets)+2)
+	result := make([]string, 0, len(runtimeTemplateAssets)+3)
 	for _, asset := range runtimeTemplateAssets {
 		result = append(result, asset.name)
 	}
-	result = append(result, "runtime.js", "style.css")
+	result = append(result, "runtime.js", "style.css", "logo.svg")
 	return result
 }

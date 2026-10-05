@@ -1,6 +1,6 @@
 package recommend
 
-const stopwordSetVersion = "obsite-related-stopwords-v1"
+const stopwordSetVersion = "oxpio-related-stopwords-v1"
 
 var englishStopwordsV1 = map[string]struct{}{
 	"about": {}, "above": {}, "after": {}, "again": {}, "against": {}, "all": {},
@@ -33,7 +33,7 @@ var supplementalStopwordsV1 = map[string]struct{}{
 	"那个": {}, "然而": {},
 }
 
-func isObsiteStopword(token string) bool {
+func isOXPIOStopword(token string) bool {
 	if _, ok := englishStopwordsV1[token]; ok {
 		return true
 	}

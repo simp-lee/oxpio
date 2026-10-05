@@ -11,15 +11,15 @@ import (
 	"sort"
 	"strings"
 
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/model"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 const (
 	obsidianConfigDir  = ".obsidian"
 	obsidianAppJSON    = ".obsidian/app.json"
 	nodeModulesDirName = "node_modules"
-	obsiteDirName      = ".obsite"
+	oxpioDirName      = ".oxpio"
 )
 
 // ScanResult is the Step 11 handoff for later frontmatter parsing and index building.
@@ -359,7 +359,7 @@ func hasSkippedPathSegment(relPath string) bool {
 }
 
 func shouldSkipPathSegment(name string) bool {
-	return name == obsidianConfigDir || name == nodeModulesDirName || name == obsiteDirName
+	return name == obsidianConfigDir || name == nodeModulesDirName || name == oxpioDirName
 }
 
 func isMarkdownFile(name string) bool {

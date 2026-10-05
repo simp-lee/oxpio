@@ -1,4 +1,4 @@
-// Package cli provides the Obsite command-line entrypoint.
+// Package cli provides the OXPIO command-line entrypoint.
 package cli
 
 import (
@@ -8,12 +8,12 @@ import (
 	"path/filepath"
 	"strings"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalconfig "github.com/simp-lee/obsite/internal/config"
-	internaledit "github.com/simp-lee/obsite/internal/edit"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/model"
-	internalserver "github.com/simp-lee/obsite/internal/server"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
+	internaledit "github.com/simp-lee/oxpio/internal/edit"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
+	internalserver "github.com/simp-lee/oxpio/internal/server"
 	"github.com/spf13/cobra"
 )
 
@@ -66,7 +66,7 @@ func defaultCommandDependencies() commandDependencies {
 func newRootCommand(deps commandDependencies) *cobra.Command {
 	var showVersion bool
 	cmd := &cobra.Command{
-		Use:           "obsite",
+		Use:           "oxpio",
 		Short:         "Generate and preview static sites from Obsidian vaults",
 		Args:          cobra.NoArgs,
 		SilenceErrors: true,
@@ -79,7 +79,7 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 			return cmd.Help()
 		},
 	}
-	cmd.Flags().BoolVar(&showVersion, "version", false, "Print the Obsite version")
+	cmd.Flags().BoolVar(&showVersion, "version", false, "Print the OXPIO version")
 
 	cmd.AddCommand(
 		newBuildCommand(deps),
@@ -96,7 +96,7 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 func newVersionCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print the Obsite version",
+		Short: "Print the OXPIO version",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			_, err := fmt.Fprintln(cmd.OutOrStdout(), formatVersion())

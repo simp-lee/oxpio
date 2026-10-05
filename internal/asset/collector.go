@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 // AssetCollector records pass-2 asset registrations and returns the site-relative

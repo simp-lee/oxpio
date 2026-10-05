@@ -1,6 +1,6 @@
 package recommend
 
-import "github.com/simp-lee/obsite/internal/model"
+import "github.com/simp-lee/oxpio/internal/model"
 
 func testRecommendIndex(notes ...*model.Note) *model.VaultIndex {
 	idx := &model.VaultIndex{Notes: make(map[string]*model.Note, len(notes))}

@@ -1,2 +1,2 @@
-// Package markdown is a placeholder for Obsite Markdown processing.
+// Package markdown is a placeholder for OXPIO Markdown processing.
 package markdown

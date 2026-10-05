@@ -8,10 +8,10 @@ import (
 	"sort"
 	"strings"
 
-	internalanalyze "github.com/simp-lee/obsite/internal/analyze"
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/siteplan"
+	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/siteplan"
 )
 
 // BuildResult is the public build summary returned to the CLI.

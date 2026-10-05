@@ -15,23 +15,23 @@ import (
 	"sync"
 	"time"
 
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/slug"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/slug"
 	xhtml "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 )
 
-// DefaultPort is the default local preview port for obsite serve.
+// DefaultPort is the default local preview port for oxpio serve.
 const DefaultPort = 8080
 
 const (
 	liveReloadEndpoint   = "/_livereload"
-	liveReloadQueryParam = "obsite-live-reload"
+	liveReloadQueryParam = "oxpio-live-reload"
 )
 
-var liveReloadScript = []byte(`<script data-obsite-livereload>(function(){if(!window.EventSource){return;}var source=new EventSource("/_livereload?obsite-live-reload=1");source.onmessage=function(event){if(event.data==="reload"){source.close();window.location.reload();}};})();</script>`)
+var liveReloadScript = []byte(`<script data-oxpio-livereload>(function(){if(!window.EventSource){return;}var source=new EventSource("/_livereload?oxpio-live-reload=1");source.onmessage=function(event){if(event.data==="reload"){source.close();window.location.reload();}};})();</script>`)
 
-// Server serves a generated Obsite output directory over HTTP.
+// Server serves a generated OXPIO output directory over HTTP.
 type Server struct {
 	outputPath     string
 	fileServer     http.Handler
@@ -418,7 +418,7 @@ func clearRangeHeaders(headers http.Header) {
 	headers.Del("Content-Range")
 }
 
-var outputBasePathPattern = regexp.MustCompile(`data-obsite-base-path=(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
+var outputBasePathPattern = regexp.MustCompile(`data-oxpio-base-path=(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
 
 func detectOutputBasePath(outputPath string) string {
 	data, err := os.ReadFile(filepath.Join(outputPath, "index.html"))
@@ -779,11 +779,11 @@ func injectLiveReloadScriptAt(body []byte, basePath string) []byte {
 func liveReloadScriptAt(basePath string) []byte {
 	basePath = ensureDirectoryPath(basePath)
 	endpoint := basePath + strings.TrimPrefix(liveReloadEndpoint, "/")
-	return []byte(`<script data-obsite-livereload>(function(){if(!window.EventSource){return;}var source=new EventSource("` + endpoint + `?obsite-live-reload=1");source.onmessage=function(event){if(event.data==="reload"){source.close();window.location.reload();}};})();</script>`)
+	return []byte(`<script data-oxpio-livereload>(function(){if(!window.EventSource){return;}var source=new EventSource("` + endpoint + `?oxpio-live-reload=1");source.onmessage=function(event){if(event.data==="reload"){source.close();window.location.reload();}};})();</script>`)
 }
 
 func containsLiveReloadScriptTag(lowerBody []byte) bool {
-	const liveReloadAttribute = "data-obsite-livereload"
+	const liveReloadAttribute = "data-oxpio-livereload"
 
 	searchStart := 0
 	for {
@@ -842,7 +842,7 @@ func canonicalPreviewOutputPath(decodedPath string, directory bool) string {
 }
 
 func isEditControlPath(cleanPath string) bool {
-	return cleanPath == "/_obsite" || strings.HasPrefix(cleanPath, "/_obsite/")
+	return cleanPath == "/_oxpio" || strings.HasPrefix(cleanPath, "/_oxpio/")
 }
 
 func cleanRequestPath(requestPath string) (cleanPath string, hasTrailingSlash bool) {

@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/link"
-	internalmarkdown "github.com/simp-lee/obsite/internal/markdown"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/link"
+	internalmarkdown "github.com/simp-lee/oxpio/internal/markdown"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/slug"
 	"github.com/yuin/goldmark/text"
 	"gopkg.in/yaml.v3"
 )

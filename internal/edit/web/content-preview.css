@@ -34,6 +34,22 @@ body { min-width: 0; margin: 0; background: var(--preview-bg); color: var(--prev
   border-radius: .75rem;
 }
 
+.content-preview-brand {
+  max-width: var(--preview-content-width);
+  margin: 0 auto 2rem;
+}
+
+.content-preview-brand img {
+  display: block;
+  width: min(100%, 13rem);
+  height: auto;
+}
+
+html[data-oxpio-editor-preview] .content-preview-shell { width: 100%; padding: 0; }
+html[data-oxpio-editor-preview] .content-preview-page { min-height: 100%; border: 0; border-radius: 0; }
+html[data-oxpio-editor-preview] .content-preview-header,
+html[data-oxpio-editor-preview] .content-preview-content { max-width: none; }
+
 .content-preview-header { max-width: var(--preview-content-width); margin: 0 auto 2rem; }
 .content-preview-header h1 { margin: 0; font-size: clamp(1.8rem, 5vw, 2.8rem); line-height: 1.15; overflow-wrap: anywhere; }
 .content-preview-content { min-width: 0; max-width: var(--preview-content-width); margin: 0 auto; }

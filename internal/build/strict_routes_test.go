@@ -7,12 +7,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestStrictBuildPreservesUnicodeSourcePaths(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", `title: Unicode
+	writeStrictFile(t, vault, "oxpio.yaml", `title: Unicode
 baseURL: https://example.test/
 navigation:
   - name: Home
@@ -37,7 +37,7 @@ source:
 
 func TestStrictBuildMarksSameSiteAbsoluteNavigationCurrent(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", `title: Navigation
+	writeStrictFile(t, vault, "oxpio.yaml", `title: Navigation
 baseURL: https://example.test/sub/
 navigation:
   - name: Current
@@ -81,7 +81,7 @@ navigation:
 
 func TestStrictBuildMarksPathlessAbsoluteHomeNavigationCurrent(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation:\n  - name: Home\n    url: https://example.test\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation:\n  - name: Home\n    url: https://example.test\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	output := filepath.Join(t.TempDir(), "site")
 	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
@@ -95,7 +95,7 @@ func TestStrictBuildMarksPathlessAbsoluteHomeNavigationCurrent(t *testing.T) {
 
 func TestStrictBuildResolvesLinksToGeneratedTagPages(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Tags\nbaseURL: https://example.test/\nnavigation:\n  - name: Home\n    section: .\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Tags\nbaseURL: https://example.test/\nnavigation:\n  - name: Home\n    section: .\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeStrictFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: page\ntags: [foo]\n---\n[Foo](/tags/foo/)\n[Foo without slash](/tags/foo)\n")
 	output := filepath.Join(t.TempDir(), "site")
@@ -115,7 +115,7 @@ func TestStrictBuildResolvesLinksToGeneratedTagPages(t *testing.T) {
 
 func TestStrictBuildResolvesLinksToGeneratedTimelineAndNotFoundPages(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", `title: Generated pages
+	writeStrictFile(t, vault, "oxpio.yaml", `title: Generated pages
 baseURL: https://example.test/docs/
 navigation: []
 pagination:

@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalserver "github.com/simp-lee/obsite/internal/server"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalserver "github.com/simp-lee/oxpio/internal/server"
 	xhtml "golang.org/x/net/html"
 )
 
@@ -93,7 +93,7 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 	body := append([]byte(nil), recorder.Body.Bytes()...)
 	contentType := strings.ToLower(recorder.Header().Get("Content-Type"))
 	if strings.Contains(contentType, "text/html") && recorder.Code >= 200 && recorder.Code < 300 {
-		body = rewritePreviewHTML(body, "/_obsite/preview/"+token)
+		body = rewritePreviewHTML(body, "/_oxpio/preview/"+token)
 	}
 	for name, values := range recorder.Header() {
 		w.Header()[name] = append([]string(nil), values...)
@@ -166,10 +166,10 @@ func renderContentPreview(fullPage []byte, token, title, pagePath string) ([]byt
 			return nil, fmt.Errorf("render entry content: %w", err)
 		}
 	}
-	contentHTML := rewritePreviewHTML(content.Bytes(), "/_obsite/preview/"+token)
-	math := strings.Contains(string(contentHTML), "data-obsite-math-source")
+	contentHTML := rewritePreviewHTML(content.Bytes(), "/_oxpio/preview/"+token)
+	math := strings.Contains(string(contentHTML), "data-oxpio-math-source")
 	mermaid := findPreviewNodeWithClass(contentNode, "mermaid") != nil
-	prefix := "/_obsite/preview/" + token
+	prefix := "/_oxpio/preview/" + token
 	page := contentPreviewPage{
 		Language: languageFromPreviewDocument(document),
 		Title:    title,
@@ -248,7 +248,7 @@ func previewDocumentResource(document *xhtml.Node, kind string) string {
 		case "script":
 			if kind == "runtime" {
 				candidate := previewNodeAttribute(node, "src")
-				if strings.Contains(candidate, "/assets/obsite/runtime.") {
+				if strings.Contains(candidate, "/assets/oxpio/runtime.") {
 					resource = candidate
 				}
 			}
@@ -319,7 +319,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
-	root, err := os.MkdirTemp("", ".obsite-preview-*")
+	root, err := os.MkdirTemp("", ".oxpio-preview-*")
 	if err != nil {
 		http.Error(w, "could not create preview workspace", http.StatusInternalServerError)
 		return
@@ -360,7 +360,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 	if built.Catalog != nil {
 		basePath = strings.TrimSuffix(built.Catalog.BasePath, "/")
 	}
-	fullURL := "/_obsite/preview/" + token + basePath + previewEntry.Route
+	fullURL := "/_oxpio/preview/" + token + basePath + previewEntry.Route
 	fullPage, err := renderPreviewPage(static, previewSitePath(basePath, previewEntry.Route))
 	if err != nil {
 		_ = os.RemoveAll(root)
@@ -380,7 +380,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 	response := map[string]any{
 		"url":          fullURL,
 		"fullURL":      fullURL,
-		"contentURL":   "/_obsite/preview/" + token + "/content",
+		"contentURL":   "/_oxpio/preview/" + token + "/content",
 		"warningCount": built.WarningCount,
 		"diagnostics":  s.editorDiagnostics(built.Diagnostics),
 	}

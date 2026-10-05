@@ -65,7 +65,7 @@ Examples: `Ｎｏｄｅ．ＪＳ` becomes `node.js`; `C++ C#` becomes `c++`, `c#
 
 ### Resource identity
 
-The Chinese DAG/HMM implementation is the Obsite adaptation of
+The Chinese DAG/HMM implementation is the OXPIO adaptation of
 [`go-ego/gse` v1.0.2](https://github.com/go-ego/gse/tree/v1.0.2), whose Go
 module checksum is `h1:+27lYFPhQEhA9igtdOsJPRKYL/k3TwYsxBF5jr6KFv4=`. It
 uses `github.com/vcaesar/cedar` v0.30.0. The HMM emission provenance is gse's
@@ -78,10 +78,10 @@ The embedded resource identity is:
 | `internal/recommend/chinese/data/s_1.txt` | `2b3063ec552327520bee3c0c5819d6e131ab3db50a60b94641ec90f611c24bcd` |
 | `internal/recommend/chinese/data/t_1.txt` | `2c84cef353d2daac62cc62bbeabab6b6a8866cfee8f9f88901e00ed66ed208c6` |
 | `internal/recommend/chinese/data/stop_tokens.txt` | `8a05af1a224e40d06fce2081ad4d4b2c5e5c902f0a7501c0dba677ce1ee40c90` |
-| `internal/recommend/chinese/hmm_model.go` | `86f6d27d540d7ad63b3f9b2de8d234e1c26b2cc8cd5a11d8a1ab3e6fe880c86a` |
+| `internal/recommend/chinese/hmm_model.go` | `a85802ff04319e4f8043b7ae5c9442ca62747f3a3e6d6d731ab058a3678eed58` |
 
 The English and supplemental stopword set identity is
-`obsite-related-stopwords-v1`; its membership is defined by
+`oxpio-related-stopwords-v1`; its membership is defined by
 `internal/recommend/stopwords.go`. The canonical membership hash sorts the
 UTF-8 words lexically, appends LF after every word, and hashes the resulting
 bytes:

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/slug"
 )
 
 // VaultIndex is the immutable handoff between pass 1 indexing and pass 2 rendering.

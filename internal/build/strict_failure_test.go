@@ -7,13 +7,13 @@ import (
 	"strings"
 	"testing"
 
-	internalanalyze "github.com/simp-lee/obsite/internal/analyze"
+	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
 )
 
 func TestNormalBuildRejectsMissingMarkdownAssetsAndPreservesPreviousOutput(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "site")
-	writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
 	writeStrictFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: page\n---\nPublished body\n")
 	if _, err := BuildWithOptions(vault, output, Options{}); err != nil {
@@ -47,7 +47,7 @@ func TestStrictBuildPreservesEveryPublishedByteForInputFailureClasses(t *testing
 	}
 	cases := []failureCase{
 		{name: "configuration", mutate: func(t *testing.T, vault string) {
-			appendStrictFile(t, filepath.Join(vault, "obsite.yaml"), "\nunknownConfig: true\n")
+			appendStrictFile(t, filepath.Join(vault, "oxpio.yaml"), "\nunknownConfig: true\n")
 		}},
 		{name: "link", mutate: func(t *testing.T, vault string) {
 			writeStrictFile(t, vault, "guide/article.md", "---\ntitle: Feature Article\npublish: true\ntype: page\n---\n![missing](missing.png)\n")
@@ -70,7 +70,7 @@ func TestStrictBuildPreservesEveryPublishedByteForInputFailureClasses(t *testing
 			}
 		}},
 		{name: "version", mutate: func(t *testing.T, vault string) {
-			appendStrictFile(t, filepath.Join(vault, "obsite.yaml"), "\nversions:\n  root: docs\n  default: v1\n  entries:\n    - id: v1\n      label: Version 1\n      source: missing\n")
+			appendStrictFile(t, filepath.Join(vault, "oxpio.yaml"), "\nversions:\n  root: docs\n  default: v1\n  entries:\n    - id: v1\n      label: Version 1\n      source: missing\n")
 		}},
 	}
 	for _, testCase := range cases {
@@ -94,7 +94,7 @@ func TestStrictBuildPreservesEveryPublishedByteForInputFailureClasses(t *testing
 					t.Fatalf("published output %q changed after %s failure", name, testCase.name)
 				}
 			}
-			matches, err := filepath.Glob(filepath.Join(filepath.Dir(output), ".site-obsite-*"))
+			matches, err := filepath.Glob(filepath.Join(filepath.Dir(output), ".site-oxpio-*"))
 			if err != nil {
 				t.Fatal(err)
 			}

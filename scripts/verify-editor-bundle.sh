@@ -3,7 +3,7 @@ set -eu
 
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 BUNDLE="$ROOT/internal/edit/web/editor.bundle.js"
-TEMP=$(mktemp "${TMPDIR:-/tmp}/obsite-editor-bundle.XXXXXX.js")
+TEMP=$(mktemp "${TMPDIR:-/tmp}/oxpio-editor-bundle.XXXXXX.js")
 trap 'rm -f "$TEMP"' EXIT HUP INT TERM
 
 "$ROOT/node_modules/.bin/esbuild" "$ROOT/internal/edit/web/editor-entry.js" \

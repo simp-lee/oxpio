@@ -1,2 +1,2 @@
-// Package server serves generated Obsite output directories for local preview.
+// Package server serves generated OXPIO output directories for local preview.
 package server

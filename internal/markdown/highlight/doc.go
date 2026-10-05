@@ -1,2 +1,2 @@
-// Package highlight is a placeholder for Obsite syntax highlighting.
+// Package highlight is a placeholder for OXPIO syntax highlighting.
 package highlight

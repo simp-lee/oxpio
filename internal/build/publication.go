@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 )
 
 type managedOutputDirState struct {
@@ -41,8 +41,8 @@ var (
 )
 
 const (
-	managedOutputMarkerFilename = ".obsite-output"
-	managedOutputMarkerContents = "managed by obsite\n"
+	managedOutputMarkerFilename = ".oxpio-output"
+	managedOutputMarkerContents = "managed by oxpio\n"
 	customCSSOutputPath         = "assets/custom.css"
 )
 
@@ -267,7 +267,7 @@ func managedOutputTempPattern(outputPath string, purpose string) string {
 	if strings.TrimSpace(base) == "" || base == "." {
 		base = "site"
 	}
-	return fmt.Sprintf(".%s-obsite-%s-*", base, purpose)
+	return fmt.Sprintf(".%s-oxpio-%s-*", base, purpose)
 }
 
 func reserveManagedOutputPath(outputPath string, purpose string) (string, error) {

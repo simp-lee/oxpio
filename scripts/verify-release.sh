@@ -30,7 +30,7 @@ value = datetime.fromisoformat(sys.argv[1]).astimezone(timezone.utc)
 print(value.strftime('%Y-%m-%dT%H:%M:%SZ'))
 PY
 )
-EXPECTED_OUTPUT="obsite version=$EXPECTED_VERSION commit=$EXPECTED_COMMIT date=$EXPECTED_DATE type=$EXPECTED_TYPE"
+EXPECTED_OUTPUT="oxpio version=$EXPECTED_VERSION commit=$EXPECTED_COMMIT date=$EXPECTED_DATE type=$EXPECTED_TYPE"
 
 python3 - "$ROOT" "$DIST" "$EXPECTED_VERSION" "$EXPECTED_COMMIT" "$EXPECTED_DATE" "$EXPECTED_TYPE" <<'PY'
 from pathlib import Path
@@ -38,8 +38,8 @@ import hashlib, json, platform, re, subprocess, sys, tarfile, tempfile, zipfile
 
 root, dist = map(Path, sys.argv[1:3])
 expected_version, expected_commit, expected_date, expected_type = sys.argv[3:]
-expected_output = f'obsite version={expected_version} commit={expected_commit} date={expected_date} type={expected_type}'
-expected_marker = f'obsite-release-metadata:{expected_version}|{expected_commit}|{expected_date}|{expected_type}'.encode()
+expected_output = f'oxpio version={expected_version} commit={expected_commit} date={expected_date} type={expected_type}'
+expected_marker = f'oxpio-release-metadata:{expected_version}|{expected_commit}|{expected_date}|{expected_type}'.encode()
 archives = sorted(list(dist.glob('*.tar.gz')) + list(dist.glob('*.zip')))
 if len(archives) != 6:
     raise SystemExit(f'archive count = {len(archives)}, want 6: {[p.name for p in archives]}')
@@ -107,8 +107,8 @@ def verify_version_metadata(binary, path):
 
 
 def verify_native_version(binary, path):
-    with tempfile.TemporaryDirectory(prefix='obsite-release-version-') as directory:
-        executable = Path(directory) / ('obsite.exe' if path[0] == 'windows' else 'obsite')
+    with tempfile.TemporaryDirectory(prefix='oxpio-release-version-') as directory:
+        executable = Path(directory) / ('oxpio.exe' if path[0] == 'windows' else 'oxpio')
         executable.write_bytes(binary)
         executable.chmod(0o755)
         for argument in ('version', '--version'):
@@ -127,7 +127,7 @@ def verify_native_version(binary, path):
 
 raw_binaries = {}
 for path in dist.rglob('*'):
-    if path.is_file() and path.name in ('obsite', 'obsite.exe'):
+    if path.is_file() and path.name in ('oxpio', 'oxpio.exe'):
         key = matrix_key(path.parent.name)
         if key in raw_binaries:
             raise SystemExit(f'duplicate raw binary for {key}: {path}, {raw_binaries[key]}')
@@ -188,7 +188,7 @@ native_key = host_matrix_key()
 for archive in archives:
     key = matrix_key(archive.name)
     seen.add(key)
-    expected_binary = 'obsite.exe' if key[0] == 'windows' else 'obsite'
+    expected_binary = 'oxpio.exe' if key[0] == 'windows' else 'oxpio'
     if key[0] == 'windows':
         if archive.suffix != '.zip':
             raise SystemExit(f'{archive.name}: Windows archive must be zip')

@@ -14,7 +14,7 @@ import (
 
 func TestStrictBuildPublishesURLPathsForStandardFileServing(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Assets\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Assets\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\nbanner: images/Café Banner.png\nbannerAlt: Banner\n---\nHome\n")
 	writeStrictFile(t, vault, "Start Here.md", "---\ntitle: Start Here\npublish: true\ntype: page\n---\nPage served from a decoded directory.\n")
 	fixture, err := os.ReadFile(filepath.Join("..", "..", "test", "testdata", "e2e", "feature-vault", "images", "cover.png"))

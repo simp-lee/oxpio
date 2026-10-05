@@ -8,12 +8,12 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/markdown/headingid"
-	"github.com/simp-lee/obsite/internal/markdown/pathutil"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/resourcepath"
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/markdown/headingid"
+	"github.com/simp-lee/oxpio/internal/markdown/pathutil"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/resourcepath"
+	"github.com/simp-lee/oxpio/internal/slug"
 	gmwikilink "go.abhg.dev/goldmark/wikilink"
 )
 

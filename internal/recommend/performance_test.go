@@ -13,15 +13,15 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/testutil/relatedfixture"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/testutil/relatedfixture"
 )
 
-const relatedRSSHelperEnv = "OBSITE_RELATED_RSS_HELPER"
+const relatedRSSHelperEnv = "OXPIO_RELATED_RSS_HELPER"
 
 func TestRelatedPerformanceBudgets(t *testing.T) {
-	if os.Getenv("OBSITE_RELATED_PERF") != "1" {
-		t.Skip("set OBSITE_RELATED_PERF=1 on the fixed acceptance host")
+	if os.Getenv("OXPIO_RELATED_PERF") != "1" {
+		t.Skip("set OXPIO_RELATED_PERF=1 on the fixed acceptance host")
 	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -40,8 +40,8 @@ func TestRelatedPerformanceBudgets(t *testing.T) {
 }
 
 func TestRelatedMemoryLifetimes(t *testing.T) {
-	if os.Getenv("OBSITE_RELATED_PROFILE_DIR") == "" {
-		t.Skip("set OBSITE_RELATED_PROFILE_DIR to an external profile directory")
+	if os.Getenv("OXPIO_RELATED_PROFILE_DIR") == "" {
+		t.Skip("set OXPIO_RELATED_PROFILE_DIR to an external profile directory")
 	}
 	TestMemoryProfileCheckpoints(t)
 }
@@ -186,7 +186,7 @@ func TestMemoryProfileCheckpoints(t *testing.T) {
 	runtime.MemProfileRate = 1
 	defer func() { runtime.MemProfileRate = previousProfileRate }()
 
-	profileDir := os.Getenv("OBSITE_RELATED_PROFILE_DIR")
+	profileDir := os.Getenv("OXPIO_RELATED_PROFILE_DIR")
 	if profileDir == "" {
 		profileDir = t.TempDir()
 	}

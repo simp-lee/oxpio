@@ -10,8 +10,8 @@ const outputDir = path.join(repoRoot, '.pi-work', 'ui-design');
 const runtimeFixture = path.join(repoRoot, 'test', 'testdata', 'e2e', 'runtime-vault');
 const featureFixture = path.join(repoRoot, 'test', 'testdata', 'e2e', 'feature-vault');
 const passwordHash = '$argon2id$v=19$m=19456,t=2,p=1$o2KEDd/Nrt/G5QtUKhAY3w$9gLt3Rz/TkUAAJl6HSPSjjC1xbg3rAKuEq0AJQzyp5M';
-const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'obsite-ui-design-'));
-const binaryPath = path.join(tempRoot, process.platform === 'win32' ? 'obsite.exe' : 'obsite');
+const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'oxpio-ui-design-'));
+const binaryPath = path.join(tempRoot, process.platform === 'win32' ? 'oxpio.exe' : 'oxpio');
 const roots = new Map();
 const manifest = [];
 let staticOrigin;
@@ -99,16 +99,16 @@ async function serveStatic(req, res) {
 async function copyAndBuild(name, fixture, basePath, baseURL) {
   const vault = path.join(tempRoot, name);
   await fs.cp(fixture, vault, {recursive: true});
-  const configPath = path.join(vault, 'obsite.yaml');
+  const configPath = path.join(vault, 'oxpio.yaml');
   let config = await fs.readFile(configPath, 'utf8');
   if (name === 'feature') {
-    config = `title: Quiet Notes\nbaseURL: https://example.com/blog/\nauthor: Obsite team\ndescription: Thoughtful documentation for small, durable tools.\nnavigation:\n  - name: Home\n    section: .\n  - name: Guide\n    section: guide\n  - name: Journal\n    url: /updates/\nsidebar:\n  enabled: true\npopover:\n  enabled: true\nrelated:\n  enabled: true\n  count: 2\nrss:\n  enabled: true\ntimeline:\n  enabled: true\n  path: updates\nsource:\n  editURL: https://example.com/edit/:path\n  viewURL: https://example.com/view/:path\n`;
+    config = `title: Quiet Notes\nbaseURL: https://example.com/blog/\nauthor: OXPIO team\ndescription: Thoughtful documentation for small, durable tools.\nnavigation:\n  - name: Home\n    section: .\n  - name: Guide\n    section: guide\n  - name: Journal\n    url: /updates/\nsidebar:\n  enabled: true\npopover:\n  enabled: true\nrelated:\n  enabled: true\n  count: 2\nrss:\n  enabled: true\ntimeline:\n  enabled: true\n  path: updates\nsource:\n  editURL: https://example.com/edit/:path\n  viewURL: https://example.com/view/:path\n`;
     await fs.writeFile(path.join(vault, '_index.md'), `---\ntitle: Quiet Notes\npublish: true\ndescription: A focused space for clear ideas, durable documentation, and calm publishing.\n---\n\nA small, readable site for people who care about the words as much as the tooling.\n`);
     await fs.writeFile(path.join(vault, 'guide', '_index.md'), `---\ntitle: Guide\npublish: true\ndescription: Practical patterns for building and maintaining a useful site.\n---\n\nStart with the structure, then make every page easy to return to.\n`);
     await fs.writeFile(path.join(vault, 'guide', 'article.md'), `---\ntitle: Build a calm publishing workflow\npublish: true\ntype: doc\ndate: 2026-04-06\nupdated: 2026-04-08\nauthor: Alice Example\ndescription: A practical approach to turning notes into a site people enjoy reading.\nstatus: stable\naudience: Builders\nproductVersion: "2.0"\nseries: Quiet Notes\ntags:\n  - writing\n  - workflow\n---\n# Build a calm publishing workflow\n\nGood publishing starts with a clear source and ends with a page that gets out of the reader's way.\n\n## Start with a useful structure\n\nKeep navigation predictable and let each page do one job well.\n\n> [!note] A useful rule\n> Prefer a small number of clear choices over a dashboard full of controls.\n\n## Review before you publish\n\nA fast preview loop makes the final result feel intentional.\n`);
-    await fs.writeFile(path.join(vault, 'guide', 'field-notes.md'), `---\ntitle: Field notes on readable docs\npublish: true\ntype: post\ndate: 2026-04-02\nauthor: Obsite team\ndescription: Small editorial decisions that make technical writing easier to use.\ntags:\n  - writing\n---\n\nReadable documentation is a product feature.\n`);
-    await fs.writeFile(path.join(vault, 'guide', 'quick-start.md'), `---\ntitle: A quick start for thoughtful sites\npublish: true\ntype: doc\ndate: 2026-03-28\nauthor: Obsite team\ndescription: The shortest path from a folder of notes to a welcoming site.\ntags:\n  - workflow\n---\n\nChoose a clear title, write one useful paragraph, and publish when the page feels ready.\n`);
-    await fs.writeFile(path.join(vault, 'guide', 'ship-notes.md'), `---\ntitle: Ship notes, not noise\npublish: true\ntype: post\ndate: 2026-03-25\nauthor: Obsite team\ndescription: A few principles for keeping a publishing rhythm sustainable.\ntags:\n  - writing\n---\n\nA sustainable rhythm is easier to keep when every note earns its place.\n`);
+    await fs.writeFile(path.join(vault, 'guide', 'field-notes.md'), `---\ntitle: Field notes on readable docs\npublish: true\ntype: post\ndate: 2026-04-02\nauthor: OXPIO team\ndescription: Small editorial decisions that make technical writing easier to use.\ntags:\n  - writing\n---\n\nReadable documentation is a product feature.\n`);
+    await fs.writeFile(path.join(vault, 'guide', 'quick-start.md'), `---\ntitle: A quick start for thoughtful sites\npublish: true\ntype: doc\ndate: 2026-03-28\nauthor: OXPIO team\ndescription: The shortest path from a folder of notes to a welcoming site.\ntags:\n  - workflow\n---\n\nChoose a clear title, write one useful paragraph, and publish when the page feels ready.\n`);
+    await fs.writeFile(path.join(vault, 'guide', 'ship-notes.md'), `---\ntitle: Ship notes, not noise\npublish: true\ntype: post\ndate: 2026-03-25\nauthor: OXPIO team\ndescription: A few principles for keeping a publishing rhythm sustainable.\ntags:\n  - writing\n---\n\nA sustainable rhythm is easier to keep when every note earns its place.\n`);
     await fs.writeFile(path.join(vault, 'roadmap.md'), `---\ntitle: Roadmap\npublish: true\ntype: page\n---\n\nA short view of what is coming next.\n`);
   }
   await fs.writeFile(configPath, config.replace(baseURL, `${staticOrigin}${basePath}`));
@@ -119,12 +119,13 @@ async function copyAndBuild(name, fixture, basePath, baseURL) {
 async function prepareEditor() {
   const vault = path.join(tempRoot, 'editor-vault');
   await fs.mkdir(path.join(vault, 'section', 'nested'), {recursive: true});
-  await fs.writeFile(path.join(vault, 'obsite.yaml'), `title: Obsite Studio\nbaseURL: http://127.0.0.1/\nauthor: Studio Team\ndescription: A calm writing workspace.\nnavigation:\n  - name: Home\n    section: .\n  - name: Notes\n    section: section\nsidebar:\n  enabled: true\nedit:\n  username: admin\n  passwordHash: ${passwordHash}\n`);
+  await fs.writeFile(path.join(vault, 'oxpio.yaml'), `title: OXPIO Studio\nbaseURL: http://127.0.0.1/\nauthor: Studio Team\ndescription: A calm writing workspace.\nnavigation:\n  - name: Home\n    section: .\n  - name: Notes\n    section: section\nsidebar:\n  enabled: true\nedit:\n  username: admin\n  passwordHash: ${passwordHash}\n`);
   await fs.writeFile(path.join(vault, '_index.md'), '---\ntitle: Studio Home\npublish: true\n---\n# Studio Home\n\nWelcome to the editorial workspace.\n');
   await fs.mkdir(path.join(vault, 'images'), {recursive: true});
   await fs.copyFile(path.join(runtimeFixture, 'images', 'hero.png'), path.join(vault, 'images', 'hero.png'));
-  await fs.writeFile(path.join(vault, 'article.md'), `---\ntitle: Reliable publishing in one small workflow\npublish: true\ntype: doc\ndate: 2026-04-06\ndescription: A compact article showing formulas, code, tables, callouts, and a local image.\nauthor: Obsite team\nupdated: 2026-04-08\ntags:\n  - writing\n  - markdown\nstatus: stable\nslug: reliable-publishing\n---\n> [!info] Editor showcase\n> This page is rendered from a local Markdown source and can be edited without leaving the vault.\n\nGood publishing keeps the source readable and the final page predictable.\n\n![A calm workspace](images/hero.png)\n\n## A small formula\n\nInline math stays close to the sentence: $E = mc^2$.\n\n$$\n\\operatorname{score}(x) = \\frac{\\sum_i w_i x_i}{\\sum_i w_i}\n$$\n\n## A practical code sample\n\n\`\`\`go\nfunc Publish(source []byte) error {\n    return validateAndBuild(source)\n}\n\`\`\`\n\n## A compact comparison\n\n| Stage | Input | Result |\n| --- | --- | --- |\n| Edit | Markdown source | Clear intent |\n| Preview | Candidate bytes | Rendered draft |\n| Publish | Validated build | Atomic output |\n\n## Keep the loop short\n\nChange one thing, preview the result, and publish only when the page is ready.\n`);
-  await fs.writeFile(path.join(vault, 'preview.md'), '---\ntitle: A short preview loop\npublish: true\ntype: doc\n---\n> [!tip] Preview first\n> Check the rendered result before publishing.\n\nChange one thing, inspect the page, and keep the final review calm.\n\n## Three steps\n\n1. Edit the source.\n2. Preview the content.\n3. Publish when it is ready.\n\n| Stage | Result |\n| --- | --- |\n| Draft | Clear intent |\n| Review | Confident release |\n');
+  await fs.copyFile(path.join(runtimeFixture, 'images', 'editor-preview.svg'), path.join(vault, 'images', 'editor-preview.svg'));
+  await fs.writeFile(path.join(vault, 'article.md'), `---\ntitle: Reliable publishing in one small workflow\npublish: true\ntype: doc\ndate: 2026-04-06\ndescription: A compact article showing formulas, code, tables, callouts, and a local image.\nauthor: OXPIO team\nupdated: 2026-04-08\ntags:\n  - writing\n  - markdown\nstatus: stable\nslug: reliable-publishing\n---\n> [!info] Editor showcase\n> This page is rendered from a local Markdown source and can be edited without leaving the vault.\n\nGood publishing keeps the source readable and the final page predictable.\n\n![A calm workspace](images/editor-preview.svg)\n\n## A small formula\n\nInline math stays close to the sentence: $E = mc^2$.\n\n$$\n\\operatorname{score}(x) = \\frac{\\sum_i w_i x_i}{\\sum_i w_i}\n$$\n\n## A practical code sample\n\n\`\`\`go\nfunc Publish(source []byte) error {\n    return validateAndBuild(source)\n}\n\`\`\`\n\n## A compact comparison\n\n| Stage | Input | Result |\n| --- | --- | --- |\n| Edit | Markdown source | Clear intent |\n| Preview | Candidate bytes | Rendered draft |\n| Publish | Validated build | Atomic output |\n\n## Keep the loop short\n\nChange one thing, preview the result, and publish only when the page is ready.\n`);
+  await fs.writeFile(path.join(vault, 'preview.md'), '---\ntitle: A short preview loop\npublish: true\ntype: doc\n---\n> [!tip] Preview first\n> Check the rendered result before publishing.\n\nChange one thing, inspect the page, and keep the final review calm.\n\nInline math stays close to the sentence: $E = mc^2$.\n\n$$\n\\operatorname{score}(x) = \\frac{\\sum_i w_i x_i}{\\sum_i w_i}\n$$\n\n## A small code sample\n\n```go\nfunc Preview(source string) string {\n    return strings.TrimSpace(source)\n}\n```\n\n## Three steps\n\n1. Edit the source.\n2. Preview the content.\n3. Publish when it is ready.\n\n| Stage | Result |\n| --- | --- |\n| Draft | Clear intent |\n| Review | Confident release |\n');
   await fs.writeFile(path.join(vault, 'draft.md'), '---\ntitle: Private draft\npublish: false\ntype: doc\n---\nWork in progress.\n');
   await fs.writeFile(path.join(vault, 'section', '_index.md'), '---\ntitle: Notes\npublish: true\n---\nA collection of notes.\n');
   await fs.writeFile(path.join(vault, 'section', 'nested', '_index.md'), '---\ntitle: Nested notes\npublish: true\n---\nNested material.\n');
@@ -132,11 +133,11 @@ async function prepareEditor() {
 
   const port = await freePort();
   editorOrigin = `http://127.0.0.1:${port}`;
-  const configPath = path.join(vault, 'obsite.yaml');
+  const configPath = path.join(vault, 'oxpio.yaml');
   const config = (await fs.readFile(configPath, 'utf8')).replace('http://127.0.0.1/', `${editorOrigin}/`);
   await fs.writeFile(configPath, config);
   editorProcess = spawn(binaryPath, ['edit', '--vault', vault, '--port', String(port)], {cwd: repoRoot, stdio: 'ignore'});
-  await waitForHTTP(`${editorOrigin}/_obsite/login`);
+  await waitForHTTP(`${editorOrigin}/_oxpio/login`);
 }
 
 async function waitForEditorExit() {
@@ -195,7 +196,7 @@ async function capturePublic(browser) {
 }
 
 async function login(page) {
-  await page.goto(`${editorOrigin}/_obsite/login`, {waitUntil: 'domcontentloaded'});
+  await page.goto(`${editorOrigin}/_oxpio/login`, {waitUntil: 'domcontentloaded'});
   await page.locator('input[name="username"]').fill('admin');
   await page.locator('input[name="password"]').fill('secret');
   await page.getByRole('button', {name: 'Log in'}).click();
@@ -204,35 +205,67 @@ async function login(page) {
 
 async function captureEditor(browser) {
   const context = await browser.newContext({viewport: {width: 1440, height: 900}, colorScheme: 'light'});
-  const page = await context.newPage();
-  await page.goto(`${editorOrigin}/_obsite/login`, {waitUntil: 'domcontentloaded'});
+  let page = await context.newPage();
+  await page.goto(`${editorOrigin}/_oxpio/login`, {waitUntil: 'domcontentloaded'});
   await capture(page, 'editor-login.png', 'Editor login screen.');
   await login(page);
-  await page.goto(`${editorOrigin}/_obsite/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
+  await page.goto(`${editorOrigin}/_oxpio/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
   await page.locator('#editor .cm-content').waitFor();
+  await page.locator('#editor .live-rendered-block').first().waitFor({state: 'visible'});
   await capture(page, 'editor-visual.png', 'Authenticated visual editor with metadata, toolbar, source list, and file manager.');
   await page.locator('#new').click();
   await page.locator('#new-dialog').waitFor({state: 'visible'});
   await capture(page, 'editor-new-article.png', 'New article draft dialog.');
   await page.locator('#new-dialog').evaluate(dialog => dialog.close());
 
-  await page.goto(`${editorOrigin}/_obsite/editor?path=preview.md`, {waitUntil: 'domcontentloaded'});
+  await page.goto(`${editorOrigin}/_oxpio/editor?path=preview.md`, {waitUntil: 'domcontentloaded'});
   await page.locator('#editor .cm-content').waitFor();
-  await page.locator('#preview').click();
+  await page.locator('#read-mode').click();
   await page.locator('#preview-frame').waitFor({state: 'visible'});
   await page.locator('#preview-empty').waitFor({state: 'hidden'});
-  await capture(page, 'editor-preview.png', 'Short content-only server-rendered draft preview beside the editor.');
+  await capture(page, 'editor-preview.png', 'Full-width rendered Markdown preview with callout, formula, code block, and table.');
 
-  await page.goto(`${editorOrigin}/_obsite/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
+  await page.goto(`${editorOrigin}/_oxpio/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
   await page.locator('#editor .cm-content').waitFor();
-  await page.locator('#preview').click();
-  await page.locator('#preview-frame').waitFor({state: 'visible'});
-  await page.locator('#preview-empty').waitFor({state: 'hidden'});
-  await page.locator('#mode').click();
-  await page.locator('#mode').filter({hasText: 'Form mode'}).waitFor();
+  await page.locator('#source-mode').click();
+  await page.waitForFunction(() => document.querySelector('#source-mode')?.getAttribute('aria-selected') === 'true');
   await capture(page, 'editor-source.png', 'Full Markdown/YAML source editing mode.');
-  await page.locator('#mode').click();
-  await page.locator('#mode').filter({hasText: 'Source mode'}).waitFor();
+
+  await page.goto(`${editorOrigin}/_oxpio/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
+  await page.locator('#editor .cm-content').waitFor();
+  await page.locator('#source-mode').click();
+  await page.waitForFunction(() => document.querySelector('#source-mode')?.getAttribute('aria-selected') === 'true');
+  const source = await page.evaluate(async () => await (await fetch('/_oxpio/source?path=article.md')).text());
+  const candidate = source
+    .replace("title: Reliable publishing in one small workflow", "title: Reliable publishing for thoughtful teams")
+    .replace("updated: 2026-04-08", "updated: 2026-04-10")
+    .replace("> This page is rendered from a local Markdown source and can be edited without leaving the vault.", "> This page is rendered from a local Markdown source and reviewed in one focused workspace.")
+    .replace("Good publishing keeps the source readable and the final page predictable.", "Good publishing keeps the source readable and makes every review easier.")
+    .replace(/\n## A small formula[\s\S]*?\n## A practical code sample/, "\n## Review candidate\n\nThis note exists only in the candidate version.\nReview the rendered output before publishing.\nPublish only after the candidate reads clearly.\n\n## A practical code sample")
+    .replace("    return validateAndBuild(source)", "    const result = validateAndBuild(source)\n    return result")
+    .replace("| Preview | Candidate bytes | Rendered draft |", "| Preview | Candidate bytes | Reviewed draft |")
+    .replace("| Publish | Validated build | Atomic output |", "| Publish | Validated build | Safe release |")
+    .replace("Change one thing, preview the result, and publish only when the page is ready.", "Change one thing, review the result, and publish only when the page is ready.");
+  await page.locator('#editor .cm-content').fill(candidate);
+  await page.locator('#diff-mode').click();
+  await page.locator('#diff-editor').waitFor({state: 'visible'});
+  await page.locator('#diff-editor .merge-host').waitFor();
+  await capture(page, 'editor-diff.png', 'Source diff for an unsaved candidate.');
+  await page.evaluate(() => new Promise(resolve => {
+    const request = indexedDB.open('oxpio-editor', 1);
+    request.onsuccess = () => {
+      const db = request.result;
+      const transaction = db.transaction('drafts', 'readwrite');
+      transaction.objectStore('drafts').clear();
+      transaction.oncomplete = () => { db.close(); resolve(); };
+      transaction.onerror = () => { db.close(); resolve(); };
+    };
+    request.onerror = () => resolve();
+  }));
+  await page.close();
+  page = await context.newPage();
+  await page.goto(`${editorOrigin}/_oxpio/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
+  await page.locator('#editor .cm-content').waitFor();
 
   await page.locator('#media').click();
   await page.locator('#media-panel').waitFor({state: 'visible'});
@@ -241,7 +274,7 @@ async function captureEditor(browser) {
   await capture(page, 'editor-media-library.png', 'Media library with uploaded image and insertion controls.');
   await page.locator('#media-close').click();
 
-  await page.goto(`${editorOrigin}/_obsite/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
+  await page.goto(`${editorOrigin}/_oxpio/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
   await page.locator('#editor .cm-content').waitFor();
   await page.locator('#file-new-markdown').click();
   await page.locator('#file-dialog').waitFor({state: 'visible'});
@@ -258,14 +291,14 @@ async function captureEditor(browser) {
   const storageState = await context.storageState();
   const mobile = await browser.newContext({storageState, viewport: {width: 390, height: 844}, colorScheme: 'light'});
   const mobilePage = await mobile.newPage();
-  await mobilePage.goto(`${editorOrigin}/_obsite/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
+  await mobilePage.goto(`${editorOrigin}/_oxpio/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
   await mobilePage.locator('#editor .cm-content').waitFor();
   await capture(mobilePage, 'editor-mobile.png', 'Responsive editor layout on a narrow viewport.', {fullPage: false});
   await mobile.close();
 
   const dark = await browser.newContext({storageState, viewport: {width: 1440, height: 900}, colorScheme: 'dark'});
   const darkPage = await dark.newPage();
-  await darkPage.goto(`${editorOrigin}/_obsite/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
+  await darkPage.goto(`${editorOrigin}/_oxpio/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
   await darkPage.locator('#editor .cm-content').waitFor();
   await capture(darkPage, 'editor-dark.png', 'Editor in system dark mode.', {fullPage: false});
   await dark.close();
@@ -276,7 +309,7 @@ let browser;
 try {
   await fs.rm(outputDir, {recursive: true, force: true});
   await fs.mkdir(outputDir, {recursive: true});
-  execFileSync('go', ['build', '-o', binaryPath, './cmd/obsite'], {cwd: repoRoot, stdio: 'inherit'});
+  execFileSync('go', ['build', '-o', binaryPath, './cmd/oxpio'], {cwd: repoRoot, stdio: 'inherit'});
   staticServer = createServer((req, res) => void serveStatic(req, res));
   const staticPort = await listen(staticServer);
   staticOrigin = `http://127.0.0.1:${staticPort}`;
@@ -289,7 +322,7 @@ try {
   await captureEditor(browser);
   await fs.writeFile(path.join(outputDir, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
   const readme = [
-    '# Obsite UI design captures',
+    '# OXPIO UI design captures',
     '',
     `Generated ${new Date().toISOString()} with Chromium at ${staticOrigin} (public) and ${editorOrigin} (editor).`,
     '',

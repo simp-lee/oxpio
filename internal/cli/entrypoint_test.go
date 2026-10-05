@@ -14,12 +14,12 @@ func TestRealEntrypointDefaultInitBuildAndDiagnostics(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	binaryName := "obsite"
+	binaryName := "oxpio"
 	if runtime.GOOS == "windows" {
 		binaryName += ".exe"
 	}
 	binaryPath := filepath.Join(t.TempDir(), binaryName)
-	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/obsite")
+	build := exec.Command("go", "build", "-o", binaryPath, "./cmd/oxpio")
 	build.Dir = repoRoot
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("go build error = %v\n%s", err, output)
@@ -44,7 +44,7 @@ func TestRealEntrypointDefaultInitBuildAndDiagnostics(t *testing.T) {
 	var versionOutputs []string
 	for _, args := range [][]string{{"version"}, {"--version"}} {
 		output, err := run(args...)
-		if err != nil || !strings.Contains(output, "obsite version=dev ") || !strings.Contains(output, " type=dev\n") {
+		if err != nil || !strings.Contains(output, "oxpio version=dev ") || !strings.Contains(output, " type=dev\n") {
 			t.Fatalf("%v = %v, %q", args, err, output)
 		}
 		versionOutputs = append(versionOutputs, output)

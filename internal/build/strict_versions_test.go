@@ -319,7 +319,7 @@ cover: images/banner.png
 		name    string
 		content string
 	}{
-		{"obsite.yaml", config},
+		{"oxpio.yaml", config},
 		{"_index.md", section("Home", "Home landing")},
 		{"docs/_index.md", section("Docs", "Documentation landing")},
 		{"docs/v1/_index.md", section("Version 1", "Version 1 landing")},

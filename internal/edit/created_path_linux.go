@@ -144,9 +144,9 @@ func removeIdentityPath(filename string, expectedInfo os.FileInfo, expectedHash 
 
 func createRollbackPlaceholder(parent string, isDir bool) (string, error) {
 	if isDir {
-		return os.MkdirTemp(parent, ".obsite-rollback-dir-*")
+		return os.MkdirTemp(parent, ".oxpio-rollback-dir-*")
 	}
-	file, err := os.CreateTemp(parent, ".obsite-rollback-file-*")
+	file, err := os.CreateTemp(parent, ".oxpio-rollback-file-*")
 	if err != nil {
 		return "", err
 	}

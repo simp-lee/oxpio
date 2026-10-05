@@ -2,7 +2,7 @@
 // Copyright 2016 ego authors
 // Copyright 2016 The go-ego Project Developers.
 //
-// Modified by the Obsite authors in 2026 to retain only immutable embedded
+// Modified by the OXPIO authors in 2026 to retain only immutable embedded
 // Chinese dictionary DAG/HMM segmentation.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");

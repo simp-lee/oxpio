@@ -14,8 +14,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 )
 
 const (
@@ -185,7 +185,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, &ConflictError{Path: mutation.path, Expected: mutation.expected, Actual: latest.hash}
 	}
 
-	candidateRoot, err := os.MkdirTemp(filepath.Dir(coordinator.vault), ".obsite-file-candidate-*")
+	candidateRoot, err := os.MkdirTemp(filepath.Dir(coordinator.vault), ".oxpio-file-candidate-*")
 	if err != nil {
 		return TransactionResult{}, fmt.Errorf("create file-operation candidate vault: %w", err)
 	}
@@ -201,7 +201,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, err
 	}
 
-	stageRoot, err := os.MkdirTemp(filepath.Dir(coordinator.output), ".obsite-file-stage-*")
+	stageRoot, err := os.MkdirTemp(filepath.Dir(coordinator.output), ".oxpio-file-stage-*")
 	if err != nil {
 		return TransactionResult{}, fmt.Errorf("create file-operation staging directory: %w", err)
 	}
@@ -576,14 +576,14 @@ func removeCreatedPath(vault, relPath, expectedHash string) error {
 
 func createFileManagerBackup(filename string, isDir bool) (string, error) {
 	if isDir {
-		return os.MkdirTemp(filepath.Dir(filename), ".obsite-rename-backup-*")
+		return os.MkdirTemp(filepath.Dir(filename), ".oxpio-rename-backup-*")
 	}
 	input, err := os.Open(filename)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = input.Close() }()
-	backup, err := os.CreateTemp(filepath.Dir(filename), ".obsite-rename-backup-*")
+	backup, err := os.CreateTemp(filepath.Dir(filename), ".oxpio-rename-backup-*")
 	if err != nil {
 		return "", err
 	}
@@ -615,7 +615,7 @@ func restoreFileManagerBackup(backup, filename string) error {
 
 func createFileNoReplace(filename string, content []byte) error {
 	parent := filepath.Dir(filename)
-	temporary, err := os.CreateTemp(parent, ".obsite-file-*")
+	temporary, err := os.CreateTemp(parent, ".oxpio-file-*")
 	if err != nil {
 		return fmt.Errorf("create file transaction: %w", err)
 	}
@@ -646,7 +646,7 @@ func createFileNoReplace(filename string, content []byte) error {
 }
 
 func movePathForCAS(filename string) (string, error) {
-	temporary, err := os.CreateTemp(filepath.Dir(filename), ".obsite-displaced-*")
+	temporary, err := os.CreateTemp(filepath.Dir(filename), ".oxpio-displaced-*")
 	if err != nil {
 		return "", err
 	}
@@ -812,7 +812,7 @@ func validateManagedBoundary(vault, output, relPath string) error {
 
 func isManagedReservedSegment(segment string) bool {
 	switch strings.ToLower(segment) {
-	case "node_modules", ".git", ".obsidian", ".obsite":
+	case "node_modules", ".git", ".obsidian", ".oxpio":
 		return true
 	default:
 		return false
@@ -831,7 +831,7 @@ func validateManagedRelPath(relPath string) error {
 			return fmt.Errorf("path %q is reserved", relPath)
 		}
 	}
-	if strings.EqualFold(relPath, "obsite.yaml") {
+	if strings.EqualFold(relPath, "oxpio.yaml") {
 		return fmt.Errorf("path %q is reserved", relPath)
 	}
 	return nil

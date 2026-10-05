@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	internalconfig "github.com/simp-lee/obsite/internal/config"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/spf13/cobra"
 )
 
@@ -22,7 +22,7 @@ func newInitCommand() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "init",
-		Short: "Create an obsite.yaml template in a vault directory",
+		Short: "Create an oxpio.yaml template in a vault directory",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			resolvedVault, created, err := prepareInitVault(vaultPath)

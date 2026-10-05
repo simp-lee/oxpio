@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func mustNewCollector(t *testing.T, vaultRoot string, indexed map[string]*model.Asset) *AssetCollector {
@@ -98,7 +98,7 @@ func mergeAssetsIntoTestMap(dst map[string]*model.Asset, src map[string]*model.A
 func TestPlanDataEscapesLiteralPercentTriplets(t *testing.T) {
 	t.Parallel()
 
-	planned := PlanData(".obsite/theme/assets/icon%2Fmark.png", []byte("icon"))
+	planned := PlanData(".oxpio/theme/assets/icon%2Fmark.png", []byte("icon"))
 	if !strings.HasPrefix(planned.DstPath, "assets/icon%252fmark.") {
 		t.Fatalf("PlanData().DstPath = %q, want literal percent escaped for the URL", planned.DstPath)
 	}

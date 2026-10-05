@@ -10,32 +10,32 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/analyze"
-	"github.com/simp-lee/obsite/internal/asset"
+	"github.com/simp-lee/oxpio/internal/analyze"
+	"github.com/simp-lee/oxpio/internal/asset"
 )
 
 func TestStrictBuildRewritesThemeCSSAndInvalidatesDependentURLs(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
-	writeStrictFile(t, vault, ".obsite/theme/theme.css", `@import /* keep */ "styles/nested.css" screen;
+	writeStrictFile(t, vault, ".oxpio/theme/theme.css", `@import /* keep */ "styles/nested.css" screen;
 .logo { background: url("My%20Logo.svg?v=1#mark"); }
 /* url(not-a-resource) */ .label::after { content: "url(not-a-resource)"; }`)
-	writeStrictFile(t, vault, ".obsite/theme/assets/styles/nested.css", `@font-face { src: url('../fonts/site.woff2') format('woff2'); }
+	writeStrictFile(t, vault, ".oxpio/theme/assets/styles/nested.css", `@font-face { src: url('../fonts/site.woff2') format('woff2'); }
 .logo { background-image: image-set("../My Logo.svg" 1x, url(../My\ Logo.svg) 2x); }
 .external { background: url(https://example.test/remote.png); mask: url(#local); }`)
-	writeStrictFile(t, vault, ".obsite/theme/assets/fonts/site.woff2", "font bytes")
-	writeStrictFile(t, vault, ".obsite/theme/assets/My Logo.svg", `<svg xmlns="http://www.w3.org/2000/svg"><path id="mark"/></svg>`)
-	writeStrictFile(t, vault, ".obsite/theme/slots.html", `{{define "obsite-head-end"}}<link rel="stylesheet" href="{{themeAssetURL .SiteRootRel "styles/nested.css"}}">{{end}}`)
+	writeStrictFile(t, vault, ".oxpio/theme/assets/fonts/site.woff2", "font bytes")
+	writeStrictFile(t, vault, ".oxpio/theme/assets/My Logo.svg", `<svg xmlns="http://www.w3.org/2000/svg"><path id="mark"/></svg>`)
+	writeStrictFile(t, vault, ".oxpio/theme/slots.html", `{{define "oxpio-head-end"}}<link rel="stylesheet" href="{{themeAssetURL .SiteRootRel "styles/nested.css"}}">{{end}}`)
 	output := filepath.Join(t.TempDir(), "site")
 	first, err := BuildWithOptions(vault, output, Options{Strict: true})
 	if err != nil {
 		t.Fatal(err)
 	}
-	css := first.Assets[".obsite/theme/theme.css"]
-	nested := first.Assets[".obsite/theme/assets/styles/nested.css"]
-	logo := first.Assets[".obsite/theme/assets/My Logo.svg"]
-	font := first.Assets[".obsite/theme/assets/fonts/site.woff2"]
+	css := first.Assets[".oxpio/theme/theme.css"]
+	nested := first.Assets[".oxpio/theme/assets/styles/nested.css"]
+	logo := first.Assets[".oxpio/theme/assets/My Logo.svg"]
+	font := first.Assets[".oxpio/theme/assets/fonts/site.woff2"]
 	if !strings.HasSuffix(css.DstPath, ".css") || !strings.HasSuffix(logo.DstPath, ".svg") {
 		t.Fatalf("theme destinations lost source extensions: CSS=%q logo=%q", css.DstPath, logo.DstPath)
 	}
@@ -80,7 +80,7 @@ func TestStrictBuildRewritesThemeCSSAndInvalidatesDependentURLs(t *testing.T) {
 	}
 	compareStrictOutputBytes(t, firstBytes, strictOutputBytes(t, output))
 	compareStrictURLValues(t, firstURLs, strictOutputURLs(again))
-	writeStrictFile(t, vault, ".obsite/theme/assets/My Logo.svg", `<svg xmlns="http://www.w3.org/2000/svg"><circle id="mark"/></svg>`)
+	writeStrictFile(t, vault, ".oxpio/theme/assets/My Logo.svg", `<svg xmlns="http://www.w3.org/2000/svg"><circle id="mark"/></svg>`)
 	changed, err := BuildWithOptions(vault, output, Options{Strict: true})
 	if err != nil {
 		t.Fatal(err)
@@ -100,9 +100,9 @@ func TestStrictBuildRewritesThemeCSSAndInvalidatesDependentURLs(t *testing.T) {
 
 func TestStrictBuildPlansThemeCSSVaultRootResources(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
-	writeStrictFile(t, vault, ".obsite/theme/theme.css", `@import "/styles/vault.css";
+	writeStrictFile(t, vault, ".oxpio/theme/theme.css", `@import "/styles/vault.css";
 .hero { background: url("/images/hero.bin?v=1#mark"); }
 .external { background: url("//cdn.example.test/image.png"); }`)
 	writeStrictFile(t, vault, "styles/vault.css", `.font { src: url("../fonts/site.woff2"); }`)
@@ -122,7 +122,7 @@ func TestStrictBuildPlansThemeCSSVaultRootResources(t *testing.T) {
 		readBuildOutputFile(t, output, planned.DstPath)
 	}
 
-	rootCSS := string(readBuildOutputFile(t, output, result.Assets[".obsite/theme/theme.css"].DstPath))
+	rootCSS := string(readBuildOutputFile(t, output, result.Assets[".oxpio/theme/theme.css"].DstPath))
 	for _, want := range []string{
 		path.Base(result.Assets["styles/vault.css"].DstPath),
 		path.Base(result.Assets["images/hero.bin"].DstPath) + "?v=1#mark",
@@ -143,14 +143,14 @@ func TestStrictBuildPlansThemeCSSVaultRootResources(t *testing.T) {
 
 func TestStrictThemeSlotLiteralsMayReferenceExactPlannedOutputs(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
-	const source = ".obsite/theme/assets/logo.bin"
+	const source = ".oxpio/theme/assets/logo.bin"
 	data := []byte("logo bytes")
 	writeStrictFile(t, vault, source, string(data))
 	planned := asset.PlanData(source, data)
 	resourceURL := "/docs/" + planned.DstPath + "?v=1#logo"
-	writeStrictFile(t, vault, ".obsite/theme/slots.html", fmt.Sprintf(`{{define "obsite-footer-end"}}<img src=%q><img src="https://cdn.example.test/logo.png">{{end}}`, resourceURL))
+	writeStrictFile(t, vault, ".oxpio/theme/slots.html", fmt.Sprintf(`{{define "oxpio-footer-end"}}<img src=%q><img src="https://cdn.example.test/logo.png">{{end}}`, resourceURL))
 
 	output := filepath.Join(t.TempDir(), "site")
 	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
@@ -163,9 +163,9 @@ func TestStrictThemeSlotLiteralsMayReferenceExactPlannedOutputs(t *testing.T) {
 
 func TestStrictThemeSlotsMayReferenceBuiltInStyleCSS(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
-	writeStrictFile(t, vault, ".obsite/theme/slots.html", `{{define "obsite-head-end"}}<link rel="preload" href="./style.css" as="style">{{end}}`)
+	writeStrictFile(t, vault, ".oxpio/theme/slots.html", `{{define "oxpio-head-end"}}<link rel="preload" href="./style.css" as="style">{{end}}`)
 
 	output := filepath.Join(t.TempDir(), "site")
 	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
@@ -180,11 +180,11 @@ func TestStrictThemeFailuresHaveSharedReadOnlyDiagnostics(t *testing.T) {
 	for _, test := range []struct {
 		name, slots, css, want string
 	}{
-		{name: "missing slot resource", slots: `{{define "obsite-footer-end"}}<img src="{{themeAssetURL .SiteRootRel "missing.svg"}}">{{end}}`, want: "missing.svg"},
-		{name: "conditional slot resource", slots: `{{define "obsite-footer-end"}}{{if eq .RelPath "/guide/"}}<img src="{{themeAssetURL .SiteRootRel "missing.svg"}}">{{end}}{{end}}`, want: "missing.svg"},
-		{name: "literal slot resource", slots: `{{define "obsite-footer-end"}}<img src="/logo.png">{{end}}`, want: "themeAssetURL"},
-		{name: "conditional literal slot resource", slots: `{{define "obsite-footer-end"}}{{if eq .RelPath "/guide/"}}<img srcset="/logo.png 1x, https://cdn.example.test/logo.png 2x">{{end}}{{end}}`, want: "themeAssetURL"},
-		{name: "literal slot attachment", slots: `{{define "obsite-footer-end"}}<a href="/manual.pdf">Manual</a>{{end}}`, want: "themeAssetURL"},
+		{name: "missing slot resource", slots: `{{define "oxpio-footer-end"}}<img src="{{themeAssetURL .SiteRootRel "missing.svg"}}">{{end}}`, want: "missing.svg"},
+		{name: "conditional slot resource", slots: `{{define "oxpio-footer-end"}}{{if eq .RelPath "/guide/"}}<img src="{{themeAssetURL .SiteRootRel "missing.svg"}}">{{end}}{{end}}`, want: "missing.svg"},
+		{name: "literal slot resource", slots: `{{define "oxpio-footer-end"}}<img src="/logo.png">{{end}}`, want: "themeAssetURL"},
+		{name: "conditional literal slot resource", slots: `{{define "oxpio-footer-end"}}{{if eq .RelPath "/guide/"}}<img srcset="/logo.png 1x, https://cdn.example.test/logo.png 2x">{{end}}{{end}}`, want: "themeAssetURL"},
+		{name: "literal slot attachment", slots: `{{define "oxpio-footer-end"}}<a href="/manual.pdf">Manual</a>{{end}}`, want: "themeAssetURL"},
 		{name: "missing CSS resource", css: `.logo { background: url(missing.svg); }`, want: "missing.svg"},
 		{name: "missing root CSS resource", css: `.logo { background: url("/images/missing.svg"); }`, want: "/images/missing.svg"},
 		{name: "escaping root CSS resource", css: `.logo { background: url("/../outside.svg"); }`, want: "escapes the vault"},
@@ -192,13 +192,13 @@ func TestStrictThemeFailuresHaveSharedReadOnlyDiagnostics(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			vault := t.TempDir()
-			writeStrictFile(t, vault, "obsite.yaml", "title: Theme\nbaseURL: https://example.test/\nnavigation: []\n")
+			writeStrictFile(t, vault, "oxpio.yaml", "title: Theme\nbaseURL: https://example.test/\nnavigation: []\n")
 			writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 			writeStrictFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\nGuide\n")
 			writeStrictFile(t, vault, "logo.png", "unplanned logo")
 			writeStrictFile(t, vault, "manual.pdf", "unplanned manual")
-			writeStrictFile(t, vault, ".obsite/theme/slots.html", test.slots)
-			writeStrictFile(t, vault, ".obsite/theme/theme.css", test.css)
+			writeStrictFile(t, vault, ".oxpio/theme/slots.html", test.slots)
+			writeStrictFile(t, vault, ".oxpio/theme/theme.css", test.css)
 			output := filepath.Join(t.TempDir(), "site")
 			writeStrictFile(t, output, managedOutputMarkerFilename, managedOutputMarkerContents)
 			writeStrictFile(t, output, "index.html", "previous site")
@@ -221,7 +221,7 @@ func TestStrictBuildPlansThemeAssets(t *testing.T) {
 	for _, sameContent := range []bool{false, true} {
 		t.Run(fmt.Sprintf("same-content=%t", sameContent), func(t *testing.T) {
 			vault := t.TempDir()
-			writeStrictFile(t, vault, "obsite.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
+			writeStrictFile(t, vault, "oxpio.yaml", "title: Theme\nbaseURL: https://example.test/docs/\nnavigation: []\n")
 			writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 			writeStrictFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\n![shared](../images/café.txt)\n")
 			first, second := "first asset", "second asset"
@@ -229,16 +229,16 @@ func TestStrictBuildPlansThemeAssets(t *testing.T) {
 				second = first
 			}
 			sources := map[string]string{
-				".obsite/theme/assets/café.txt":       first,
-				".obsite/theme/assets/cafe\u0301.txt": second,
-				".obsite/theme/theme.css":             ":root { color: red; }",
-				".obsite/theme/assets/theme.css":      ":root { color: blue; }",
+				".oxpio/theme/assets/café.txt":       first,
+				".oxpio/theme/assets/cafe\u0301.txt": second,
+				".oxpio/theme/theme.css":             ":root { color: red; }",
+				".oxpio/theme/assets/theme.css":      ":root { color: blue; }",
 				"images/café.txt":                     first,
 			}
 			for source, data := range sources {
 				writeStrictFile(t, vault, source, data)
 			}
-			writeStrictFile(t, vault, ".obsite/theme/slots.html", `{{define "obsite-footer-end"}}<a href="{{themeAssetURL .SiteRootRel "café.txt"}}">first</a><a href="{{themeAssetURL .SiteRootRel "café.txt"}}">second</a>{{end}}`)
+			writeStrictFile(t, vault, ".oxpio/theme/slots.html", `{{define "oxpio-footer-end"}}<a href="{{themeAssetURL .SiteRootRel "café.txt"}}">first</a><a href="{{themeAssetURL .SiteRootRel "café.txt"}}">second</a>{{end}}`)
 			output := filepath.Join(t.TempDir(), "site")
 			if result, err := analyze.AnalyzeWithOutput(vault, output); err != nil || len(result.Diagnostics) != 0 {
 				t.Fatalf("analyze: %v; diagnostics=%v", err, result.Diagnostics)
@@ -262,17 +262,17 @@ func TestStrictBuildPlansThemeAssets(t *testing.T) {
 					t.Fatalf("asset %q = %q, want %q", source, got, data)
 				}
 			}
-			if result.Assets["images/café.txt"].DstPath != result.Assets[".obsite/theme/assets/café.txt"].DstPath {
+			if result.Assets["images/café.txt"].DstPath != result.Assets[".oxpio/theme/assets/café.txt"].DstPath {
 				t.Fatal("theme and Markdown assets did not share allocation/deduplication")
 			}
 			for page, prefix := range map[string]string{"index.html": "./", "guide/index.html": "../"} {
 				html := string(readBuildOutputFile(t, output, page))
-				for _, source := range []string{".obsite/theme/assets/café.txt", ".obsite/theme/assets/cafe\u0301.txt"} {
+				for _, source := range []string{".oxpio/theme/assets/café.txt", ".oxpio/theme/assets/cafe\u0301.txt"} {
 					if !strings.Contains(html, prefix+result.Assets[source].DstPath) {
 						t.Fatalf("%s missing planned slot URL for %s", page, source)
 					}
 				}
-				if !strings.Contains(html, "/docs/"+result.Assets[".obsite/theme/theme.css"].DstPath) {
+				if !strings.Contains(html, "/docs/"+result.Assets[".oxpio/theme/theme.css"].DstPath) {
 					t.Fatalf("%s missing planned theme CSS URL", page)
 				}
 			}

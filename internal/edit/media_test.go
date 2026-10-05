@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalconfig "github.com/simp-lee/obsite/internal/config"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
 )
 
 func TestMediaUploadUsesSelectedExistingFolderAndOneFileCAS(t *testing.T) {
@@ -23,7 +23,7 @@ func TestMediaUploadUsesSelectedExistingFolderAndOneFileCAS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "docs/_index.md", "---\ntitle: Docs\npublish: true\n---\nDocs\n")
 	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
@@ -59,11 +59,11 @@ func TestMediaUploadUsesSelectedExistingFolderAndOneFileCAS(t *testing.T) {
 		if err := writer.Close(); err != nil {
 			t.Fatal(err)
 		}
-		r := httptest.NewRequest(http.MethodPost, "http://example.test/_obsite/media", &body)
+		r := httptest.NewRequest(http.MethodPost, "http://example.test/_oxpio/media", &body)
 		r.Header.Set("Content-Type", writer.FormDataContentType())
 		r.Header.Set("Origin", "http://example.test")
 		r.Header.Set(csrfHeaderName, "csrf")
-		r.Header.Set("X-Obsite-File-Hash", AbsentSourceHash)
+		r.Header.Set("X-OXPIO-File-Hash", AbsentSourceHash)
 		r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "session"})
 		response := httptest.NewRecorder()
 		server.ServeHTTP(response, r)

@@ -11,10 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/markdown"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/branding"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/markdown"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/slug"
 	xhtml "golang.org/x/net/html"
 	"golang.org/x/net/html/atom"
 	"golang.org/x/text/unicode/norm"
@@ -259,7 +260,7 @@ func annotateStrictPopovers(content string, article *model.Note, index *model.Va
 	if plan != nil {
 		basePath = strictBasePath(plan)
 	}
-	base, _ := url.Parse("https://obsite.invalid" + strings.TrimSuffix(basePath, "/") + article.Route)
+	base, _ := url.Parse("https://oxpio.invalid" + strings.TrimSuffix(basePath, "/") + article.Route)
 	type replacement struct {
 		start, end int
 		value      []byte
@@ -433,21 +434,21 @@ func strictDocument(plan *model.SitePlan, currentRoute, title, description strin
 		return nil, err
 	}
 	var output strings.Builder
-	rootAttrs := `data-obsite-base-path="` + esc(strictBasePath(plan)) + `" data-obsite-kind="strict"`
+	rootAttrs := `data-oxpio-base-path="` + esc(strictBasePath(plan)) + `" data-oxpio-kind="strict"`
 	if plan.Config.Sidebar.Enabled && len(sidebarNodes) > 0 {
-		rootAttrs += ` data-obsite-sidebar`
+		rootAttrs += ` data-oxpio-sidebar`
 	}
 	if versionID != "" {
-		rootAttrs += ` data-obsite-version="` + esc(versionID) + `"`
+		rootAttrs += ` data-oxpio-version="` + esc(versionID) + `"`
 	}
 	if plan.Config.Popover.Enabled {
-		rootAttrs += ` data-obsite-popover`
+		rootAttrs += ` data-oxpio-popover`
 	}
-	if strings.Contains(body, "data-obsite-math-source") {
-		rootAttrs += ` data-obsite-math`
+	if strings.Contains(body, "data-oxpio-math-source") {
+		rootAttrs += ` data-oxpio-math`
 	}
 	if strings.Contains(body, `class="mermaid"`) {
-		rootAttrs += ` data-obsite-mermaid`
+		rootAttrs += ` data-oxpio-mermaid`
 	}
 	_, _ = fmt.Fprintf(&output, `<!doctype html><html lang="%s" %s><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>%s | %s</title>`, esc(plan.Config.Language), rootAttrs, esc(title), esc(plan.Config.Title))
 	if description != "" {
@@ -535,11 +536,11 @@ func strictDocument(plan *model.SitePlan, currentRoute, title, description strin
 	if plan.Config.ThemeCSS != "" {
 		_, _ = fmt.Fprintf(&output, `<link rel="stylesheet" href="%s">`, esc(strictSitePath(plan, "/"+plan.Config.ThemeCSS)))
 	}
-	if strings.Contains(body, "data-obsite-math-source") {
+	if strings.Contains(body, "data-oxpio-math-source") {
 		_, _ = fmt.Fprintf(&output, `<link rel="stylesheet" href="%s">`, esc(strictSitePath(plan, "/"+katexCSSOutputPath)))
 	}
-	output.WriteString(slots["obsite-head-end"])
-	output.WriteString(`</head><body class="site-body" data-site-body><div class="site-frame"><header class="site-masthead site-header"><div class="masthead-band"><a class="site-mark site-title" href="` + esc(strictSitePath(plan, "/")) + `">` + esc(plan.Config.Title) + `</a></div><div class="masthead-copy"><div class="masthead-actions"><button type="button" class="theme-toggle" data-theme-toggle hidden aria-pressed="false"><span class="theme-toggle-caption">Theme</span><span class="theme-toggle-value" data-theme-toggle-value></span><span data-theme-toggle-state class="sr-only"></span><span data-theme-toggle-source class="sr-only"></span></button></div><nav aria-label="Global navigation">`)
+	output.WriteString(slots["oxpio-head-end"])
+	output.WriteString(`</head><body class="site-body" data-site-body><div class="site-frame"><header class="site-masthead site-header"><div class="masthead-band"><a class="site-mark site-title" href="` + esc(strictSitePath(plan, "/")) + `" aria-label="` + esc(plan.Config.Title) + `"><img class="site-logo" src="` + esc(strictSitePath(plan, "/"+LogoOutputPath())) + `" alt="` + esc(branding.Name) + `"><span class="site-title-text">` + esc(plan.Config.Title) + `</span></a></div><div class="masthead-copy"><div class="masthead-actions"><button type="button" class="theme-toggle" data-theme-toggle hidden aria-pressed="false"><span class="theme-toggle-caption">Theme</span><span class="theme-toggle-value" data-theme-toggle-value></span><span data-theme-toggle-state class="sr-only"></span><span data-theme-toggle-source class="sr-only"></span></button></div><nav aria-label="Global navigation">`)
 	for _, item := range plan.Config.Navigation {
 		href, active := item.URL, false
 		ariaValue := ""
@@ -571,8 +572,8 @@ func strictDocument(plan *model.SitePlan, currentRoute, title, description strin
 		_, _ = fmt.Fprintf(&output, `<a href="%s"%s>%s</a>`, esc(href), aria, esc(item.Name))
 	}
 	output.WriteString(`</nav></div>`)
-	output.WriteString(slots["obsite-header-end"])
-	output.WriteString(`</header><main class="site-main" data-obsite-main>`)
+	output.WriteString(slots["oxpio-header-end"])
+	output.WriteString(`</header><main class="site-main" data-oxpio-main>`)
 	if plan.Config.Sidebar.Enabled && len(sidebarNodes) > 0 {
 		output.WriteString(`<button type="button" class="sidebar-toggle-mobile sidebar-launch" data-sidebar-toggle hidden aria-expanded="false"><span class="sidebar-launch-icon" aria-hidden="true"></span>Open navigation</button><aside class="sidebar-shell" data-sidebar-shell><div class="sidebar-panel-head"><strong>Navigation</strong><button type="button" class="sidebar-close" data-sidebar-close>Close navigation</button></div><nav class="sidebar" aria-label="Sidebar" data-sidebar-root>`)
 		// Render the complete current-version tree so the Sidebar remains usable
@@ -616,11 +617,11 @@ func strictDocument(plan *model.SitePlan, currentRoute, title, description strin
 		output.WriteString(`</nav>`)
 	}
 	if plan.Config.Popover.Enabled {
-		output.WriteString(`<div id="obsite-popover-card" class="popover-card" data-popover-card hidden aria-hidden="true"></div>`)
+		output.WriteString(`<div id="oxpio-popover-card" class="popover-card" data-popover-card hidden aria-hidden="true"></div>`)
 	}
-	output.WriteString(slots["obsite-main-end"])
-	output.WriteString(`</div></main><footer class="site-footer"><small>Generated by Obsite</small>`)
-	output.WriteString(slots["obsite-footer-end"])
+	output.WriteString(slots["oxpio-main-end"])
+	output.WriteString(`</div></main><footer class="site-footer"><small>Generated by OXPIO</small>`)
+	output.WriteString(slots["oxpio-footer-end"])
 	output.WriteString(`</footer></div></body></html>`)
 	return []byte(output.String()), nil
 }

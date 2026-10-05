@@ -93,13 +93,13 @@ func TestNewDefaultsZeroPortToDefaultPort(t *testing.T) {
 func TestServerKeepsReservedEditControlUnavailable(t *testing.T) {
 	outputPath := t.TempDir()
 	writeServerTestFile(t, outputPath, "index.html", "home")
-	writeServerTestFile(t, outputPath, "_obsite/login/index.html", "must not be served")
+	writeServerTestFile(t, outputPath, "_oxpio/login/index.html", "must not be served")
 
 	srv, err := New(outputPath, DefaultPort)
 	if err != nil {
 		t.Fatal(err)
 	}
-	request := httptest.NewRequest(http.MethodGet, "/_obsite/login/", nil)
+	request := httptest.NewRequest(http.MethodGet, "/_oxpio/login/", nil)
 	recorder := httptest.NewRecorder()
 	srv.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusNotFound {
@@ -692,7 +692,7 @@ func TestServerWatchModePreservesLiveReloadNamedFolderPage(t *testing.T) {
 	if !strings.Contains(pageBody, "live reload folder page") {
 		t.Fatalf("GET /_livereload/ body = %q, want folder page content", pageBody)
 	}
-	if !strings.Contains(pageBody, "data-obsite-livereload") {
+	if !strings.Contains(pageBody, "data-oxpio-livereload") {
 		t.Fatalf("GET /_livereload/ body = %q, want live reload script injection", pageBody)
 	}
 
@@ -753,7 +753,7 @@ func TestServerWatchModeInjectsLiveReloadInto404Fallback(t *testing.T) {
 	if !strings.Contains(body, "custom missing page") {
 		t.Fatalf("GET /missing/path body = %q, want original 404 content", body)
 	}
-	if got := strings.Count(body, `<script data-obsite-livereload>`); got != 1 {
+	if got := strings.Count(body, `<script data-oxpio-livereload>`); got != 1 {
 		t.Fatalf("GET /missing/path live reload script count = %d, want %d", got, 1)
 	}
 	if got := strings.Count(strings.ToLower(body), "<base"); got != 1 {
@@ -801,7 +801,7 @@ func TestServerStaticModeDoesNotInjectLiveReloadOrExposeEndpoint(t *testing.T) {
 	defer closeServerResponseBody(t, htmlResp)
 
 	htmlBody := readServerResponseBody(t, htmlResp)
-	if strings.Contains(htmlBody, "data-obsite-livereload") {
+	if strings.Contains(htmlBody, "data-oxpio-livereload") {
 		t.Fatalf("GET /alpha/ body = %q, do not want livereload injection in static mode", htmlBody)
 	}
 
@@ -843,7 +843,7 @@ func TestServerInjectsLiveReloadScriptIntoHTMLResponsesOnly(t *testing.T) {
 	defer closeServerResponseBody(t, htmlResp)
 
 	htmlBody := readServerResponseBody(t, htmlResp)
-	if !strings.Contains(htmlBody, "data-obsite-livereload") {
+	if !strings.Contains(htmlBody, "data-oxpio-livereload") {
 		t.Fatalf("GET /alpha/ body = %q, want livereload script injection", htmlBody)
 	}
 	if acceptRanges := htmlResp.Header.Get("Accept-Ranges"); acceptRanges != "" {
@@ -859,7 +859,7 @@ func TestServerInjectsLiveReloadScriptIntoHTMLResponsesOnly(t *testing.T) {
 	if err != nil {
 		t.Fatalf("os.ReadFile(index.html) error = %v", err)
 	}
-	if strings.Contains(string(onDiskHTML), "data-obsite-livereload") {
+	if strings.Contains(string(onDiskHTML), "data-oxpio-livereload") {
 		t.Fatalf("served file on disk = %q, do not want injected livereload script persisted", string(onDiskHTML))
 	}
 
@@ -886,7 +886,7 @@ func TestServerInjectsLiveReloadScriptIntoHTMLResponsesOnly(t *testing.T) {
 	defer closeServerResponseBody(t, cssResp)
 
 	cssBody := readServerResponseBody(t, cssResp)
-	if strings.Contains(cssBody, "data-obsite-livereload") {
+	if strings.Contains(cssBody, "data-oxpio-livereload") {
 		t.Fatalf("GET /style.css body = %q, do not want livereload script in non-HTML response", cssBody)
 	}
 }
@@ -919,7 +919,7 @@ func TestServerWatchModeKeepsInjectedHTMLHeadAndGetHeadersAligned(t *testing.T) 
 	if !strings.Contains(getBody, "alpha page") {
 		t.Fatalf("GET /alpha/ body = %q, want original page content", getBody)
 	}
-	if !strings.Contains(getBody, "data-obsite-livereload") {
+	if !strings.Contains(getBody, "data-oxpio-livereload") {
 		t.Fatalf("GET /alpha/ body = %q, want live reload injection", getBody)
 	}
 	if got := getResp.Header.Get("Accept-Ranges"); got != "" {
@@ -970,7 +970,7 @@ func TestServerWatchModeKeepsCustom404HeadAndGetHeadersAligned(t *testing.T) {
 	if !strings.Contains(getBody, "custom missing page") {
 		t.Fatalf("GET /missing/path body = %q, want custom 404 content", getBody)
 	}
-	if !strings.Contains(getBody, "data-obsite-livereload") {
+	if !strings.Contains(getBody, "data-oxpio-livereload") {
 		t.Fatalf("GET /missing/path body = %q, want live reload injection", getBody)
 	}
 
@@ -991,7 +991,7 @@ func TestServerInjectsLiveReloadScriptWhenPageMentionsMarkerText(t *testing.T) {
 	t.Parallel()
 
 	outputPath := t.TempDir()
-	writeServerTestFile(t, outputPath, "alpha/index.html", `<html><body><p>Example marker: data-obsite-livereload</p></body></html>`)
+	writeServerTestFile(t, outputPath, "alpha/index.html", `<html><body><p>Example marker: data-oxpio-livereload</p></body></html>`)
 
 	srv, err := New(outputPath, DefaultPort)
 	if err != nil {
@@ -1009,13 +1009,13 @@ func TestServerInjectsLiveReloadScriptWhenPageMentionsMarkerText(t *testing.T) {
 	defer closeServerResponseBody(t, resp)
 
 	body := readServerResponseBody(t, resp)
-	if !strings.Contains(body, `<p>Example marker: data-obsite-livereload</p>`) {
+	if !strings.Contains(body, `<p>Example marker: data-oxpio-livereload</p>`) {
 		t.Fatalf("GET /alpha/ body = %q, want original marker text preserved", body)
 	}
-	if !strings.Contains(body, `<script data-obsite-livereload>`) {
+	if !strings.Contains(body, `<script data-oxpio-livereload>`) {
 		t.Fatalf("GET /alpha/ body = %q, want injected live-reload script", body)
 	}
-	if got := strings.Count(body, "data-obsite-livereload"); got != 2 {
+	if got := strings.Count(body, "data-oxpio-livereload"); got != 2 {
 		t.Fatalf("GET /alpha/ marker occurrence count = %d, want %d after preserving text and injecting script", got, 2)
 	}
 }
@@ -1100,7 +1100,7 @@ func TestServerRangeRequestsBypassHTMLInjection(t *testing.T) {
 	}
 
 	body := readServerResponseBody(t, resp)
-	if strings.Contains(body, "data-obsite-livereload") {
+	if strings.Contains(body, "data-oxpio-livereload") {
 		t.Fatalf("range GET /alpha/index.html body = %q, do not want livereload script injection", body)
 	}
 	if body != html[:16] {
@@ -1184,7 +1184,7 @@ func TestServerServesGeneratedBasePath(t *testing.T) {
 	t.Parallel()
 
 	outputPath := t.TempDir()
-	writeServerTestFile(t, outputPath, "index.html", `<html data-obsite-base-path="/docs/"><body>home</body></html>`)
+	writeServerTestFile(t, outputPath, "index.html", `<html data-oxpio-base-path="/docs/"><body>home</body></html>`)
 	writeServerTestFile(t, outputPath, "style.css", "body{}")
 
 	srv, err := New(outputPath, DefaultPort)
@@ -1211,7 +1211,7 @@ func TestServerServesHTMLEntityDecodedBasePath(t *testing.T) {
 	t.Parallel()
 
 	outputPath := t.TempDir()
-	writeServerTestFile(t, outputPath, "index.html", `<html data-obsite-base-path="/a&amp;b/"><body>home</body></html>`)
+	writeServerTestFile(t, outputPath, "index.html", `<html data-oxpio-base-path="/a&amp;b/"><body>home</body></html>`)
 	writeServerTestFile(t, outputPath, "style.css", "body{}")
 
 	srv, err := New(outputPath, DefaultPort)

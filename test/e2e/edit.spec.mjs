@@ -43,7 +43,7 @@ function shellQuote(value) {
 }
 
 async function login(page) {
-  await page.goto(`${origin}/_obsite/login`);
+  await page.goto(`${origin}/_oxpio/login`);
   await page.locator('input[name="username"]').fill('admin');
   await page.locator('input[name="password"]').fill('secret');
   await page.getByRole('button', {name: 'Log in'}).click();
@@ -51,25 +51,25 @@ async function login(page) {
 }
 
 async function session(context) {
-  const response = await context.request.get(`${origin}/_obsite/session`);
+  const response = await context.request.get(`${origin}/_oxpio/session`);
   expect(response.status()).toBe(200);
   return response.json();
 }
 
 async function source(context, relPath) {
-  const response = await context.request.get(`${origin}/_obsite/source?path=${encodeURIComponent(relPath)}`);
+  const response = await context.request.get(`${origin}/_oxpio/source?path=${encodeURIComponent(relPath)}`);
   return {
     response,
     body: await response.text(),
-    hash: response.headers()['x-obsite-source-hash'] || ''
+    hash: response.headers()['x-oxpio-source-hash'] || ''
   };
 }
 
 async function mutate(context, method, url, csrf, hash, data, contentType = '') {
   const headers = {
     Origin: origin,
-    'X-Obsite-CSRF': csrf,
-    'X-Obsite-Source-Hash': hash
+    'X-OXPIO-CSRF': csrf,
+    'X-OXPIO-Source-Hash': hash
   };
   if (contentType) headers['Content-Type'] = contentType;
   return context.request.fetch(`${origin}${url}`, {method, headers, data});
@@ -78,7 +78,7 @@ async function mutate(context, method, url, csrf, hash, data, contentType = '') 
 async function startConfiguredEditor() {
   vault = path.join(tempRoot, 'vault');
   await fs.mkdir(vault);
-  await fs.writeFile(path.join(vault, 'obsite.yaml'), `title: Edit E2E\nbaseURL: http://127.0.0.1/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: ${passwordHash}\n`);
+  await fs.writeFile(path.join(vault, 'oxpio.yaml'), `title: Edit E2E\nbaseURL: http://127.0.0.1/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: ${passwordHash}\n`);
   await fs.writeFile(path.join(vault, '_index.md'), '---\ntitle: Home\npublish: true\n---\nHome\n');
   await fs.writeFile(path.join(vault, 'guide.md'), '---\ntitle: Guide\npublish: true\ntype: doc\n---\nGuide\n');
   await fs.mkdir(path.join(vault, 'section'));
@@ -87,17 +87,17 @@ async function startConfiguredEditor() {
   await fs.writeFile(path.join(vault, 'draft.md'), '---\ntitle: Draft\npublish: false\ntype: doc\n---\nPrivate\n\n$E = mc^2$\n\n```mermaid\ngraph TD\nA-->B\n```\n');
   const port = await freePort();
   origin = `http://127.0.0.1:${port}`;
-  const configPath = path.join(vault, 'obsite.yaml');
+  const configPath = path.join(vault, 'oxpio.yaml');
   const config = (await fs.readFile(configPath, 'utf8')).replace('http://127.0.0.1/', `${origin}/`);
   await fs.writeFile(configPath, config);
   child = spawn(binaryPath, ['edit', '--vault', vault, '--port', String(port)], {cwd: repoRoot, stdio: 'ignore'});
-  await waitForHTTP(`${origin}/_obsite/login`);
+  await waitForHTTP(`${origin}/_oxpio/login`);
 }
 
 test.beforeEach(async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'obsite-edit-e2e-'));
-  binaryPath = path.join(tempRoot, process.platform === 'win32' ? 'obsite.exe' : 'obsite');
-  execFileSync('go', ['build', '-o', binaryPath, './cmd/obsite'], {cwd: repoRoot});
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'oxpio-edit-e2e-'));
+  binaryPath = path.join(tempRoot, process.platform === 'win32' ? 'oxpio.exe' : 'oxpio');
+  execFileSync('go', ['build', '-o', binaryPath, './cmd/oxpio'], {cwd: repoRoot});
   await startConfiguredEditor();
 });
 
@@ -119,7 +119,7 @@ test('anonymous public pages remain usable without JavaScript or external networ
   await expect(page.locator('body')).toContainText('Original');
   await expect(page.locator('.edit-page-link')).toHaveCount(0);
   expect(blocked).toEqual([]);
-  const sourceResponse = await context.request.get(`${origin}/_obsite/source?path=article.md`);
+  const sourceResponse = await context.request.get(`${origin}/_oxpio/source?path=article.md`);
   expect(sourceResponse.status()).toBe(401);
   await context.close();
 });
@@ -140,9 +140,9 @@ test('authenticated catalog maps articles, sections, drafts, and preserves full 
   await expect(page.locator('.edit-page-link')).toHaveAttribute('href', /path=article\.md/);
   await page.goto(`${origin}/section/`);
   await expect(page.locator('.edit-page-link')).toHaveAttribute('href', /path=section%2F_index\.md/);
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   await expect(page.locator('#editor .cm-content')).toContainText('Original');
-  await page.locator('#mode').click();
+  await page.locator('#source-mode').click();
   await expect(page.locator('#editor .cm-content')).toContainText('preserve this comment');
   const unchanged = await fs.readFile(path.join(vault, 'article.md'), 'utf8');
   await page.getByRole('button', {name: 'Save'}).click();
@@ -167,16 +167,22 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   const context = await browser.newContext();
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=section/_index.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=section/_index.md`);
   await expect(page.locator('#editor .cm-content')).toBeVisible();
   await expect(page.locator('.metadata-advanced')).toBeHidden();
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   const originalSource = (await source(context, 'article.md')).body;
   const closingDelimiter = originalSource.indexOf('\n---\n');
   const originalFrontmatter = originalSource.slice(0, closingDelimiter + '\n---\n'.length);
 
-  await expect(page.locator('#preview-empty')).toBeVisible();
-  await page.locator('#preview').click();
+  await expect(page.locator('.preview-pane')).toBeHidden();
+  await expect(page.locator('#sync-scroll')).toHaveCount(0);
+  await expect(page.locator('#preview-frame')).toBeHidden();
+  await page.locator('#metadata-toggle').click();
+  await expect(page.locator('#metadata-fields')).toBeHidden();
+  await page.locator('#metadata-toggle').click();
+  await expect(page.locator('#metadata-fields')).toBeVisible();
+  await page.locator('#read-mode').click();
   await expect(page.locator('#preview-frame')).toBeVisible();
   await expect(page.locator('#preview-empty')).toBeHidden();
   const preview = page.frameLocator('#preview-frame');
@@ -194,7 +200,7 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   await expect(page.locator('#new-dialog')).toBeVisible();
   await page.locator('#new-dialog').evaluate(dialog => dialog.close());
 
-  await page.locator('#mode').click();
+  await page.locator('#source-mode').click();
   await page.locator('#media').click();
   await page.locator('#media-upload').setInputFiles(path.join(repoRoot, 'test', 'testdata', 'e2e', 'runtime-vault', 'images', 'hero.png'));
   await page.waitForFunction(() => document.querySelectorAll('#media-list .media-item').length > 0);
@@ -207,8 +213,29 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   expect(persisted.body.startsWith(`${originalFrontmatter}\n![hero](hero.png)`)).toBe(true);
   await page.reload();
   await page.locator('#editor .cm-content').waitFor();
-  await page.locator('#mode').click();
+  await page.locator('#source-mode').click();
   await expect.poll(async () => (await page.locator('#editor .cm-line').allTextContents()).join('\n')).toContain('![hero](hero.png)');
+  await context.close();
+});
+
+test('live preview renders unsaved editor changes in the same workspace', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await expect(editor).toBeVisible();
+  await expect(page.locator('.preview-pane')).toBeHidden();
+  await editor.fill('# Live preview marker\n\nInline math: $E = mc^2$.\n\n```go\nfunc Preview() {}\n```\n\n| Stage | Result |\n| --- | --- |\n| Draft | Ready |');
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
+  await page.locator('#editor .live-rendered-block').first().hover();
+  await expect.poll(async () => page.evaluate(() => {
+    const html = [...document.querySelectorAll('#editor .live-rendered-block')].map(element => element.shadowRoot?.innerHTML || '').join('');
+    return {math: html.includes('katex'), code: html.includes('<pre'), table: html.includes('<table')};
+  })).toEqual({math: true, code: true, table: true});
+  await expect(page.locator('#editor .cm-line').filter({hasText: '# Live preview marker'})).toHaveCount(1);
+  await page.locator('#source-mode').click();
+  await expect(page.locator('.preview-pane')).toBeHidden();
   await context.close();
 });
 
@@ -218,11 +245,11 @@ test('source media insertion preserves mixed line endings after save and reload'
   const context = await browser.newContext();
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   const delimiter = mixedSource.indexOf('\r\n---\r\n') + '\r\n---\r\n'.length;
   const originalFrontmatter = mixedSource.slice(0, delimiter);
   const expected = `${originalFrontmatter}\r\n![hero](hero.png)\r\n\nOriginal\n`;
-  await page.locator('#mode').click();
+  await page.locator('#source-mode').click();
   await page.locator('#media').click();
   await page.locator('#media-upload').setInputFiles(path.join(repoRoot, 'test', 'testdata', 'e2e', 'runtime-vault', 'images', 'hero.png'));
   await page.waitForFunction(() => document.querySelectorAll('#media-list .media-item').length > 0);
@@ -240,7 +267,7 @@ test('form metadata edits preserve mixed source bytes after save and reload', as
   const context = await browser.newContext();
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   await page.locator('[data-field="title"]').fill('Edited');
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
@@ -258,7 +285,7 @@ test('editor dark mode keeps metadata and long file labels readable', async ({br
   const context = await browser.newContext({viewport: {width: 390, height: 844}, colorScheme: 'dark'});
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   await page.locator('#sidebar-toggle').click();
   await page.locator('#file-refresh').click();
   const label = page.locator('.file-entry-label').filter({hasText: longPath}).first();
@@ -280,7 +307,7 @@ test('editor mobile layout keeps the workspace ahead of navigation', async ({bro
   const context = await browser.newContext({viewport: {width: 390, height: 844}});
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   await page.locator('#editor .cm-content').waitFor();
   await expect(page.locator('.metadata')).toBeVisible();
   await expect(page.locator('.toolbar')).toBeVisible();
@@ -299,9 +326,9 @@ test('browser create defaults to a private draft, rejects bad posts, and deletes
   const context = await browser.newContext();
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
 
-  await page.getByRole('button', {name: 'New article'}).click();
+  await page.locator('#new').click();
   await page.locator('#new-dialog input[name="path"]').fill('new-browser.md');
   await page.locator('#new-dialog input[name="title"]').fill('Browser draft');
   await page.locator('#new-dialog select[name="type"]').selectOption('doc');
@@ -313,14 +340,14 @@ test('browser create defaults to a private draft, rejects bad posts, and deletes
   expect(draftPage.status()).toBe(404);
   expect(await draftPage.text()).not.toContain('Browser draft');
 
-  await page.goto(`${origin}/_obsite/editor?path=new-browser.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=new-browser.md`);
   page.once('dialog', dialog => dialog.accept());
-  await page.getByRole('button', {name: 'Delete article'}).click();
+  await page.locator('#delete').click();
   await expect.poll(async () => (await fs.access(path.join(vault, 'new-browser.md')).then(() => true).catch(() => false))).toBe(false);
   expect((await context.request.get(`${origin}/new-browser/`)).status()).toBe(404);
 
   const csrf = (await session(context)).csrf;
-  const badPost = await mutate(context, 'POST', '/_obsite/source', csrf, 'absent', new URLSearchParams({path: 'missing-date.md', title: 'Bad post', type: 'post'}).toString(), 'application/x-www-form-urlencoded');
+  const badPost = await mutate(context, 'POST', '/_oxpio/source', csrf, 'absent', new URLSearchParams({path: 'missing-date.md', title: 'Bad post', type: 'post'}).toString(), 'application/x-www-form-urlencoded');
   expect(badPost.status()).toBe(400);
   expect(await badPost.text()).toContain('date is required');
   await context.close();
@@ -334,8 +361,8 @@ test('failed builds and stale hashes are visible and leave source and output unc
   const beforePage = await context.request.get(`${origin}/article/`);
   const beforeHTML = await beforePage.text();
 
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
-  await page.locator('#mode').click();
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  await page.locator('#source-mode').click();
   await page.locator('#editor .cm-content').fill('---\ntitle: Broken\npublish: true\ntype: invalid\n---\nFailure\n');
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Save failed');
@@ -345,7 +372,7 @@ test('failed builds and stale hashes are visible and leave source and output unc
 
   const external = '---\ntitle: External\npublish: true\ntype: doc\n---\nExternal\n';
   await fs.writeFile(path.join(vault, 'article.md'), external);
-  const stale = await mutate(context, 'PUT', '/_obsite/source?path=article.md', (await session(context)).csrf, before.hash, 'stale');
+  const stale = await mutate(context, 'PUT', '/_oxpio/source?path=article.md', (await session(context)).csrf, before.hash, 'stale');
   expect(stale.status()).toBe(409);
   expect(await stale.text()).toContain('source conflict');
   expect(await fs.readFile(path.join(vault, 'article.md'), 'utf8')).toBe(external);
@@ -360,8 +387,8 @@ test('successful edit sends one live reload and serve remains read-only', async 
 
   const editorPage = await context.newPage();
   await login(editorPage);
-  await editorPage.goto(`${origin}/_obsite/editor?path=article.md`);
-  await editorPage.locator('#mode').click();
+  await editorPage.goto(`${origin}/_oxpio/editor?path=article.md`);
+  await editorPage.locator('#source-mode').click();
   await editorPage.locator('#editor .cm-content').fill('---\ntitle: Article\npublish: true\ntype: doc\n---\nReloaded\n');
   const navigations = [];
   publicPage.on('framenavigated', frame => {
@@ -377,9 +404,9 @@ test('successful edit sends one live reload and serve remains read-only', async 
   const readOnly = spawn(binaryPath, ['serve', '--vault', vault, '--output', path.join(vault, 'public'), '--port', String(servePort)], {cwd: repoRoot, stdio: 'ignore'});
   try {
     await waitForHTTP(`${serveOrigin}/article/`);
-    const control = await fetch(`${serveOrigin}/_obsite/login`);
+    const control = await fetch(`${serveOrigin}/_oxpio/login`);
     expect(control.status).toBe(404);
-    const sourceResponse = await fetch(`${serveOrigin}/_obsite/source?path=article.md`);
+    const sourceResponse = await fetch(`${serveOrigin}/_oxpio/source?path=article.md`);
     expect(sourceResponse.status).toBe(404);
     const servedPage = await (await fetch(`${serveOrigin}/article/`)).text();
     expect(servedPage).not.toContain('edit-page-link');
@@ -398,35 +425,37 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   });
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=draft.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=draft.md`);
   await expect(page.locator('[data-field="title"]')).toHaveValue('Draft');
+  await expect(page.locator('[data-field="date"]')).toHaveAttribute('type', 'date');
+  await expect(page.locator('[data-field="updated"]')).toHaveAttribute('type', 'date');
   await expect(page.locator('#editor .cm-content')).toContainText('Private');
   await expect(page.locator('#editor .cm-content')).not.toContainText('title: Draft');
 
-  await page.getByRole('button', {name: 'Preview draft'}).click();
+  await page.locator('#read-mode').click();
   await expect(page.locator('#preview-frame')).not.toBeHidden();
   const draftPreview = page.frameLocator('#preview-frame');
   await expect(draftPreview.locator('body')).toContainText('Private');
-  await expect(draftPreview.locator('html')).toHaveAttribute('data-obsite-math', '');
-  await expect(draftPreview.locator('html')).toHaveAttribute('data-obsite-mermaid', '');
+  await expect(draftPreview.locator('html')).toHaveAttribute('data-oxpio-math', '');
+  await expect(draftPreview.locator('html')).toHaveAttribute('data-oxpio-mermaid', '');
   await expect.poll(async () => draftPreview.locator('.katex').count()).toBeGreaterThan(0);
   await expect.poll(async () => draftPreview.locator('svg').count()).toBeGreaterThan(0);
   const contentPreviewResponse = await context.request.get(`${origin}${await page.locator('#preview-frame').getAttribute('src')}`);
   expect(contentPreviewResponse.headers()['cache-control']).toBe('no-store');
-  const fullPreviewPopup = page.waitForEvent('popup');
-  await page.getByRole('button', {name: 'Full page preview'}).click();
-  const fullPreview = await fullPreviewPopup;
-  await expect(fullPreview).toHaveURL(/_obsite\/preview\/[^/]+\/draft\//);
-  await expect(fullPreview.locator('[data-page-content]')).toContainText('Private');
-  await fullPreview.close();
+  await page.locator('#write-mode').click();
+  await expect(page.locator('[data-field="title"]')).toBeVisible();
 
   await page.locator('[data-field="title"]').fill('Updated draft');
   await page.locator('[data-field="description"]').fill('A draft description');
+  await page.locator('[data-field="date"]').fill('2026-04-10');
+  await page.locator('[data-field="updated"]').fill('2026-04-11');
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   const saved = await fs.readFile(path.join(vault, 'draft.md'), 'utf8');
   expect(saved).toContain('title: Updated draft');
   expect(saved).toContain('description: A draft description');
+  expect(saved).toMatch(/date: ["']?2026-04-10["']?/);
+  expect(saved).toMatch(/updated: ["']?2026-04-11["']?/);
   expect(saved).toContain('publish: false');
 
   await page.getByRole('button', {name: 'Media library'}).click();
@@ -445,18 +474,9 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   const mediaSaved = await fs.readFile(path.join(vault, 'draft.md'), 'utf8');
   expect(mediaSaved).toContain('editor-pixel.png');
 
-  await page.getByRole('button', {name: 'Preview draft'}).click();
+  await page.locator('#read-mode').click();
   const contentPreview = page.frameLocator('#preview-frame');
   await expect(contentPreview.locator('img')).toHaveCount(2);
-  await expect.poll(async () => contentPreview.locator('img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0))).toBe(true);
-  const mediaFullPreviewPopup = page.waitForEvent('popup');
-  await page.getByRole('button', {name: 'Full page preview'}).click();
-  const mediaFullPreview = await mediaFullPreviewPopup;
-  await expect(mediaFullPreview).toHaveURL(/_obsite\/preview\/[^/]+\/draft\//);
-  await expect(mediaFullPreview.locator('[data-page-content] img')).toHaveCount(2);
-  await expect.poll(async () => mediaFullPreview.locator('[data-page-content] img').evaluateAll(images => images.every(image => image.complete && image.naturalWidth > 0))).toBe(true);
-  await mediaFullPreview.close();
-
   await page.getByRole('button', {name: 'New folder'}).click();
   await page.locator('#file-path').fill('docs');
   await page.locator('#file-submit').click();
@@ -494,17 +514,27 @@ test('preview diff uses the bundled merge view and local drafts never publish', 
   const context = await browser.newContext();
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
-  await page.locator('#mode').click();
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  await expect(page.locator('#editor .cm-content')).toBeVisible();
+  await page.locator('#source-mode').click();
   await page.locator('#editor .cm-content').fill('---\ntitle: Article\npublish: true\ntype: doc\ntags:\n- local\n---\nLocal candidate\n');
-  await page.locator('#diff-tab').click();
+  await page.locator('#diff-mode').click();
   await expect(page.locator('#diff-editor')).toBeVisible();
   await expect(page.locator('.diff-summary')).toContainText('article.md');
-  await expect(page.locator('.structured-diff').first()).toContainText('added: tags');
+  await expect(page.locator('#diff-editor .merge-host')).toBeVisible();
+  await expect(page.locator('#diff-mode')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#diff-wrap')).toBeVisible();
+  await page.locator('#diff-wrap').click();
+  await expect(page.locator('#diff-wrap')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('#diff-editor .cm-content').last()).toContainText('Local candidate');
+  await expect(page.locator('#diff-editor')).not.toContainText('Rendered Markdown');
+  await expect(page.locator('#diff-editor')).not.toContainText('Rendered changed blocks');
+  await expect(page.locator('#diff-editor')).not.toContainText('Frontmatter fields');
+  await expect(page.locator('#diff-editor')).not.toContainText('Markdown blocks');
   await expect(page.locator('#status')).not.toContainText('Saved and rebuilt');
   await expect.poll(async () => page.locator('#draft-indicator').textContent()).toContain('Draft saved locally');
   expect(await fs.readFile(path.join(vault, 'article.md'), 'utf8')).toContain('Original');
-  const storedDraft = await page.evaluate(() => new Promise(resolve => { const request = indexedDB.open('obsite-editor', 1); request.onsuccess = () => { const get = request.result.transaction('drafts', 'readonly').objectStore('drafts').getAll(); get.onsuccess = () => resolve(get.result); }; request.onerror = () => resolve([]); }));
+  const storedDraft = await page.evaluate(() => new Promise(resolve => { const request = indexedDB.open('oxpio-editor', 1); request.onsuccess = () => { const get = request.result.transaction('drafts', 'readonly').objectStore('drafts').getAll(); get.onsuccess = () => resolve(get.result); }; request.onerror = () => resolve([]); }));
   expect(storedDraft.length).toBeGreaterThan(0);
   page.on('dialog', async dialog => { await dialog.accept(); });
   await page.reload();
@@ -513,11 +543,25 @@ test('preview diff uses the bundled merge view and local drafts never publish', 
   await context.close();
 });
 
+test('diff marks deleted candidate content', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  await expect(page.locator('#editor .cm-content')).toBeVisible();
+  await page.locator('#source-mode').click();
+  await page.locator('#editor .cm-content').fill('---\ntitle: Article\npublish: true\ntype: doc\n---\n');
+  await page.locator('#diff-mode').click();
+  await expect(page.locator('#diff-editor .merge-host')).toBeVisible();
+  await expect(page.locator('#diff-editor .cm-deletedChunk, #diff-editor .cm-deletedLine')).not.toHaveCount(0);
+  await context.close();
+});
+
 test('visual local drafts restore metadata changes before save', async ({browser}) => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await login(page);
-  await page.goto(`${origin}/_obsite/editor?path=article.md`);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   await page.locator('[data-field="title"]').fill('Visual local title');
   await expect.poll(async () => page.locator('#draft-indicator').textContent()).toContain('Draft saved locally');
   page.on('dialog', async dialog => { await dialog.accept(); });
@@ -540,11 +584,11 @@ test('edit setup initializes one account and failed setup does not write', async
   const setupVault = path.join(tempRoot, 'setup-vault');
   await fs.mkdir(setupVault);
   const config = 'title: Setup\nbaseURL: https://example.test/\nnavigation: []\n';
-  await fs.writeFile(path.join(setupVault, 'obsite.yaml'), config);
+  await fs.writeFile(path.join(setupVault, 'oxpio.yaml'), config);
   await fs.writeFile(path.join(setupVault, '_index.md'), '---\ntitle: Home\npublish: true\n---\nHome\n');
   const setupOutput = execFileSync('script', ['-qef', '--echo', 'never', '-c', `${shellQuote(binaryPath)} edit --setup --vault ${shellQuote(setupVault)}`, '/dev/null'], {input: 'admin\nsecret\n', encoding: 'utf8'});
   expect(setupOutput).not.toContain('secret');
-  const configured = await fs.readFile(path.join(setupVault, 'obsite.yaml'), 'utf8');
+  const configured = await fs.readFile(path.join(setupVault, 'oxpio.yaml'), 'utf8');
   expect(configured).toContain('username: "admin"');
   expect(configured).toContain('passwordHash: $argon2id$');
 
@@ -557,13 +601,13 @@ test('edit setup initializes one account and failed setup does not write', async
     expect(`${error.stdout || ''}${error.stderr || ''}`).toContain('already configured');
   }
   expect(failed).toBe(true);
-  expect(await fs.readFile(path.join(setupVault, 'obsite.yaml'), 'utf8')).toBe(before);
+  expect(await fs.readFile(path.join(setupVault, 'oxpio.yaml'), 'utf8')).toBe(before);
 });
 
 test('edit startup fails before listening when the account is missing', async () => {
   const missingVault = path.join(tempRoot, 'missing-account');
   await fs.mkdir(missingVault);
-  await fs.writeFile(path.join(missingVault, 'obsite.yaml'), 'title: Missing\nbaseURL: https://example.test/\nnavigation: []\n');
+  await fs.writeFile(path.join(missingVault, 'oxpio.yaml'), 'title: Missing\nbaseURL: https://example.test/\nnavigation: []\n');
   await fs.writeFile(path.join(missingVault, '_index.md'), '---\ntitle: Home\npublish: true\n---\nHome\n');
   const port = await freePort();
   const failed = spawn(binaryPath, ['edit', '--vault', missingVault, '--port', String(port)], {cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe']});

@@ -2,8 +2,8 @@ import {basicSetup} from "codemirror";
 import {markdown} from "@codemirror/lang-markdown";
 import {indentUnit} from "@codemirror/language";
 import {indentWithTab} from "@codemirror/commands";
-import {Compartment, EditorState, Prec} from "@codemirror/state";
-import {EditorView, keymap} from "@codemirror/view";
+import {Compartment, EditorState, Prec, StateEffect, StateField} from "@codemirror/state";
+import {Decoration, EditorView, WidgetType, keymap} from "@codemirror/view";
 import {MergeView} from "@codemirror/merge";
 
 const $ = selector => document.querySelector(selector);
@@ -11,15 +11,17 @@ const fields = [...document.querySelectorAll("[data-field]")];
 const sectionFields = new Set(["title", "publish", "description", "order", "banner", "bannerAlt"]);
 const state = {
   path: new URLSearchParams(location.search).get("path") || "",
-  kind: "article", mode: "visual", source: "", baselineSource: "", hash: "",
+  kind: "article", mode: "visual", surface: "write", source: "", baselineSource: "", hash: "",
   bodyBaseline: "", formBaseline: {}, sourceChanged: false,
   filePath: "", fileHash: "", fileKind: "", fileSourceKind: "",
   fileDialogMode: "", dirty: false, busy: false, loadToken: 0,
-  draftTimer: 0, diffView: null, previewURL: "", fileEditable: false, syncScroll: false, syncingScroll: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, catalogSources: [], collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
+  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, catalogSources: [], collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
 };
 const editable = new Compartment();
 let editor;
 let suppressChanges = false;
+let livePreviewTimer = 0;
+let livePreviewRequest = 0;
 
 function status(message) { $("#status").textContent = message; }
 function saveState(value, label = "") {
@@ -37,9 +39,46 @@ function updateEditorStats() {
 }
 function dirty(value = true) {
   state.dirty = value;
-  document.title = value ? "* Obsite Editor" : "Obsite Editor";
+  document.title = value ? "* OXPIO Editor" : "OXPIO Editor";
   saveState(value ? "unsaved" : "saved", value ? "Unsaved" : "Saved");
   if (value) scheduleDraft();
+}
+function cancelLivePreview() {
+  clearTimeout(livePreviewTimer);
+  livePreviewTimer = 0;
+  livePreviewRequest++;
+}
+function scheduleLivePreview(delay = 350) {
+  if (state.surface !== "write" || state.mode !== "visual" || !editor) {
+    cancelLivePreview();
+    return;
+  }
+  clearTimeout(livePreviewTimer);
+  const request = ++livePreviewRequest;
+  editor.dispatch({effects: [livePreviewLine.of(null), livePreviewRender.of({body: "", blocks: [], styles: ""})]});
+  livePreviewTimer = setTimeout(() => refreshLivePreview(request).catch(error => diagnostics(error.diagnostics, `Live preview failed: ${error.message}`)), delay);
+}
+async function refreshLivePreview(request) {
+  if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || !state.path || state.busy) return;
+  const source = await compose();
+  if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
+  const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source});
+  if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
+  const frame = $("#preview-frame");
+  const url = result.contentURL || result.url;
+  const loaded = new Promise(resolve => {
+    frame.addEventListener("load", resolve, {once: true});
+    frame.src = url;
+  });
+  frame.hidden = false;
+  await loaded;
+  if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
+  const documentRoot = frame.contentDocument?.querySelector(".content-preview-content");
+  if (!documentRoot) return;
+  const blocks = [...documentRoot.children].map(child => serializeLivePreviewBlock(child, frame.contentDocument));
+  const styles = livePreviewStyles(frame.contentDocument);
+  editor.dispatch({effects: livePreviewRender.of({body: text(), blocks, styles})});
+  diagnostics(result.diagnostics);
 }
 function scheduleDraft() {
   clearTimeout(state.draftTimer);
@@ -67,7 +106,7 @@ let draftDB;
 function openDraftDB() {
   if (draftDB || !window.indexedDB) return draftDB;
   draftDB = new Promise((resolve, reject) => {
-    const request = indexedDB.open("obsite-editor", 1);
+    const request = indexedDB.open("oxpio-editor", 1);
     request.onupgradeneeded = () => request.result.createObjectStore("drafts", {keyPath: "key"});
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error);
@@ -138,6 +177,7 @@ async function offerDraft(path, hash, token) {
     if (!current()) return;
     const baselineFields = JSON.parse(JSON.stringify(state.formBaseline));
     state.mode = record.candidate.mode || "source";
+    state.surface = state.mode === "source" ? "source" : "write";
     if (state.mode === "source") {
       state.source = record.candidate.source || state.source;
       setText(state.source);
@@ -160,7 +200,7 @@ function applyIndentPreference() {
 }
 function loadPreferences() {
   try {
-    const preferences = JSON.parse(localStorage.getItem("obsite-editor-preferences") || "{}");
+    const preferences = JSON.parse(localStorage.getItem("oxpio-editor-preferences") || "{}");
     state.indent = Math.max(1, Math.min(8, Number(preferences.indent) || 2));
     state.keepPreview = preferences.keepPreview !== false;
     document.documentElement.dataset.theme = preferences.theme && preferences.theme !== "system" ? preferences.theme : "";
@@ -176,12 +216,16 @@ function storePreferences() {
   const preferences = {theme: $("#preference-theme").value, indent: Number($("#preference-indent").value) || 2, keepPreview: $("#preference-preview").checked};
   state.indent = Math.max(1, Math.min(8, preferences.indent));
   state.keepPreview = preferences.keepPreview;
-  localStorage.setItem("obsite-editor-preferences", JSON.stringify({...preferences, indent: state.indent}));
+  localStorage.setItem("oxpio-editor-preferences", JSON.stringify({...preferences, indent: state.indent}));
   document.documentElement.dataset.theme = preferences.theme === "system" ? "" : preferences.theme;
   document.documentElement.style.colorScheme = preferences.theme === "dark" ? "dark" : preferences.theme === "light" ? "light" : "";
   $("#indent-setting").textContent = `Indent: ${state.indent} spaces`;
   applyIndentPreference();
-}function formValues() {
+}function dateInputValue(value) {
+  const match = String(value ?? "").trim().match(/^(\d{4}-\d{2}-\d{2})/);
+  return match ? match[1] : "";
+}
+function formValues() {
   const result = {};
   for (const input of fields) {
     const name = input.dataset.field;
@@ -201,6 +245,7 @@ function showForm(metadata) {
     const value = metadata[name];
     if (name === "publish") input.checked = value === true;
     else if (Array.isArray(value)) input.value = value.join(", ");
+    else if (input.type === "date") input.value = dateInputValue(value);
     else input.value = value == null ? "" : String(value);
     input.closest("label").hidden = state.kind === "section" && !sectionFields.has(name);
   }
@@ -245,8 +290,8 @@ function postCommitWarning(result) {
   return result?.outputCleanupWarning ? " Output cleanup needs attention." : "";
 }
 async function mutation(method, url, body, headers = {}) {
-  const session = await responseJSON(await fetch("/_obsite/csrf"));
-  headers = {...headers, "X-Obsite-CSRF": session.csrf};
+  const session = await responseJSON(await fetch("/_oxpio/csrf"));
+  headers = {...headers, "X-OXPIO-CSRF": session.csrf};
   if (body && !(body instanceof FormData) && !(body instanceof URLSearchParams) && typeof body !== "string") {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(body);
@@ -271,7 +316,7 @@ function renderSourceTree() {
     item.dataset.path = source.relPath;
     item.setAttribute("role", "treeitem");
     item.setAttribute("aria-selected", String(source.relPath === state.path));
-    item.style.paddingLeft = `${0.35 + depth * 0.8}rem`;
+    item.style.paddingLeft = `${0.35 + depth * 0.45}rem`;
     const icon = document.createElement("span");
     icon.className = "source-tree-icon";
     icon.innerHTML = `<svg aria-hidden="true"><use href="#icon-${source.kind === "section" ? "folder" : "code"}"></use></svg>`;
@@ -293,7 +338,7 @@ function renderSourceTree() {
       item.className = "source-tree-entry source-tree-folder";
       item.setAttribute("role", "treeitem");
       item.setAttribute("aria-expanded", String(!state.collapsedSourceFolders.has(folder)));
-      item.style.paddingLeft = `${0.35 + depth * 0.8}rem`;
+      item.style.paddingLeft = `${0.35 + depth * 0.45}rem`;
       const icon = document.createElement("span");
       icon.className = "source-tree-icon";
       icon.innerHTML = `<svg aria-hidden="true"><use href="#icon-folder"></use></svg>`;
@@ -317,7 +362,7 @@ function renderSourceTree() {
   if (!tree.children.length) tree.textContent = "No matching Markdown sources.";
 }
 async function loadCatalog(preferred = state.path) {
-  const data = await responseJSON(await fetch("/_obsite/sources"));
+  const data = await responseJSON(await fetch("/_oxpio/sources"));
   state.catalogSources = data.sources;
   const select = $("#source");
   select.replaceChildren();
@@ -342,7 +387,7 @@ function filterDocuments() {
 }
 
 async function refreshFiles(preferred = state.filePath) {
-  const data = await responseJSON(await fetch("/_obsite/files"));
+  const data = await responseJSON(await fetch("/_oxpio/files"));
   const tree = $("#file-tree");
   tree.replaceChildren();
   const selectionPath = preferred;
@@ -357,7 +402,7 @@ async function refreshFiles(preferred = state.filePath) {
     button.setAttribute("role", "treeitem");
     button.setAttribute("aria-selected", String(entry.path === preferred || entry.path === state.filePath));
     if (entry.kind === "folder") button.setAttribute("aria-expanded", String(!state.collapsedFolders.has(entry.path)));
-    button.style.paddingLeft = `${0.35 + entry.path.split("/").length * 0.7}rem`;
+    button.style.paddingLeft = `${0.35 + entry.path.split("/").length * 0.45}rem`;
     const icon = document.createElement("span");
     icon.className = "file-entry-icon";
     const fileIcon = entry.kind === "folder" ? "folder" : (/\.(png|jpe?g|webp|svg)$/i.test(entry.path) ? "image" : "code");
@@ -423,13 +468,17 @@ function clearEditor() {
   state.bodyBaseline = "";
   state.formBaseline = {};
   state.sourceChanged = false;
+  state.surface = "write";
   showForm({publish: false});
   setText("");
   updateMode();
   dirty(false);
   diagnostics();
+  state.previewResizeObserver?.disconnect();
+  state.previewResizeObserver = null;
   $("#preview-frame").hidden = true;
   $("#preview-frame").removeAttribute("src");
+  $("#preview-frame").style.height = "";
   $("#preview-empty").hidden = false;
   status("No Markdown sources");
 }
@@ -437,7 +486,7 @@ async function loadSource(path) {
   const token = ++state.loadToken;
   busy(true);
   try {
-    const data = await responseJSON(await fetch(`/_obsite/source-meta?path=${encodeURIComponent(path)}`));
+    const data = await responseJSON(await fetch(`/_oxpio/source-meta?path=${encodeURIComponent(path)}`));
     if (token !== state.loadToken) return;
     state.path = path;
     renderSourceTree();
@@ -450,6 +499,7 @@ async function loadSource(path) {
     state.source = data.source;
     state.baselineSource = data.source;
     state.mode = data.parseError ? "source" : "visual";
+    state.surface = state.mode === "source" ? "source" : "write";
     state.sourceChanged = false;
     showForm(data.frontmatter);
     setText(state.mode === "source" ? data.source : data.body);
@@ -457,8 +507,11 @@ async function loadSource(path) {
     updateMode();
     dirty(false);
     diagnostics();
+    state.previewResizeObserver?.disconnect();
+    state.previewResizeObserver = null;
     $("#preview-frame").hidden = true;
     $("#preview-frame").removeAttribute("src");
+    $("#preview-frame").style.height = "";
     $("#preview-empty").hidden = false;
     status(data.parseError ? `Fix this in source mode: ${data.parseError}` : `Loaded ${path}`);
     await offerDraft(path, state.hash, token);
@@ -467,15 +520,26 @@ async function loadSource(path) {
   finally {
     if (token === state.loadToken) {
       busy(false);
-      if (state.keepPreview && state.previewOpen && !state.suppressPreview) queueMicrotask(() => preview().catch(() => {}));
+      if (state.surface === "write" && !state.suppressPreview) scheduleLivePreview();
+      else if (state.keepPreview && state.previewOpen && !state.suppressPreview) queueMicrotask(() => preview().catch(() => {}));
     }
   }
 }
 function updateMode() {
   $("#metadata").hidden = state.mode === "source";
-  $("#mode").textContent = state.mode === "source" ? "Form mode" : "Source mode";
-  $("#write-mode").setAttribute("aria-selected", String(state.mode !== "source"));
-  $("#source-mode").setAttribute("aria-selected", String(state.mode === "source"));
+  const modeTabs = [$("#write-mode"), $("#source-mode"), $("#read-mode"), $("#diff-mode")];
+  const activeTab = {write: $("#write-mode"), source: $("#source-mode"), read: $("#read-mode"), diff: $("#diff-mode")}[state.surface] || $("#write-mode");
+  for (const tab of modeTabs) {
+    const active = tab === activeTab;
+    tab.setAttribute("aria-selected", String(active));
+    tab.tabIndex = active ? 0 : -1;
+  }
+  $(".editor-preview-grid").dataset.mode = state.surface;
+  $(".editor-preview-grid").setAttribute("aria-labelledby", activeTab?.id || "write-mode");
+  $(".workspace").dataset.mode = state.surface;
+  $("#editor-pane-title").textContent = state.surface === "write" ? "Live preview" : "Markdown";
+  $("#preview-refresh").hidden = state.surface !== "read";
+  if (state.surface !== "diff") $("#preview-title").textContent = state.surface === "write" ? "Live preview" : "Preview";
 }
 function originalOffsetForNormalized(value, target) {
   let normalized = 0;
@@ -520,7 +584,7 @@ async function compose() {
   const request = {path: state.path, source: state.source};
   if (bodyChanged) request.body = text();
   if (changed.length) { request.fields = formValues(); request.changed = changed; }
-  const result = await mutation("POST", "/_obsite/frontmatter", request);
+  const result = await mutation("POST", "/_oxpio/frontmatter", request);
   return result.source;
 }
 async function operation(label, action) {
@@ -543,7 +607,7 @@ async function save() {
     const mode = state.mode;
     const reopenPreview = state.keepPreview && state.previewOpen;
     const source = await compose();
-    const result = await mutation("PUT", `/_obsite/source?path=${encodeURIComponent(path)}`, source, {"X-Obsite-Source-Hash": state.hash});
+    const result = await mutation("PUT", `/_oxpio/source?path=${encodeURIComponent(path)}`, source, {"X-OXPIO-Source-Hash": state.hash});
     await clearDraft(path);
     dirty(false);
     state.suppressPreview = true;
@@ -551,11 +615,11 @@ async function save() {
     if (mode === "source") { state.mode = "source"; setText(state.source); updateMode(); }
     if (reopenPreview) {
       try {
-        const previewResult = await mutation("POST", "/_obsite/preview", {path: state.path, source: state.source});
+        const previewResult = await mutation("POST", "/_oxpio/preview", {path: state.path, source: state.source});
         const frame = $("#preview-frame");
         frame.hidden = false;
         frame.src = previewResult.contentURL || previewResult.url;
-        frame.onload = bindPreviewSync;
+        frame.onload = bindPreviewFrame;
         $("#preview-empty").hidden = true;
         state.previewOpen = true;
       } catch (error) { diagnostics(error.diagnostics, `Preview refresh failed: ${error.message}`); }
@@ -569,193 +633,72 @@ async function save() {
 async function preview() {
   await operation("Preview", async () => {
     status("Generating server-rendered draft preview…");
-    const result = await mutation("POST", "/_obsite/preview", {path: state.path, source: await compose()});
+    const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source: await compose()});
     const frame = $("#preview-frame");
     frame.hidden = false;
     state.previewOpen = true;
     $("#preview-empty").hidden = true;
     frame.src = result.contentURL || result.url;
-    frame.onload = bindPreviewSync;
+    frame.onload = bindPreviewFrame;
     diagnostics(result.diagnostics);
     status(result.warningCount ? "Content preview generated with warnings." : "Content preview generated; source and public output were not changed.");
   });
 }
-async function fullPagePreview() {
-  if (!state.path) return;
-  const popup = window.open("about:blank", "_blank");
-  if (popup) popup.opener = null;
-  let opened = false;
-  await operation("Full page preview", async () => {
-    if (!popup) throw new Error("Allow pop-ups to open the full page preview.");
-    status("Generating full page preview…");
-    const result = await mutation("POST", "/_obsite/preview", {path: state.path, source: await compose()});
-    popup.location = result.fullURL || result.url;
-    opened = true;
-    diagnostics(result.diagnostics);
-    status(result.warningCount ? "Full page preview generated with warnings." : "Full page preview opened; source and public output were not changed.");
+function diffExtensions() {
+  return [basicSetup, markdown(), ...(state.diffWrap ? [EditorView.lineWrapping] : [])];
+}
+function fitDiffView() {
+  if (!state.diffView) return;
+  const views = [state.diffView.a, state.diffView.b];
+  const lineHeight = Math.max(...views.map(view => view.defaultLineHeight));
+  const estimatedHeight = Math.max(30 * lineHeight, ...views.map(view => (view.state.doc.lines + 2) * lineHeight * 2));
+  views.forEach(view => {
+    view.dom.style.setProperty("height", `${estimatedHeight}px`, "important");
+    view.scrollDOM.style.setProperty("height", `${estimatedHeight}px`, "important");
   });
-  if (!opened) popup?.close();
-}
-function sourceParts(source) {
-  const match = source.match(/^(?:\uFEFF)?---(?:\r\n|\r|\n)([\s\S]*?)(?:\r\n|\r|\n)(?:---|\.\.\.)(?:\r\n|\r|\n|$)/);
-  if (!match) return {fields: new Map(), frontmatter: "", body: source};
-  const fields = new Map();
-  const lines = match[1].split(/\r?\n/);
-  for (let index = 0; index < lines.length; index++) {
-    const field = lines[index].match(/^(?:"([^"]+)"|'([^']+)'|([A-Za-z][A-Za-z0-9_-]*)):[ \t]*(.*)$/);
-    if (!field) continue;
-    const name = field[1] || field[2] || field[3];
-    let value = field[4] || "";
-    if (value === "|" || value === ">") {
-      const block = [];
-      while (index + 1 < lines.length && /^(?:[ \t]+|$)/.test(lines[index + 1])) block.push(lines[++index].trim());
-      value += ` ${block.join(value === "|" ? "\\n" : " ")}`;
-    } else if (value === "" && index + 1 < lines.length && /^(?:[ \t]+|-\s?)/.test(lines[index + 1])) {
-      const block = [];
-      while (index + 1 < lines.length && /^(?:[ \t]+|-\s?)/.test(lines[index + 1])) block.push(lines[++index].trim());
-      value = block.join("\\n");
+  let attempts = 0;
+  const measureFullDiff = () => {
+    if (!state.diffView || !views.every(view => view.dom.isConnected)) return;
+    views.forEach(view => {
+      view.viewState.printing = true;
+      view.viewState.mustMeasureContent = true;
+      view.viewState.viewport = {from: 0, to: 0};
+      view.measure();
+      view.viewState.mustMeasureContent = true;
+      view.viewState.viewport = {from: 0, to: 0};
+      view.measure();
+    });
+    const complete = views.every(view => view.dom.querySelectorAll(".cm-content .cm-line").length >= view.state.doc.lines);
+    if (!complete && attempts++ < 10) {
+      setTimeout(measureFullDiff, 50);
+      return;
     }
-    fields.set(name, value);
-  }
-  return {fields, frontmatter: match[0], body: source.slice(match[0].length)};
+    const contentHeight = Math.max(...views.map(view => {
+      const lines = view.dom.querySelectorAll(".cm-content .cm-line");
+      const lastLine = lines[lines.length - 1];
+      return lastLine ? lastLine.offsetTop + lastLine.offsetHeight + 8 : estimatedHeight;
+    }));
+    const height = Math.max(30 * lineHeight, contentHeight);
+    views.forEach(view => {
+      view.dom.style.setProperty("height", `${height}px`, "important");
+      view.scrollDOM.style.setProperty("height", `${height}px`, "important");
+    });
+    state.diffView.measure();
+  };
+  setTimeout(measureFullDiff, 50);
 }
-function diffBlocks(before, after) {
-  const rows = Array.from({length: before.length + 1}, () => Array(after.length + 1).fill(0));
-  for (let i = before.length - 1; i >= 0; i--) for (let j = after.length - 1; j >= 0; j--) rows[i][j] = before[i] === after[j] ? rows[i + 1][j + 1] + 1 : Math.max(rows[i + 1][j], rows[i][j + 1]);
-  const operations = [];
-  let i = 0, j = 0;
-  while (i < before.length || j < after.length) {
-    if (i < before.length && j < after.length && before[i] === after[j]) { operations.push({state: "unchanged", value: before[i], before: before[i], after: after[j]}); i++; j++; }
-    else if (j === after.length || (i < before.length && rows[i + 1][j] >= rows[i][j + 1])) { operations.push({state: "deleted", value: before[i], before: before[i++], after: null}); }
-    else { operations.push({state: "added", value: after[j], before: null, after: after[j++]}); }
-  }
-  for (let index = 0; index + 1 < operations.length; index++) {
-    if (operations[index].state === "deleted" && operations[index + 1].state === "added") {
-      operations.splice(index, 2, {state: "modified", value: `${operations[index].before} → ${operations[index + 1].after}`, before: operations[index].before, after: operations[index + 1].after});
-    }
-  }
-  return operations;
+function mountDiffView(parent, baseline, candidate) {
+  state.diffView = new MergeView({
+    a: {doc: baseline, extensions: diffExtensions()},
+    b: {doc: candidate, extensions: diffExtensions()},
+    parent,
+  });
+  fitDiffView();
 }
-function splitMarkdownBlocks(body) {
-  const blocks = [];
-  let current = [];
-  let fenceCharacter = "";
-  let fenceLength = 0;
-  for (const line of body.split(/\r?\n/)) {
-    const marker = line.match(/^ {0,3}(`{3,}|~{3,})/);
-    if (marker) {
-      const character = marker[1][0];
-      if (!fenceCharacter) {
-        fenceCharacter = character;
-        fenceLength = marker[1].length;
-      } else if (character === fenceCharacter && marker[1].length >= fenceLength && line.slice(marker[0].length).trim() === "") {
-        fenceCharacter = "";
-        fenceLength = 0;
-      }
-    }
-    if (!fenceCharacter && line.trim() === "") {
-      if (current.length) { blocks.push(current.join("\n")); current = []; }
-    } else current.push(line);
-  }
-  if (current.length) blocks.push(current.join("\n"));
-  return blocks;
-}
-function appendStructuredDiff(host, baseline, candidate) {
-  const before = sourceParts(baseline);
-  const after = sourceParts(candidate);
-  const fieldNames = [...new Set([...before.fields.keys(), ...after.fields.keys()])].sort();
-  const fields = document.createElement("section");
-  fields.className = "structured-diff";
-  fields.innerHTML = "<h3>Frontmatter fields</h3>";
-  const fieldList = document.createElement("ul");
-  for (const name of fieldNames) {
-    const oldValue = before.fields.get(name);
-    const newValue = after.fields.get(name);
-    const item = document.createElement("li");
-    const stateName = oldValue === undefined ? "added" : newValue === undefined ? "deleted" : oldValue === newValue ? "unchanged" : "modified";
-    item.className = `diff-${stateName}`;
-    item.textContent = `${stateName}: ${name}${oldValue !== undefined ? ` · ${oldValue}` : ""}${newValue !== undefined && newValue !== oldValue ? ` → ${newValue}` : ""}`;
-    fieldList.append(item);
-  }
-  if (!fieldNames.length) fieldList.textContent = "No frontmatter fields";
-  fields.append(fieldList);
-  const blocks = document.createElement("section");
-  blocks.className = "structured-diff";
-  blocks.innerHTML = "<h3>Markdown blocks</h3>";
-  const blockList = document.createElement("ol");
-  const oldBlocks = splitMarkdownBlocks(before.body);
-  const newBlocks = splitMarkdownBlocks(after.body);
-  const operations = diffBlocks(oldBlocks, newBlocks);
-  for (const operation of operations) {
-    const item = document.createElement("li");
-    item.className = `diff-${operation.state}`;
-    item.textContent = `${operation.state}: ${operation.value}`;
-    blockList.append(item);
-  }
-  if (!operations.length) blockList.textContent = "No body blocks";
-  blocks.append(blockList);
-  host.append(fields, blocks);
-}
-async function appendRenderedBlockDiff(host, before, after, operations) {
-  const changed = operations.filter(operation => operation.state !== "unchanged");
-  if (!changed.length) return;
-  const section = document.createElement("section");
-  section.className = "rich-diff-blocks";
-  section.innerHTML = "<h3>Rendered changed blocks</h3>";
-  for (const [index, operation] of changed.entries()) {
-    const item = document.createElement("article");
-    item.className = `rich-diff-block diff-${operation.state}`;
-    const heading = document.createElement("h4");
-    heading.textContent = `${operation.state} block ${index + 1}`;
-    item.append(heading);
-    const panes = document.createElement("div");
-    panes.className = "rich-diff-panes";
-    for (const [label, value, parts] of [["Saved", operation.before, before], ["Candidate", operation.after, after]]) {
-      const pane = document.createElement("div");
-      const title = document.createElement("strong");
-      title.textContent = label;
-      pane.append(title);
-      if (value == null) {
-        const absent = document.createElement("p");
-        absent.className = "diff-absent";
-        absent.textContent = `${label} block not present`;
-        pane.append(absent);
-      } else {
-        const preview = await responseJSON(await mutation("POST", "/_obsite/preview", {path: state.path, source: `${parts.frontmatter}${value}${value.endsWith("\n") ? "" : "\n"}`}));
-        const frame = document.createElement("iframe");
-        frame.title = `${label} rendered ${operation.state} block`;
-        frame.src = preview.contentURL || preview.url;
-        pane.append(frame);
-      }
-      panes.append(pane);
-    }
-    item.append(panes);
-    section.append(item);
-  }
-  host.append(section);
-}
-async function appendRenderedDiff(host, baseline, candidate) {
-  const rendered = document.createElement("section");
-  rendered.className = "rich-diff";
-  rendered.innerHTML = "<h3>Rendered Markdown</h3>";
-  const panes = document.createElement("div");
-  panes.className = "rich-diff-panes";
-  for (const [label, source] of [["Saved", baseline], ["Candidate", candidate]]) {
-    const preview = await responseJSON(await mutation("POST", "/_obsite/preview", {path: state.path, source}));
-    const pane = document.createElement("div");
-    const title = document.createElement("strong");
-    title.textContent = label;
-    const frame = document.createElement("iframe");
-    frame.title = `${label} rendered Markdown`;
-    frame.src = preview.contentURL || preview.url;
-    pane.append(title, frame);
-    panes.append(pane);
-  }
-  rendered.append(panes);
-  const before = sourceParts(baseline);
-  const after = sourceParts(candidate);
-  await appendRenderedBlockDiff(rendered, before, after, diffBlocks(splitMarkdownBlocks(before.body), splitMarkdownBlocks(after.body)));
-  host.append(rendered);
+function updateDiffControl() {
+  const button = $("#diff-wrap");
+  button.hidden = state.surface !== "diff" || !state.diffView;
+  button.setAttribute("aria-pressed", String(state.diffWrap));
 }
 async function showDiff() {
   if (!state.path) return;
@@ -763,47 +706,88 @@ async function showDiff() {
   const host = $("#diff-editor");
   host.hidden = false;
   state.previewOpen = false;
+  state.previewResizeObserver?.disconnect();
+  state.previewResizeObserver = null;
   $("#preview-frame").hidden = true;
   $("#preview-empty").hidden = true;
+  $("#preview-title").textContent = "Diff";
+  $("#preview-title-icon").setAttribute("href", "#icon-diff");
   host.replaceChildren();
   if (state.diffView) state.diffView.destroy();
   if (candidate === state.baselineSource) {
     host.textContent = "No changes";
+    updateDiffControl();
     return;
   }
   const heading = document.createElement("p");
   heading.className = "diff-summary";
-  heading.textContent = `Frontmatter and body changes for ${state.path}`;
+  heading.append(`Frontmatter and body changes for ${state.path}`);
+  const hint = document.createElement("span");
+  hint.className = "diff-scroll-hint";
+  hint.textContent = "Use horizontal scroll for long lines.";
+  heading.append(hint);
   host.append(heading);
   const mergeHost = document.createElement("div");
   mergeHost.className = "merge-host";
   host.append(mergeHost);
-  state.diffView = new MergeView({
-    a: {doc: state.baselineSource, extensions: [basicSetup, markdown()]},
-    b: {doc: candidate, extensions: [basicSetup, markdown()]},
-    parent: mergeHost,
-  });
-  appendStructuredDiff(host, state.baselineSource, candidate);
-  appendRenderedDiff(host, state.baselineSource, candidate).catch(error => diagnostics(error.diagnostics, `Rendered diff failed: ${error.message}`));
+  mountDiffView(mergeHost, state.baselineSource, candidate);
+  updateDiffControl();
 }
-function bindPreviewSync() {
+function resizePreviewFrame() {
+  const frame = $("#preview-frame");
+  const documentElement = frame.contentDocument?.documentElement;
+  const body = frame.contentDocument?.body;
+  if (!documentElement) return;
+  frame.style.height = "0px";
+  frame.style.height = `${Math.max(documentElement.scrollHeight, body?.scrollHeight || 0)}px`;
+}
+function bindPreviewFrame() {
   const frame = $("#preview-frame");
   if (!frame.contentWindow || !frame.contentDocument) return;
-  frame.contentWindow.addEventListener("scroll", () => {
-    if (!state.syncScroll || !editor || state.syncingScroll) return;
-    const pageMax = Math.max(1, frame.contentDocument.documentElement.scrollHeight - frame.clientHeight);
-    const editorMax = Math.max(1, editor.scrollDOM.scrollHeight - editor.scrollDOM.clientHeight);
-    state.syncingScroll = true;
-    editor.scrollDOM.scrollTop = frame.contentWindow.scrollY / pageMax * editorMax;
-    requestAnimationFrame(() => { state.syncingScroll = false; });
-  }, {passive: true});
+  frame.contentDocument.documentElement.dataset.oxpioEditorPreview = "";
+  state.previewResizeObserver?.disconnect();
+  resizePreviewFrame();
+  if (window.ResizeObserver) {
+    state.previewResizeObserver = new ResizeObserver(resizePreviewFrame);
+    state.previewResizeObserver.observe(frame.contentDocument.documentElement);
+  }
 }
 function showPreviewSurface() {
   $("#diff-editor").hidden = true;
-  $("#preview-tab").setAttribute("aria-selected", "true");
-  $("#diff-tab").setAttribute("aria-selected", "false");
+  $("#diff-wrap").hidden = true;
+  $("#preview-title").textContent = state.surface === "write" ? "Live preview" : "Preview";
+  $("#preview-title-icon").setAttribute("href", "#icon-eye");
   if (!$("#preview-frame").src) $("#preview-empty").hidden = false;
   else $("#preview-frame").hidden = false;
+}
+async function setWorkspaceMode(surface) {
+  if (surface !== "write") {
+    $("#media-panel").hidden = true;
+  }
+  if (surface === "source" && state.mode !== "source") await toggleMode();
+  if (surface === "write" && state.mode !== "visual") await toggleMode();
+  state.surface = surface;
+  updateMode();
+  if (surface === "read") {
+    showPreviewSurface();
+    await preview();
+  } else if (surface === "diff") {
+    await showDiff();
+  } else {
+    showPreviewSurface();
+    if (surface === "write") scheduleLivePreview();
+  }
+}
+function rebuildDiffView() {
+  if (!state.diffView) return;
+  const baseline = state.diffView.a.state.doc.toString();
+  const candidate = state.diffView.b.state.doc.toString();
+  const host = $(".merge-host");
+  if (!host) return;
+  state.diffView.destroy();
+  host.replaceChildren();
+  mountDiffView(host, baseline, candidate);
+  updateDiffControl();
 }
 
 async function toggleMode() {
@@ -813,12 +797,14 @@ async function toggleMode() {
       state.source = source;
       state.sourceChanged = false;
       state.mode = "source";
+      state.surface = "source";
       setText(source);
     } else {
-      const result = await mutation("POST", "/_obsite/frontmatter", {path: state.path, source});
+      const result = await mutation("POST", "/_oxpio/frontmatter", {path: state.path, source});
       if (result.parseError) throw new Error(result.parseError);
       state.source = source;
       state.mode = "visual";
+      state.surface = "write";
       showForm(result.frontmatter);
       setText(result.body);
       state.bodyBaseline = text();
@@ -873,8 +859,158 @@ function indentExtensions(spaces = state.indent) {
   return [indentUnit.of(" ".repeat(spaces)), EditorState.tabSize.of(spaces)];
 }
 const indentation = new Compartment();
+const livePreviewLine = StateEffect.define();
+const livePreviewRender = StateEffect.define();
+class LivePreviewWidget extends WidgetType {
+  constructor(text, className) { super(); this.text = text; this.className = className; }
+  eq(other) { return this.text === other.text && this.className === other.className; }
+  toDOM() {
+    const element = document.createElement("span");
+    element.className = `live-preview-token ${this.className}`;
+    element.textContent = this.text;
+    return element;
+  }
+}
+class LiveRenderedWidget extends WidgetType {
+  constructor(html, styles) { super(); this.html = html; this.styles = styles; }
+  eq(other) { return this.html === other.html && this.styles === other.styles; }
+  toDOM() {
+    const element = document.createElement("div");
+    element.className = "live-rendered-block";
+    const shadow = element.attachShadow({mode: "open"});
+    const style = document.createElement("style");
+    style.textContent = `:host { --preview-bg: #fff; --preview-surface: #fff; --preview-text: #20252b; --preview-muted: #687687; --preview-accent: #1769aa; --preview-border: #dce1e6; --preview-code-bg: #20252b; --preview-code-text: #f5f7fa; --preview-inline-code: #eef1f4; --preview-table-head: #f0f4f7; --preview-callout: #f4f8fb; display: block; max-width: 100%; color: var(--preview-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; }${this.styles}`;
+    const content = document.createElement("div");
+    content.className = "content-preview-content";
+    content.innerHTML = this.html;
+    shadow.append(style, content);
+    return element;
+  }
+}
+function markdownBlocks(source) {
+  const blocks = [];
+  const separator = /\n[ \t]*\n+/g;
+  let start = 0;
+  let match;
+  while ((match = separator.exec(source)) !== null) {
+    if (match.index > start) blocks.push({from: start, to: match.index});
+    start = match.index + match[0].length;
+  }
+  if (start < source.length) blocks.push({from: start, to: source.length});
+  return blocks;
+}
+function serializeLivePreviewBlock(element, documentRoot) {
+  const clone = element.cloneNode(true);
+  for (const node of [clone, ...clone.querySelectorAll("[src], [href]")]) {
+    for (const attribute of ["src", "href"]) {
+      const value = node.getAttribute?.(attribute);
+      if (value && !/^(?:#|data:|https?:|mailto:|javascript:)/iu.test(value)) node.setAttribute(attribute, new URL(value, documentRoot.baseURI).href);
+    }
+  }
+  return clone.outerHTML;
+}
+function livePreviewStyles(documentRoot) {
+  return [...(documentRoot?.styleSheets || [])].flatMap(sheet => {
+    try { return [...sheet.cssRules].map(rule => rule.cssText); } catch { return []; }
+  }).join("\n");
+}
+function liveReplace(from, to) { return from < to ? Decoration.replace({}).range(from, to) : null; }
+function liveWidget(from, to, text, className) { return from < to ? Decoration.replace({widget: new LivePreviewWidget(text, className)}).range(from, to) : null; }
+function renderedLivePreviewDecorations(viewState, activeLine, rendered) {
+  if (!rendered?.blocks?.length || rendered.body !== viewState.doc.toString()) return null;
+  const doc = viewState.doc;
+  const blocks = markdownBlocks(rendered.body);
+  if (blocks.length !== rendered.blocks.length) return null;
+  const line = doc.line(activeLine || doc.lineAt(viewState.selection.main.head).number);
+  const activeBlock = blocks.findIndex(block => line.from >= block.from && line.from <= block.to);
+  const ranges = [];
+  blocks.forEach((block, index) => {
+    if (index === activeBlock) return;
+    ranges.push(Decoration.replace({widget: new LiveRenderedWidget(rendered.blocks[index], rendered.styles), block: true}).range(block.from, block.to));
+  });
+  return ranges.length ? Decoration.set(ranges, true) : Decoration.none;
+}
+function buildLivePreviewDecorations(viewState, activeLine, rendered) {
+  if (state.surface !== "write" || state.mode !== "visual") return Decoration.none;
+  const renderedDecorations = renderedLivePreviewDecorations(viewState, activeLine, rendered);
+  if (renderedDecorations) return renderedDecorations;
+  const doc = viewState.doc;
+  const currentLine = activeLine || doc.lineAt(viewState.selection.main.head).number;
+  const ranges = [];
+  for (let number = 1; number <= doc.lines; number++) {
+    if (number === currentLine) continue;
+    const line = doc.line(number);
+    const source = line.text;
+    const add = range => { if (range) ranges.push(range); };
+    const heading = source.match(/^(\u0020{0,3})(#{1,6})\s+/);
+    const blockquote = source.match(/^(\u0020{0,3}>\s?)/);
+    const callout = source.match(/^(\u0020{0,3}>\s?)\[!([^\]]+)\]\s*/i);
+    const list = source.match(/^(\u0020{0,3})(?:(?:[-+*])|(?:\d+[.)]))\s+/);
+    const task = source.match(/^(\u0020{0,3})(?:[-+*]|\d+[.)])\s+\[[ xX]\]\s+/);
+    const fence = source.match(/^\u0020{0,3}(`{3,}|~{3,})/);
+    const tableRule = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*$/.test(source);
+    const horizontalRule = /^\s{0,3}(?:\*\s*){3,}$|^\s{0,3}(?:-\s*){3,}$|^\s{0,3}(?:_\s*){3,}$/.test(source);
+    if (heading) {
+      ranges.push(Decoration.line({class: `live-heading live-heading-${heading[2].length}`}).range(line.from));
+      add(liveReplace(line.from + heading[1].length, line.from + heading[0].length));
+    } else if (task) {
+      ranges.push(Decoration.line({class: "live-list live-task"}).range(line.from));
+      add(liveReplace(line.from + task[1].length, line.from + task[0].length));
+    } else if (list) {
+      ranges.push(Decoration.line({class: "live-list"}).range(line.from));
+      add(liveReplace(line.from + list[1].length, line.from + list[0].length));
+    } else if (callout) {
+      ranges.push(Decoration.line({class: "live-blockquote live-callout"}).range(line.from));
+      add(liveReplace(line.from, line.from + callout[1].length));
+      add(liveWidget(line.from + callout[1].length, line.from + callout[0].length, callout[2].toUpperCase(), "live-callout-label"));
+    } else if (blockquote) {
+      ranges.push(Decoration.line({class: "live-blockquote"}).range(line.from));
+      add(liveReplace(line.from, line.from + blockquote[1].length));
+    } else if (fence || tableRule || horizontalRule) {
+      ranges.push(Decoration.line({class: fence ? "live-code-fence" : "live-hidden-line"}).range(line.from));
+      add(liveReplace(line.from, line.to));
+      continue;
+    }
+    const image = source.match(/!\[([^\]]*)\]\(([^)]+)\)/);
+    const link = image || source.match(/\[([^\]]+)\]\(([^)]+)\)/);
+    if (link) {
+      const start = link.index;
+      const label = image ? `🖼 ${link[1] || link[2]}` : link[1];
+      add(liveWidget(line.from + start, line.from + start + link[0].length, label, image ? "live-image" : "live-link"));
+      continue;
+    }
+    const markerStart = heading?.[0].length || task?.[0].length || list?.[0].length || 0;
+    const markers = /(`+|\*\*|__|\*|_)/g;
+    let marker;
+    while ((marker = markers.exec(source)) !== null) {
+      if (marker.index < markerStart) continue;
+      add(liveReplace(line.from + marker.index, line.from + marker.index + marker[0].length));
+    }
+  }
+  return ranges.length ? Decoration.set(ranges.sort((a, b) => a.from - b.from || a.to - b.to), true) : Decoration.none;
+}
+const livePreviewDecorations = StateField.define({
+  create: viewState => {
+    const rendered = {body: "", blocks: [], styles: ""};
+    return {line: viewState.doc.lineAt(viewState.selection.main.head).number, rendered, decorations: buildLivePreviewDecorations(viewState, null, rendered)};
+  },
+  update(value, transaction) {
+    let line = value.line;
+    let rendered = value.rendered;
+    let explicit = false;
+    for (const effect of transaction.effects) {
+      if (effect.is(livePreviewLine)) { line = effect.value; explicit = true; }
+      if (effect.is(livePreviewRender)) { rendered = effect.value; explicit = true; }
+    }
+    if (transaction.docChanged || transaction.selection) line = transaction.state.doc.lineAt(transaction.state.selection.main.head).number;
+    if (transaction.docChanged && rendered.body !== transaction.state.doc.toString()) rendered = {body: "", blocks: [], styles: ""};
+    if (!transaction.docChanged && !transaction.selection && !explicit) return value;
+    return {line, rendered, decorations: buildLivePreviewDecorations(transaction.state, line, rendered)};
+  },
+  provide: field => EditorView.decorations.from(field, value => value.decorations),
+});
 function editorExtensions() {
-  return [basicSetup, markdown(), indentation.of(indentExtensions()), EditorView.lineWrapping, editable.of(EditorView.editable.of(!state.busy)),
+  return [basicSetup, markdown(), livePreviewDecorations, indentation.of(indentExtensions()), EditorView.lineWrapping, editable.of(EditorView.editable.of(!state.busy)),
     Prec.highest(keymap.of([
       {key: "Mod-b", run: () => { command("bold"); return true; }},
       {key: "Mod-i", run: () => { command("italic"); return true; }},
@@ -889,6 +1025,7 @@ function editorExtensions() {
         state.sourceChanged = true;
         updateEditorStats();
         dirty();
+        scheduleLivePreview();
       }
     }),
   ];
@@ -928,7 +1065,7 @@ async function loadMedia() {
   const list = $("#media-list");
   list.textContent = "Loading…";
   try {
-    const data = await responseJSON(await fetch("/_obsite/media"));
+    const data = await responseJSON(await fetch("/_oxpio/media"));
     list.replaceChildren();
     if (!data.items.length) list.textContent = "No images yet.";
     for (const media of data.items) {
@@ -958,7 +1095,7 @@ async function uploadMedia(file) {
       if (isSectionFile !== (kind === "section")) throw new Error(isSectionFile ? "Choose Section index for _index.md uploads." : "Choose Article for ordinary Markdown uploads.");
       form.append("kind", kind);
     }
-    const result = await mutation("POST", "/_obsite/media", form, {"X-Obsite-File-Hash": "absent"});
+    const result = await mutation("POST", "/_oxpio/media", form, {"X-OXPIO-File-Hash": "absent"});
     await loadMedia();
     await refreshFiles(result.path);
     if (/\.md$/iu.test(file.name)) await loadCatalog(result.path);
@@ -1012,55 +1149,83 @@ async function runFileMutation(label, action, preferred = state.filePath, reload
 
 document.querySelectorAll("button svg, label svg, .workspace-search svg").forEach(svg => { svg.setAttribute("aria-hidden", "true"); svg.setAttribute("focusable", "false"); });
 editor = new EditorView({state: EditorState.create({extensions: editorExtensions()}), parent: $("#editor")});
-editor.scrollDOM.addEventListener("scroll", () => {
-  if (!state.syncScroll || state.syncingScroll || !$("#preview-frame").contentWindow) return;
-  const frame = $("#preview-frame");
-  const editorMax = Math.max(1, editor.scrollDOM.scrollHeight - editor.scrollDOM.clientHeight);
-  const pageMax = Math.max(1, frame.contentDocument?.documentElement?.scrollHeight - frame.clientHeight || 1);
-  state.syncingScroll = true;
-  frame.contentWindow.scrollTo(0, editor.scrollDOM.scrollTop / editorMax * pageMax);
-  requestAnimationFrame(() => { state.syncingScroll = false; });
-}, {passive: true});
+let liveHoveredLine = null;
+function updateLiveHoveredLine(event) {
+  if (state.surface !== "write" || state.mode !== "visual") return;
+  const target = event.target instanceof Element ? event.target : null;
+  if (!target) return;
+  const lineElement = target.closest(".cm-line");
+  const position = editor.posAtDOM(lineElement || target, 0);
+  const line = editor.state.doc.lineAt(position).number;
+  if (line === liveHoveredLine) return;
+  liveHoveredLine = line;
+  editor.dispatch({effects: livePreviewLine.of(line)});
+}
+editor.dom.addEventListener("mousemove", updateLiveHoveredLine);
+editor.dom.addEventListener("mouseleave", () => {
+  if (liveHoveredLine == null) return;
+  liveHoveredLine = null;
+  editor.dispatch({effects: livePreviewLine.of(null)});
+});
 loadPreferences();
 $("#document-search").oninput = filterDocuments;
 $("#sidebar-toggle").onclick = event => { const open = $(".source-sidebar").classList.toggle("drawer-open"); event.currentTarget.setAttribute("aria-expanded", String(open)); event.currentTarget.setAttribute("aria-label", open ? "Close documents" : "Open documents"); };
 document.addEventListener("keydown", event => { if (event.key === "Escape" && $(".source-sidebar").classList.contains("drawer-open")) { $(".source-sidebar").classList.remove("drawer-open"); $("#sidebar-toggle").setAttribute("aria-expanded", "false"); $("#sidebar-toggle").setAttribute("aria-label", "Open documents"); } });
-$("#media-nav").onclick = openMedia;
 $("#settings").onclick = () => $("#settings-dialog").showModal();
 $("#settings-save").onclick = storePreferences;
-$("#help").onclick = () => status("Shortcuts: Ctrl/Cmd+B bold, Ctrl/Cmd+I italic, Ctrl/Cmd+K link, Ctrl/Cmd+S save.");
-$("#logout").onclick = async () => { try { await mutation("POST", "/_obsite/logout"); location.href = "/_obsite/login"; } catch (error) { status(`Log out failed: ${error.message}`); } };
-$("#write-mode").onclick = () => { if (state.mode === "source") toggleMode(); };
-$("#source-mode").onclick = () => { if (state.mode !== "source") toggleMode(); };
-$("#preview-tab").onclick = showPreviewSurface;
-$("#diff-tab").onclick = async () => { $("#preview-tab").setAttribute("aria-selected", "false"); $("#diff-tab").setAttribute("aria-selected", "true"); try { await showDiff(); } catch (error) { diagnostics(error.diagnostics, `Diff failed: ${error.message}`); } };
+$("#metadata-toggle").onclick = event => {
+  const collapsed = $("#metadata").classList.toggle("metadata-collapsed");
+  const expanded = !collapsed;
+  event.currentTarget.setAttribute("aria-expanded", String(expanded));
+  event.currentTarget.setAttribute("aria-label", expanded ? "Hide metadata" : "Show metadata");
+  event.currentTarget.title = expanded ? "Hide metadata" : "Show metadata";
+  $("#metadata-toggle-icon").setAttribute("href", expanded ? "#icon-chevron-up" : "#icon-chevron-down");
+};
+$("#help-tooltip").onclick = event => {
+  const open = event.currentTarget.getAttribute("aria-expanded") !== "true";
+  event.currentTarget.setAttribute("aria-expanded", String(open));
+  $("#help-tooltip-content").setAttribute("aria-hidden", String(!open));
+};
+document.addEventListener("click", event => {
+  if (event.target.closest(".tooltip-anchor")) return;
+  $("#help-tooltip").setAttribute("aria-expanded", "false");
+  $("#help-tooltip-content").setAttribute("aria-hidden", "true");
+});
+document.addEventListener("keydown", event => {
+  if (event.key !== "Escape") return;
+  $("#help-tooltip").setAttribute("aria-expanded", "false");
+  $("#help-tooltip-content").setAttribute("aria-hidden", "true");
+});
+$("#logout").onclick = async () => { try { await mutation("POST", "/_oxpio/logout"); location.href = "/_oxpio/login"; } catch (error) { status(`Log out failed: ${error.message}`); } };
+$("#write-mode").onclick = () => setWorkspaceMode("write").catch(error => diagnostics(error.diagnostics, `Write mode failed: ${error.message}`));
+$("#source-mode").onclick = () => setWorkspaceMode("source").catch(error => diagnostics(error.diagnostics, `Source mode failed: ${error.message}`));
+$("#read-mode").onclick = () => setWorkspaceMode("read").catch(error => diagnostics(error.diagnostics, `Reading mode failed: ${error.message}`));
+$("#diff-mode").onclick = () => setWorkspaceMode("diff").catch(error => diagnostics(error.diagnostics, `Diff failed: ${error.message}`));
+$(".editor-tabs").onkeydown = event => {
+  if (![
+    "ArrowLeft", "ArrowRight", "Home", "End",
+  ].includes(event.key)) return;
+  const tabs = [...document.querySelectorAll(".editor-tabs [role=tab]")];
+  const current = tabs.indexOf(document.activeElement);
+  if (current < 0) return;
+  event.preventDefault();
+  const next = event.key === "Home" ? 0 : event.key === "End" ? tabs.length - 1 : (current + (event.key === "ArrowLeft" ? -1 : 1) + tabs.length) % tabs.length;
+  tabs[next].focus();
+  tabs[next].click();
+};
 $("#preview-refresh").onclick = preview;
-$("#preview-new-window").onclick = fullPagePreview;
-$("#sync-scroll").onclick = event => { state.syncScroll = !state.syncScroll; event.currentTarget.setAttribute("aria-pressed", String(state.syncScroll)); };
-$("#device-desktop").onclick = () => { $("#preview-frame").classList.remove("preview-mobile", "preview-tablet"); $("#device-desktop").classList.add("active"); $("#device-tablet").classList.remove("active"); $("#device-mobile").classList.remove("active"); };
-$("#device-tablet").onclick = () => { $("#preview-frame").classList.remove("preview-mobile"); $("#preview-frame").classList.add("preview-tablet"); $("#device-tablet").classList.add("active"); $("#device-desktop").classList.remove("active"); $("#device-mobile").classList.remove("active"); };
-$("#device-mobile").onclick = () => { $("#preview-frame").classList.remove("preview-tablet"); $("#preview-frame").classList.add("preview-mobile"); $("#device-mobile").classList.add("active"); $("#device-desktop").classList.remove("active"); $("#device-tablet").classList.remove("active"); };
 $("#source").onchange = event => {
   if (confirmDiscard()) loadSource(event.target.value);
   else event.target.value = state.path;
 };
 $("#refresh").onclick = () => { if (confirmDiscard()) loadCatalog().catch(error => status(error.message)); };
 $("#save").onclick = save;
-$("#preview").onclick = preview;
-$("#full-page-preview").onclick = fullPagePreview;
-$("#toolbar-preview").onclick = preview;
-$("#toolbar-split").onclick = event => {
-  const grid = $(".editor-preview-grid");
-  const focused = grid.classList.toggle("focus-preview");
-  event.currentTarget.setAttribute("aria-pressed", String(focused));
-};
+$("#diff-wrap").onclick = () => { state.diffWrap = !state.diffWrap; rebuildDiffView(); };
 $("#toolbar-fullscreen").onclick = event => {
   const fullscreen = document.body.classList.toggle("editor-fullscreen");
   event.currentTarget.setAttribute("aria-pressed", String(fullscreen));
 };
-$("#toolbar-help").onclick = () => status("Shortcuts: Ctrl/Cmd+B bold, Ctrl/Cmd+I italic, Ctrl/Cmd+K link, Ctrl/Cmd+S save.");
-$("#mode").onclick = toggleMode;
-$("#metadata").oninput = () => dirty();
+$("#metadata").oninput = () => { dirty(); scheduleLivePreview(); };
 $("#metadata").onsubmit = event => event.preventDefault();
 $("#file-refresh").onclick = () => refreshFiles().catch(error => status(`File list failed: ${error.message}`));
 $("#file-new-folder").onclick = () => openFileDialog("folder");
@@ -1075,7 +1240,7 @@ $("#file-delete").onclick = () => {
   const affectsCurrent = pathContains(pathValue, state.path);
   const preferred = affectsCurrent ? "" : state.path;
   runFileMutation("Delete", async () => {
-    const result = await mutation("DELETE", `/_obsite/file?path=${encodeURIComponent(pathValue)}&confirm=true`, null, {"X-Obsite-File-Hash": fileHash});
+    const result = await mutation("DELETE", `/_oxpio/file?path=${encodeURIComponent(pathValue)}&confirm=true`, null, {"X-OXPIO-File-Hash": fileHash});
     await clearDraft(pathValue);
     return result;
   }, preferred, affectsCurrent).catch(() => {});
@@ -1088,17 +1253,17 @@ $("#file-form").onsubmit = async event => {
   const dialog = $("#file-dialog");
   try {
     if (mode === "folder") {
-      await runFileMutation("Create folder", () => mutation("POST", "/_obsite/file/folder", {path: pathValue}, {"X-Obsite-File-Hash": "absent"}), pathValue, false);
+      await runFileMutation("Create folder", () => mutation("POST", "/_oxpio/file/folder", {path: pathValue}, {"X-OXPIO-File-Hash": "absent"}), pathValue, false);
     } else if (mode === "markdown") {
       const request = {path: pathValue, title: $("#file-title").value, type: $("#file-type").value, date: $("#file-date").value, kind: $("#file-kind").value};
-      await runFileMutation("Create Markdown file", () => mutation("POST", "/_obsite/file/markdown", request, {"X-Obsite-File-Hash": "absent"}), pathValue);
+      await runFileMutation("Create Markdown file", () => mutation("POST", "/_oxpio/file/markdown", request, {"X-OXPIO-File-Hash": "absent"}), pathValue);
     } else if (mode === "rename") {
       const oldPath = $("#file-original").value;
       const affectsCurrent = pathContains(oldPath, state.path);
       if (affectsCurrent && !confirmDiscard()) return;
       const suffix = affectsCurrent ? state.path.slice(oldPath.length) : "";
       const preferred = affectsCurrent ? pathValue + suffix : state.path;
-      await runFileMutation("Rename", () => mutation("PUT", `/_obsite/file?path=${encodeURIComponent(oldPath)}`, {destination: pathValue}, {"X-Obsite-File-Hash": state.fileHash}), preferred, affectsCurrent);
+      await runFileMutation("Rename", () => mutation("PUT", `/_oxpio/file?path=${encodeURIComponent(oldPath)}`, {destination: pathValue}, {"X-OXPIO-File-Hash": state.fileHash}), preferred, affectsCurrent);
     }
     dialog.close();
   } catch (error) {
@@ -1113,7 +1278,7 @@ $("#new-form").onsubmit = async event => {
   event.preventDefault();
   const form = new URLSearchParams(new FormData(event.target));
   try {
-    const result = await mutation("POST", "/_obsite/source", form, {"X-Obsite-Source-Hash": "absent"});
+    const result = await mutation("POST", "/_oxpio/source", form, {"X-OXPIO-Source-Hash": "absent"});
     $("#new-dialog").close(); dirty(false);
     await loadCatalog(form.get("path"));
     status(`Created and rebuilt.${postCommitWarning(result)}`);
@@ -1122,7 +1287,7 @@ $("#new-form").onsubmit = async event => {
 $("#delete").onclick = () => operation("Delete", async () => {
   if (state.kind !== "article" || !confirm("Delete this article?")) return;
   const deletedPath = state.path;
-  const result = await mutation("DELETE", `/_obsite/source?path=${encodeURIComponent(deletedPath)}&confirm=true`, null, {"X-Obsite-Source-Hash": state.hash});
+  const result = await mutation("DELETE", `/_oxpio/source?path=${encodeURIComponent(deletedPath)}&confirm=true`, null, {"X-OXPIO-Source-Hash": state.hash});
   await clearDraft(deletedPath);
   dirty(false); await loadCatalog(""); status(`Deleted and rebuilt.${postCommitWarning(result)}`);
 });

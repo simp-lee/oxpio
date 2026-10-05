@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/slug"
 	gmhashtag "go.abhg.dev/goldmark/hashtag"
 )
 

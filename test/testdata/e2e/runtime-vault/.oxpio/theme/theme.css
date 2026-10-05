@@ -1,0 +1,9 @@
+:root {
+  --oxpio-accent: rgb(113, 44, 249);
+  --oxpio-surface: rgb(250, 248, 255);
+}
+
+:root[data-theme="dark"] {
+  --oxpio-accent: rgb(190, 158, 255);
+  --oxpio-surface: rgb(28, 22, 40);
+}

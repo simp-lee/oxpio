@@ -14,7 +14,7 @@ import (
 func TestStrictBuildCoversBannerLayoutExclusionAndIndependentCards(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "site")
-	writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\nbanner: images/banner.png\nbannerAlt: Home banner\n---\nHome\n")
 	article := "---\ntitle: Same article\npublish: true\ntype: page\nbanner: images/banner.png\nbannerAlt: Article banner\n---\nArticle\n"
 	writeStrictFile(t, vault, "one.md", article)
@@ -80,7 +80,7 @@ func TestStrictBuildPublishesSocialCardsForPNGJPEGAndWebPCovers(t *testing.T) {
 		t.Run(format, func(t *testing.T) {
 			vault := t.TempDir()
 			output := filepath.Join(t.TempDir(), "site")
-			writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+			writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 			writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 			article := "---\ntitle: Article\npublish: true\ntype: page\ncover: images/cover." + format + "\n---\nArticle\n"
 			writeStrictFile(t, vault, "article.md", article)
@@ -113,7 +113,7 @@ func TestStrictBuildPublishesSocialCardsForPNGJPEGAndWebPCovers(t *testing.T) {
 
 			noCoverVault := t.TempDir()
 			noCoverOutput := filepath.Join(t.TempDir(), "site")
-			writeStrictFile(t, noCoverVault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+			writeStrictFile(t, noCoverVault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 			writeStrictFile(t, noCoverVault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 			writeStrictFile(t, noCoverVault, "article.md", strings.Replace(article, "cover: images/cover."+format+"\n", "", 1))
 			if _, err := BuildWithOptions(noCoverVault, noCoverOutput, Options{}); err != nil {

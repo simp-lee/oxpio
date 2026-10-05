@@ -1,0 +1,32 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="480" height="260" viewBox="0 0 480 260" role="img" aria-labelledby="title desc">
+  <title id="title">A calm workspace</title>
+  <desc id="desc">A small desk, plant, and window illustration in soft blue and green tones.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eaf7f4"/>
+      <stop offset="1" stop-color="#dbeafe"/>
+    </linearGradient>
+    <linearGradient id="window" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#b8e1f2"/>
+      <stop offset="1" stop-color="#e8f5f9"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#436b7a" flood-opacity=".16"/>
+    </filter>
+  </defs>
+  <rect width="480" height="260" rx="22" fill="url(#background)"/>
+  <circle cx="396" cy="48" r="22" fill="#f8d78a" opacity=".9"/>
+  <rect x="42" y="30" width="396" height="150" rx="18" fill="#fff" opacity=".72" filter="url(#shadow)"/>
+  <rect x="68" y="54" width="178" height="94" rx="10" fill="url(#window)"/>
+  <path d="M157 54v94M68 101h178" stroke="#fff" stroke-width="5" opacity=".82"/>
+  <path d="M111 142c8-30 18-46 31-55 4 18 1 38-10 55" fill="#66a887"/>
+  <path d="M142 142c-2-25 5-42 20-52 2 22-3 39-12 52" fill="#3e8b73"/>
+  <path d="M119 145h42" stroke="#8b5e45" stroke-width="7" stroke-linecap="round"/>
+  <rect x="272" y="66" width="124" height="12" rx="6" fill="#315b6d" opacity=".82"/>
+  <rect x="272" y="91" width="98" height="9" rx="4.5" fill="#7aa6b5"/>
+  <rect x="272" y="112" width="112" height="9" rx="4.5" fill="#a7c9d1"/>
+  <rect x="272" y="133" width="76" height="9" rx="4.5" fill="#c5dce0"/>
+  <path d="M31 204h418" stroke="#4f7f86" stroke-width="8" stroke-linecap="round" opacity=".7"/>
+  <path d="M92 204l-18 34M388 204l18 34" stroke="#4f7f86" stroke-width="8" stroke-linecap="round" opacity=".7"/>
+  <rect x="211" y="185" width="78" height="14" rx="7" fill="#f3b77a"/>
+</svg>

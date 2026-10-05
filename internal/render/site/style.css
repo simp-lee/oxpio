@@ -1,46 +1,46 @@
-@layer obsite {
+@layer oxpio {
 :root {
   color-scheme: light;
-  --obsite-background:
+  --oxpio-background:
     radial-gradient(circle at top left, rgba(188, 90, 47, 0.14), transparent 32%),
     radial-gradient(circle at right 18%, rgba(109, 149, 137, 0.16), transparent 26%),
     linear-gradient(180deg, #f9f4ea 0%, #f5efe2 42%, #efe4d0 100%);
-  --obsite-surface: #f5efe2;
-  --obsite-text: #1a232b;
-  --obsite-muted: #5d696f;
-  --obsite-accent: #bc5a2f;
-  --obsite-border: rgba(26, 35, 43, 0.14);
-  --obsite-font-body: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
-  --obsite-font-display: "Avenir Next Condensed", "Franklin Gothic Medium", "Arial Narrow", sans-serif;
-  --obsite-font-mono: "Berkeley Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-  --obsite-content-width: 46rem;
-  --obsite-sidebar-width: 18rem;
-  --obsite-radius: 1rem;
-  --obsite-shadow: 0 10px 24px rgba(26, 35, 43, 0.08);
-  --page-background: var(--obsite-background);
+  --oxpio-surface: #f5efe2;
+  --oxpio-text: #1a232b;
+  --oxpio-muted: #5d696f;
+  --oxpio-accent: #bc5a2f;
+  --oxpio-border: rgba(26, 35, 43, 0.14);
+  --oxpio-font-body: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  --oxpio-font-display: "Avenir Next Condensed", "Franklin Gothic Medium", "Arial Narrow", sans-serif;
+  --oxpio-font-mono: "Berkeley Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  --oxpio-content-width: 46rem;
+  --oxpio-sidebar-width: 18rem;
+  --oxpio-radius: 1rem;
+  --oxpio-shadow: 0 10px 24px rgba(26, 35, 43, 0.08);
+  --page-background: var(--oxpio-background);
   --page-overlay:
     linear-gradient(90deg, rgba(255, 255, 255, 0.18), transparent 28%, transparent 72%, rgba(255, 255, 255, 0.12)),
     repeating-linear-gradient(180deg, rgba(26, 35, 43, 0.018), rgba(26, 35, 43, 0.018) 1px, transparent 1px, transparent 9px);
   --page-overlay-opacity: 0.16;
-  --paper: var(--obsite-surface);
+  --paper: var(--oxpio-surface);
   --paper-strong: #fffaf2;
   --paper-shadow: #ebe1cc;
-  --ink: var(--obsite-text);
+  --ink: var(--oxpio-text);
   --ink-strong: #111820;
-  --muted: var(--obsite-muted);
+  --muted: var(--oxpio-muted);
   --muted-soft: rgba(93, 105, 111, 0.55);
-  --accent: var(--obsite-accent);
+  --accent: var(--oxpio-accent);
   --accent-deep: #824025;
   --accent-soft: #efd5c2;
   --accent-fade: rgba(188, 90, 47, 0);
   --teal-soft: #dbe9e4;
-  --line: var(--obsite-border);
+  --line: var(--oxpio-border);
   --panel-border: rgba(26, 35, 43, 0.08);
   --panel-line: rgba(26, 35, 43, 0.08);
   --band-border: rgba(130, 64, 37, 0.18);
   --masthead-band-bg: linear-gradient(140deg, rgba(255, 250, 242, 0.9), rgba(239, 213, 194, 0.7));
-  --page-surface: var(--obsite-surface);
-  --page-surface-soft: var(--obsite-surface);
+  --page-surface: var(--oxpio-surface);
+  --page-surface-soft: var(--oxpio-surface);
   --note-card-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.52), rgba(245, 239, 226, 0.72));
   --tag-bg: linear-gradient(135deg, rgba(239, 213, 194, 0.92), rgba(219, 233, 228, 0.92));
   --tag-border: rgba(130, 64, 37, 0.16);
@@ -67,17 +67,17 @@
   --theme-toggle-value-fg: var(--ink);
   --theme-toggle-active-bg: var(--accent);
   --theme-toggle-active-fg: var(--paper-strong);
-  --sidebar-width: var(--obsite-sidebar-width);
+  --sidebar-width: var(--oxpio-sidebar-width);
   --sidebar-surface: rgba(255, 252, 247, 0.9);
   --sidebar-overlay: rgba(26, 35, 43, 0.36);
   --shadow-lg: 0 24px 64px rgba(26, 35, 43, 0.12);
-  --shadow-sm: var(--obsite-shadow);
+  --shadow-sm: var(--oxpio-shadow);
   --radius-lg: 1.75rem;
-  --radius-md: var(--obsite-radius);
-  --content-width: var(--obsite-content-width);
-  --font-display: var(--obsite-font-display);
-  --font-body: var(--obsite-font-body);
-  --font-mono: var(--obsite-font-mono);
+  --radius-md: var(--oxpio-radius);
+  --content-width: var(--oxpio-content-width);
+  --font-display: var(--oxpio-font-display);
+  --font-body: var(--oxpio-font-body);
+  --font-mono: var(--oxpio-font-mono);
 }
 
 :root[data-theme="light"] {
@@ -86,33 +86,33 @@
 
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --obsite-background:
+  --oxpio-background:
     radial-gradient(circle at top left, rgba(224, 138, 95, 0.18), transparent 28%),
     radial-gradient(circle at right 18%, rgba(86, 122, 116, 0.22), transparent 24%),
     linear-gradient(180deg, #161a1f 0%, #12171c 40%, #0d1116 100%);
-  --page-background: var(--obsite-background);
+  --page-background: var(--oxpio-background);
   --page-overlay:
     linear-gradient(90deg, rgba(255, 255, 255, 0.04), transparent 28%, transparent 72%, rgba(255, 255, 255, 0.03)),
     repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.02) 1px, transparent 1px, transparent 9px);
   --page-overlay-opacity: 0.42;
-  --obsite-surface: #141b21;
-  --paper: var(--obsite-surface);
+  --oxpio-surface: #141b21;
+  --paper: var(--oxpio-surface);
   --paper-strong: #1b252e;
   --paper-shadow: #0d1216;
-  --obsite-text: #e8ecee;
-  --ink: var(--obsite-text);
+  --oxpio-text: #e8ecee;
+  --ink: var(--oxpio-text);
   --ink-strong: #f7f9fa;
-  --obsite-muted: #aab5ba;
-  --muted: var(--obsite-muted);
+  --oxpio-muted: #aab5ba;
+  --muted: var(--oxpio-muted);
   --muted-soft: rgba(170, 181, 186, 0.68);
-  --obsite-accent: #e08a5f;
-  --accent: var(--obsite-accent);
+  --oxpio-accent: #e08a5f;
+  --accent: var(--oxpio-accent);
   --accent-deep: #f3b08c;
   --accent-soft: #4d2e23;
   --accent-fade: rgba(224, 138, 95, 0);
   --teal-soft: #20302d;
-  --obsite-border: rgba(232, 236, 238, 0.14);
-  --line: var(--obsite-border);
+  --oxpio-border: rgba(232, 236, 238, 0.14);
+  --line: var(--oxpio-border);
   --panel-border: rgba(232, 236, 238, 0.08);
   --panel-line: rgba(232, 236, 238, 0.08);
   --band-border: rgba(224, 138, 95, 0.24);
@@ -145,47 +145,47 @@
   --theme-toggle-value-fg: var(--ink);
   --theme-toggle-active-bg: var(--accent);
   --theme-toggle-active-fg: #161a1f;
-  --obsite-sidebar-width: 18rem;
-  --sidebar-width: var(--obsite-sidebar-width);
+  --oxpio-sidebar-width: 18rem;
+  --sidebar-width: var(--oxpio-sidebar-width);
   --sidebar-surface: rgba(24, 32, 39, 0.92);
   --sidebar-overlay: rgba(4, 7, 9, 0.56);
   --shadow-lg: 0 28px 72px rgba(0, 0, 0, 0.36);
-  --obsite-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
-  --shadow-sm: var(--obsite-shadow);
-  --page-surface: var(--obsite-surface);
-  --page-surface-soft: var(--obsite-surface);
+  --oxpio-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+  --shadow-sm: var(--oxpio-shadow);
+  --page-surface: var(--oxpio-surface);
+  --page-surface-soft: var(--oxpio-surface);
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
     color-scheme: dark;
-    --obsite-background:
+    --oxpio-background:
       radial-gradient(circle at top left, rgba(224, 138, 95, 0.18), transparent 28%),
       radial-gradient(circle at right 18%, rgba(86, 122, 116, 0.22), transparent 24%),
       linear-gradient(180deg, #161a1f 0%, #12171c 40%, #0d1116 100%);
-    --page-background: var(--obsite-background);
+    --page-background: var(--oxpio-background);
     --page-overlay:
       linear-gradient(90deg, rgba(255, 255, 255, 0.04), transparent 28%, transparent 72%, rgba(255, 255, 255, 0.03)),
       repeating-linear-gradient(180deg, rgba(255, 255, 255, 0.02), rgba(255, 255, 255, 0.02) 1px, transparent 1px, transparent 9px);
     --page-overlay-opacity: 0.42;
-    --obsite-surface: #141b21;
-    --paper: var(--obsite-surface);
+    --oxpio-surface: #141b21;
+    --paper: var(--oxpio-surface);
     --paper-strong: #1b252e;
     --paper-shadow: #0d1216;
-    --obsite-text: #e8ecee;
-    --ink: var(--obsite-text);
+    --oxpio-text: #e8ecee;
+    --ink: var(--oxpio-text);
     --ink-strong: #f7f9fa;
-    --obsite-muted: #aab5ba;
-    --muted: var(--obsite-muted);
+    --oxpio-muted: #aab5ba;
+    --muted: var(--oxpio-muted);
     --muted-soft: rgba(170, 181, 186, 0.68);
-    --obsite-accent: #e08a5f;
-    --accent: var(--obsite-accent);
+    --oxpio-accent: #e08a5f;
+    --accent: var(--oxpio-accent);
     --accent-deep: #f3b08c;
     --accent-soft: #4d2e23;
     --accent-fade: rgba(224, 138, 95, 0);
     --teal-soft: #20302d;
-    --obsite-border: rgba(232, 236, 238, 0.14);
-    --line: var(--obsite-border);
+    --oxpio-border: rgba(232, 236, 238, 0.14);
+    --line: var(--oxpio-border);
     --panel-border: rgba(232, 236, 238, 0.08);
     --panel-line: rgba(232, 236, 238, 0.08);
     --band-border: rgba(224, 138, 95, 0.24);
@@ -219,10 +219,10 @@
     --theme-toggle-active-bg: var(--accent);
     --theme-toggle-active-fg: #161a1f;
     --shadow-lg: 0 28px 72px rgba(0, 0, 0, 0.36);
-    --obsite-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
-    --shadow-sm: var(--obsite-shadow);
-    --page-surface: var(--obsite-surface);
-    --page-surface-soft: var(--obsite-surface);
+    --oxpio-shadow: 0 12px 28px rgba(0, 0, 0, 0.24);
+    --shadow-sm: var(--oxpio-shadow);
+    --page-surface: var(--oxpio-surface);
+    --page-surface-soft: var(--oxpio-surface);
   }
 }
 
@@ -319,13 +319,25 @@ samp {
 
 .site-mark {
   position: relative;
-  display: inline-block;
+  display: flex;
+  align-items: center;
+  gap: 0.9rem;
   font-family: var(--font-display);
   font-size: clamp(1.65rem, 3.1vw, 2.75rem);
   line-height: 1.05;
   letter-spacing: -0.035em;
   text-transform: none;
   text-decoration: none;
+}
+
+.site-logo {
+  display: block;
+  width: min(100%, 13rem);
+  height: auto;
+}
+
+.site-title-text {
+  min-width: 0;
 }
 
 .site-mark-caption,

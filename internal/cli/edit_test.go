@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	"github.com/simp-lee/obsite/internal/model"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestEditCommandBuildsBeforeListeningAndEnablesReload(t *testing.T) {

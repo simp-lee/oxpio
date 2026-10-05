@@ -157,9 +157,9 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func fileHashHeader(r *http.Request) string {
-	value := strings.TrimSpace(r.Header.Get("X-Obsite-File-Hash"))
+	value := strings.TrimSpace(r.Header.Get("X-OXPIO-File-Hash"))
 	if value == "" {
-		value = strings.TrimSpace(r.Header.Get("X-Obsite-Source-Hash"))
+		value = strings.TrimSpace(r.Header.Get("X-OXPIO-Source-Hash"))
 	}
 	return value
 }
@@ -263,7 +263,7 @@ func (s *Server) editableFileManagerTarget(relPath string, isDir bool) bool {
 }
 
 func fileManagerPathHidden(relPath string) bool {
-	if strings.EqualFold(relPath, "obsite.yaml") {
+	if strings.EqualFold(relPath, "oxpio.yaml") {
 		return true
 	}
 	for _, segment := range strings.Split(relPath, "/") {

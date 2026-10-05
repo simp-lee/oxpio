@@ -9,7 +9,7 @@ import (
 
 func TestStrictBuildBacklinksIncludeStandardLinksFromPagesAndEmbeds(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", `title: Link Graph
+	writeStrictFile(t, vault, "oxpio.yaml", `title: Link Graph
 baseURL: https://example.test/
 navigation: []
 related:

@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestLoadForBuildRequiresStrictNavigationAndRejectsLegacyFields(t *testing.T) {
@@ -200,7 +200,7 @@ func TestInitialStrictYAMLIsStrictAndBuildConfigurable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadForBuild(InitialStrictYAML()) error = %v", err)
 	}
-	if cfg.Title != "My Obsite Site" || cfg.BaseURL != "https://example.com/" {
+	if cfg.Title != "My OXPIO Site" || cfg.BaseURL != "https://example.com/" {
 		t.Fatalf("initial config = %#v", cfg)
 	}
 }

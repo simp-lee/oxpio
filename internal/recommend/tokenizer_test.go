@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/recommend/chinese"
+	"github.com/simp-lee/oxpio/internal/recommend/chinese"
 )
 
 func TestTokenizeNormalizationAndEngineeringTokens(t *testing.T) {
@@ -85,7 +85,7 @@ func TestTokenizeReturnsChineseInitializationError(t *testing.T) {
 }
 
 func TestStopwordsAndSingleHanFiltering(t *testing.T) {
-	if stopwordSetVersion != "obsite-related-stopwords-v1" {
+	if stopwordSetVersion != "oxpio-related-stopwords-v1" {
 		t.Fatalf("stopwordSetVersion = %q, want versioned v1 set", stopwordSetVersion)
 	}
 

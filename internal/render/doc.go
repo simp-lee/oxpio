@@ -1,2 +1,2 @@
-// Package render is a placeholder for Obsite rendering.
+// Package render is a placeholder for OXPIO rendering.
 package render

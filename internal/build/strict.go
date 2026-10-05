@@ -18,17 +18,17 @@ import (
 	"sync"
 	"time"
 
-	internalasset "github.com/simp-lee/obsite/internal/asset"
-	d "github.com/simp-lee/obsite/internal/diag"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/link"
-	"github.com/simp-lee/obsite/internal/markdown"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/recommend"
-	"github.com/simp-lee/obsite/internal/render"
-	"github.com/simp-lee/obsite/internal/siteplan"
-	"github.com/simp-lee/obsite/internal/slug"
-	"github.com/simp-lee/obsite/internal/social"
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
+	d "github.com/simp-lee/oxpio/internal/diag"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/link"
+	"github.com/simp-lee/oxpio/internal/markdown"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/recommend"
+	"github.com/simp-lee/oxpio/internal/render"
+	"github.com/simp-lee/oxpio/internal/siteplan"
+	"github.com/simp-lee/oxpio/internal/slug"
+	"github.com/simp-lee/oxpio/internal/social"
 	"github.com/tdewolff/minify/v2"
 	minhtml "github.com/tdewolff/minify/v2/html"
 	xhtml "golang.org/x/net/html"
@@ -124,10 +124,10 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		if sidebarErr != nil {
 			return result, sidebarErr
 		}
-		if err := outputs.dependency("sidebar", "obsite.yaml", payload); err != nil {
+		if err := outputs.dependency("sidebar", "oxpio.yaml", payload); err != nil {
 			return result, err
 		}
-		if writeErr := outputs.write(staging, "assets/obsite/sidebar.json", "sidebar", data); writeErr != nil {
+		if writeErr := outputs.write(staging, "assets/oxpio/sidebar.json", "sidebar", data); writeErr != nil {
 			return result, writeErr
 		}
 	}
@@ -227,7 +227,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 			dependency := strictCacheHTMLBase(plan, page.Route, "Recent articles", "", "", "", true)
 			dependency.Entries = strictCachePageEntries(pagePosts)
 			dependency.TimelinePageCount = len(plan.Timeline.Pages)
-			if dependencyErr := outputs.dependency(owner, "obsite.yaml", dependency); dependencyErr != nil {
+			if dependencyErr := outputs.dependency(owner, "oxpio.yaml", dependency); dependencyErr != nil {
 				return result, dependencyErr
 			}
 			if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(page.Route), owner, data); writeErr != nil {
@@ -818,7 +818,7 @@ func protectStrictHTMLComments(data []byte) ([]byte, []strictHTMLComment, error)
 	previous := 0
 	for index, current := range spans {
 		protected = append(protected, data[previous:current.start]...)
-		token := []byte(fmt.Sprintf("obsite-comment-%x-%08d", digest[:8], index))
+		token := []byte(fmt.Sprintf("oxpio-comment-%x-%08d", digest[:8], index))
 		for bytes.Contains(data, token) {
 			token = append(token, 'x')
 		}
@@ -1133,7 +1133,7 @@ func loadStrictCacheManifest(outputRoot string) *strictCacheManifest {
 	if strings.TrimSpace(outputRoot) == "" {
 		return nil
 	}
-	data, err := os.ReadFile(filepath.Join(outputRoot, ".obsite-cache", "manifest.json"))
+	data, err := os.ReadFile(filepath.Join(outputRoot, ".oxpio-cache", "manifest.json"))
 	if err != nil {
 		return nil
 	}
@@ -1169,7 +1169,7 @@ func writeStrictCacheManifest(outputRoot string, plan *model.SitePlan, index *mo
 		// therefore belong to output state, not the canonical config input.
 		cacheConfig.ThemeCSS = ""
 		cacheConfig.DefaultImgURL = ""
-		if err := addDependency("site", "obsite.yaml", struct {
+		if err := addDependency("site", "oxpio.yaml", struct {
 			Config model.SiteConfig `json:"config"`
 		}{Config: cacheConfig}); err != nil {
 			return err
@@ -1227,7 +1227,7 @@ func writeStrictCacheManifest(outputRoot string, plan *model.SitePlan, index *mo
 	if err != nil {
 		return err
 	}
-	return outputs.write(outputRoot, ".obsite-cache/manifest.json", "cache", data)
+	return outputs.write(outputRoot, ".oxpio-cache/manifest.json", "cache", data)
 }
 
 func writeStrictConfiguredAssets(vaultRoot, outputRoot string, plan *model.SitePlan, outputs *strictOutputRegistry) error {
@@ -1247,7 +1247,7 @@ func writeStrictConfiguredAssets(vaultRoot, outputRoot string, plan *model.SiteP
 }
 
 func strictReservedAssetOutputs(plan *model.SitePlan) []string {
-	reserved := []string{"style.css", "assets/obsite-runtime", "assets/obsite", "assets/social"}
+	reserved := []string{"style.css", "assets/oxpio-runtime", "assets/oxpio", "assets/oxpio", "assets/social"}
 	if plan != nil && plan.Config.CustomCSS != "" {
 		reserved = append(reserved, "assets/custom.css")
 	}
@@ -1311,7 +1311,7 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 			}
 		}
 	}
-	if err := outputs.dependency("sitemap", "obsite.yaml", struct {
+	if err := outputs.dependency("sitemap", "oxpio.yaml", struct {
 		BaseURL  string         `json:"baseURL"`
 		Sections []sitemapEntry `json:"sections"`
 		Articles []sitemapEntry `json:"articles"`
@@ -1324,7 +1324,7 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 	if err := outputs.write(outputRoot, "sitemap.xml", "sitemap", sitemapData); err != nil {
 		return err
 	}
-	if err := outputs.dependency("robots", "obsite.yaml", struct {
+	if err := outputs.dependency("robots", "oxpio.yaml", struct {
 		BaseURL string `json:"baseURL"`
 	}{plan.Config.BaseURL}); err != nil {
 		return err
@@ -1334,7 +1334,7 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 	}
 	if plan.Config.RSS.Enabled {
 		var rss strings.Builder
-		_, _ = fmt.Fprintf(&rss, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:obsite="https://obsite.dev/ns/rss"><channel><title>%s</title><link>%s</link>`, strictXMLEscape(plan.Config.Title), strictXMLEscape(strings.TrimSuffix(plan.Config.BaseURL, "/")+"/"))
+		_, _ = fmt.Fprintf(&rss, `<?xml version="1.0" encoding="UTF-8"?><rss version="2.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:oxpio="https://oxpio.dev/ns/rss"><channel><title>%s</title><link>%s</link>`, strictXMLEscape(plan.Config.Title), strictXMLEscape(strings.TrimSuffix(plan.Config.BaseURL, "/")+"/"))
 		if plan.Config.Description != "" {
 			_, _ = fmt.Fprintf(&rss, `<description>%s</description>`, strictXMLEscape(plan.Config.Description))
 		}
@@ -1360,25 +1360,25 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 				_, _ = fmt.Fprintf(&rss, `<category>%s</category>`, strictXMLEscape(tag))
 			}
 			if !article.Frontmatter.Reviewed.IsZero() {
-				_, _ = fmt.Fprintf(&rss, `<obsite:reviewed>%s</obsite:reviewed>`, strictXMLEscape(article.Frontmatter.Reviewed.UTC().Format(time.RFC3339)))
+				_, _ = fmt.Fprintf(&rss, `<oxpio:reviewed>%s</oxpio:reviewed>`, strictXMLEscape(article.Frontmatter.Reviewed.UTC().Format(time.RFC3339)))
 			}
 			if article.Frontmatter.Status != "" {
-				_, _ = fmt.Fprintf(&rss, `<obsite:status>%s</obsite:status>`, strictXMLEscape(article.Frontmatter.Status))
+				_, _ = fmt.Fprintf(&rss, `<oxpio:status>%s</oxpio:status>`, strictXMLEscape(article.Frontmatter.Status))
 			}
 			if article.Frontmatter.Audience != "" {
-				_, _ = fmt.Fprintf(&rss, `<obsite:audience>%s</obsite:audience>`, strictXMLEscape(article.Frontmatter.Audience))
+				_, _ = fmt.Fprintf(&rss, `<oxpio:audience>%s</oxpio:audience>`, strictXMLEscape(article.Frontmatter.Audience))
 			}
 			if article.Frontmatter.ProductVersion != "" {
-				_, _ = fmt.Fprintf(&rss, `<obsite:productVersion>%s</obsite:productVersion>`, strictXMLEscape(article.Frontmatter.ProductVersion))
+				_, _ = fmt.Fprintf(&rss, `<oxpio:productVersion>%s</oxpio:productVersion>`, strictXMLEscape(article.Frontmatter.ProductVersion))
 			}
 			if article.Frontmatter.Series != "" {
-				_, _ = fmt.Fprintf(&rss, `<obsite:series>%s</obsite:series>`, strictXMLEscape(article.Frontmatter.Series))
+				_, _ = fmt.Fprintf(&rss, `<oxpio:series>%s</oxpio:series>`, strictXMLEscape(article.Frontmatter.Series))
 			}
 			if !article.Frontmatter.Date.IsZero() {
 				_, _ = fmt.Fprintf(&rss, `<pubDate>%s</pubDate>`, article.Frontmatter.Date.UTC().Format(time.RFC1123Z))
 			}
 			if !article.Frontmatter.Updated.IsZero() {
-				_, _ = fmt.Fprintf(&rss, `<obsite:updated>%s</obsite:updated>`, article.Frontmatter.Updated.UTC().Format(time.RFC3339))
+				_, _ = fmt.Fprintf(&rss, `<oxpio:updated>%s</oxpio:updated>`, article.Frontmatter.Updated.UTC().Format(time.RFC3339))
 			}
 			rss.WriteString(`</item>`)
 		}
@@ -1409,7 +1409,7 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 				Series: article.Frontmatter.Series, Date: article.Frontmatter.Date, Updated: article.Frontmatter.Updated,
 			})
 		}
-		if err := outputs.dependency("rss", "obsite.yaml", struct {
+		if err := outputs.dependency("rss", "oxpio.yaml", struct {
 			Title       string         `json:"title"`
 			BaseURL     string         `json:"baseURL"`
 			Description string         `json:"description,omitempty"`
@@ -1427,7 +1427,7 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 	if err != nil {
 		return err
 	}
-	if err := outputs.dependency("404", "obsite.yaml", strictCacheHTMLBase(plan, "/404.html", "Not found", "", "", "", true)); err != nil {
+	if err := outputs.dependency("404", "oxpio.yaml", strictCacheHTMLBase(plan, "/404.html", "Not found", "", "", "", true)); err != nil {
 		return err
 	}
 	return writeStrictHTML(outputs, outputRoot, "404.html", "404", notFound)

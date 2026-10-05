@@ -17,7 +17,7 @@ func TestPortableSitePathComponents(t *testing.T) {
 		want bool
 	}{
 		{path: "notes/archive/index.html", want: true},
-		{path: ".obsite-cache/manifest.json", want: true},
+		{path: ".oxpio-cache/manifest.json", want: true},
 		{path: "notes/CON/index.html"},
 		{path: "notes/com1.txt/index.html"},
 		{path: "notes/COM¹/index.html"},

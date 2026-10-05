@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestBuildWithConfigRejectsAmbiguousVersionSourceIdentity(t *testing.T) {

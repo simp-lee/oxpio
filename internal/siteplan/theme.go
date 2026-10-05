@@ -9,14 +9,14 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/simp-lee/obsite/internal/asset"
-	"github.com/simp-lee/obsite/internal/diag"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/markdown"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/render"
-	"github.com/simp-lee/obsite/internal/resourcepath"
-	"github.com/simp-lee/obsite/internal/vault"
+	"github.com/simp-lee/oxpio/internal/asset"
+	"github.com/simp-lee/oxpio/internal/diag"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/markdown"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/render"
+	"github.com/simp-lee/oxpio/internal/resourcepath"
+	"github.com/simp-lee/oxpio/internal/vault"
 	xhtml "golang.org/x/net/html"
 )
 

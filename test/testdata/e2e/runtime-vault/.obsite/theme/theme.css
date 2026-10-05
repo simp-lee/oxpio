@@ -1,9 +1,0 @@
-:root {
-  --obsite-accent: rgb(113, 44, 249);
-  --obsite-surface: rgb(250, 248, 255);
-}
-
-:root[data-theme="dark"] {
-  --obsite-accent: rgb(190, 158, 255);
-  --obsite-surface: rgb(28, 22, 40);
-}

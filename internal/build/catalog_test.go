@@ -8,7 +8,7 @@ import (
 func TestBuildResultExposesExactPublishedAndDraftSourceCatalog(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeStrictFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/base/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/base/\nnavigation: []\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
 	writeStrictFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\n")
 	writeStrictFile(t, vault, "guide/article.md", "---\ntitle: Article\npublish: true\ntype: doc\nslug: custom\n---\nArticle\n")

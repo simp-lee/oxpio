@@ -13,7 +13,7 @@ import (
 func TestFSNotifyWatchLoopRebuildsFixedInputsAndExcludesOutput(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(vault, "public")
-	themeDir := filepath.Join(vault, ".obsite", "theme")
+	themeDir := filepath.Join(vault, ".oxpio", "theme")
 	for _, dir := range []string{filepath.Join(vault, "notes"), filepath.Join(vault, ".obsidian"), themeDir, filepath.Join(vault, "node_modules"), filepath.Join(vault, ".hidden"), output} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
@@ -139,7 +139,7 @@ func TestFSNotifyWatchLoopRebuildsFixedInputsAndExcludesOutput(t *testing.T) {
 	for filePath := range map[string]struct{}{
 		filepath.Join(output, "index.html"):                 {},
 		filepath.Join(vault, "node_modules", "ignored.md"):  {},
-		filepath.Join(vault, ".obsite", "ignored.txt"):      {},
+		filepath.Join(vault, ".oxpio", "ignored.txt"):      {},
 		filepath.Join(vault, ".obsidian", "workspace.json"): {},
 	} {
 		drainNativeAttempts(attempts)

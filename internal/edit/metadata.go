@@ -9,7 +9,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// editorFrontmatter is the form-facing representation of Obsite's strict
+// editorFrontmatter is the form-facing representation of OXPIO's strict
 // metadata. It deliberately contains no YAML details; the source-mode editor
 // remains available for fields and syntax that are not represented here.
 type editorFrontmatter struct {

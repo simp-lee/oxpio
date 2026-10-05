@@ -76,7 +76,7 @@ async function serveOutput(req, res) {
 async function copyAndBuild(name, basePath) {
   const vault = path.join(tempRoot, name);
   await fs.cp(fixtureRoot, vault, {recursive: true});
-  const configPath = path.join(vault, 'obsite.yaml');
+  const configPath = path.join(vault, 'oxpio.yaml');
   const config = (await fs.readFile(configPath, 'utf8')).replace('http://127.0.0.1/alpha/', `${origin}${basePath}`);
   await fs.writeFile(configPath, config);
   execFileSync(binaryPath, ['build', '--vault', vault], {cwd: repoRoot, stdio: 'inherit'});
@@ -92,7 +92,7 @@ async function installEncodedSidebarFixture(vault) {
     await fs.writeFile(path.join(fixturePath, 'index.html'), sourceHTML);
   }
 
-  const sidebarPath = path.join(publicRoot, 'assets', 'obsite', 'sidebar.json');
+  const sidebarPath = path.join(publicRoot, 'assets', 'oxpio', 'sidebar.json');
   const sidebar = JSON.parse(await fs.readFile(sidebarPath, 'utf8'));
   sidebar.default.push(
     {name: 'Literal Percent', url: '/a%2520b/'},
@@ -181,9 +181,9 @@ async function freePort() {
 }
 
 test.beforeAll(async () => {
-  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'obsite-e2e-'));
-  binaryPath = path.join(tempRoot, process.platform === 'win32' ? 'obsite.exe' : 'obsite');
-  execFileSync('go', ['build', '-o', binaryPath, './cmd/obsite'], {cwd: repoRoot, stdio: 'inherit'});
+  tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'oxpio-e2e-'));
+  binaryPath = path.join(tempRoot, process.platform === 'win32' ? 'oxpio.exe' : 'oxpio');
+  execFileSync('go', ['build', '-o', binaryPath, './cmd/oxpio'], {cwd: repoRoot, stdio: 'inherit'});
   staticServer = createServer((req, res) => void serveOutput(req, res));
   const port = await listen(staticServer);
   origin = `http://127.0.0.1:${port}`;
@@ -322,11 +322,11 @@ test('strict Markdown runtime stays local and social PNG is independently reacha
   const page = await context.newPage();
   await page.goto(`${origin}/alpha/math-diagrams/`);
   await expect(page.locator('article > header h1')).toHaveText('Math and Diagrams');
-  await expect(page.locator('[data-obsite-main]')).toContainText('After invalid diagram remains visible.');
-  await expect(page.locator('[data-obsite-math-source] .katex')).toHaveCount(2);
-  await expect(page.locator('[data-obsite-math-source] .katex-error')).toHaveCount(0);
+  await expect(page.locator('[data-oxpio-main]')).toContainText('After invalid diagram remains visible.');
+  await expect(page.locator('[data-oxpio-math-source] .katex')).toHaveCount(2);
+  await expect(page.locator('[data-oxpio-math-source] .katex-error')).toHaveCount(0);
   await expect(page.locator('[data-page-content] pre.mermaid svg')).toHaveCount(1);
-  await expect(page.locator('script[src*="/assets/obsite/runtime."]')).toHaveCount(1);
+  await expect(page.locator('script[src*="/assets/oxpio/runtime."]')).toHaveCount(1);
   await page.goto(`${origin}/alpha/child/child/`);
   await expect.poll(() => page.locator('[data-site-body]').getAttribute('data-sidebar-ready')).toBe('true');
   await expect(page.locator('[data-sidebar-root] a[aria-current="page"]')).toHaveText('Child Article');
@@ -396,7 +396,7 @@ test('serve --watch rebuilds strict section content', async () => {
   const watchRoot = path.join(tempRoot, 'watch-vault');
   await fs.mkdir(path.join(watchRoot, 'docs'), {recursive: true});
   const port = await freePort();
-  await fs.writeFile(path.join(watchRoot, 'obsite.yaml'), `baseURL: http://127.0.0.1:${port}/watch/\ntitle: Watch Garden\nnavigation: []\n`);
+  await fs.writeFile(path.join(watchRoot, 'oxpio.yaml'), `baseURL: http://127.0.0.1:${port}/watch/\ntitle: Watch Garden\nnavigation: []\n`);
   await fs.writeFile(path.join(watchRoot, '_index.md'), '---\ntitle: Watch Home\npublish: true\n---\nHome\n');
   const notePath = path.join(watchRoot, 'watch.md');
   await fs.writeFile(notePath, '---\ntitle: Watch Note\npublish: true\ntype: page\n---\nVersion one.\n');

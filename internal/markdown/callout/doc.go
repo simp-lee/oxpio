@@ -1,2 +1,2 @@
-// Package callout is a placeholder for Obsite Markdown callouts.
+// Package callout is a placeholder for OXPIO Markdown callouts.
 package callout

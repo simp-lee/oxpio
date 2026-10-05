@@ -8,7 +8,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 // EngineParameters contains internal ranking limits and testable worker control.

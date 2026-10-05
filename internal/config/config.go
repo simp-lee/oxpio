@@ -11,18 +11,18 @@ import (
 	"path/filepath"
 	"strings"
 
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/slug"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/slug"
 	"gopkg.in/yaml.v3"
 )
 
 const (
 	// Filename is the only supported site configuration filename.
-	Filename = "obsite.yaml"
+	Filename = "oxpio.yaml"
 	// CustomCSSFilename and ThemeDirRelPath are the fixed optional vault inputs.
 	CustomCSSFilename = "custom.css"
-	ThemeDirRelPath   = ".obsite/theme"
+	ThemeDirRelPath   = ".oxpio/theme"
 
 	defaultLanguage           = "en"
 	defaultPaginationPageSize = 20
@@ -116,16 +116,16 @@ func Defaults() model.SiteConfig {
 
 // InitialStrictYAML renders the minimal strict section-schema configuration.
 func InitialStrictYAML() string {
-	return `# Obsite site configuration.
+	return `# OXPIO site configuration.
 # Replace baseURL with the real public URL before publishing.
 baseURL: https://example.com/
-title: My Obsite Site
+title: My OXPIO Site
 navigation: []
 source: {}
 `
 }
 
-// LoadForBuild reads exactly <resolvedVault>/obsite.yaml and discovers only the
+// LoadForBuild reads exactly <resolvedVault>/oxpio.yaml and discovers only the
 // fixed optional vault inputs.
 func LoadForBuild(resolvedVault string) (model.SiteConfig, error) {
 	return loadForBuild(resolvedVault, "")
@@ -211,7 +211,7 @@ func NormalizeSiteConfig(cfg model.SiteConfig) (model.SiteConfig, error) {
 	return normalizeAndValidate(cfg)
 }
 
-// ValidateConfigBytes parses and normalizes a strict obsite.yaml document
+// ValidateConfigBytes parses and normalizes a strict oxpio.yaml document
 // without discovering vault files. It is used before an atomic config write.
 func ValidateConfigBytes(data []byte) (model.SiteConfig, error) {
 	if err := validateStrictConfigDocument(data); err != nil {

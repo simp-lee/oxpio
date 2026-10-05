@@ -29,7 +29,7 @@ for marker in (b'testdata/quality', b'Rebuilding State from an Event Log', b'cal
     if marker in binary:
         raise SystemExit(f'test-only marker found in production binary: {marker!r}')
 
-raw=subprocess.check_output(['go','list','-deps','-json','./cmd/obsite'],text=True)
+raw=subprocess.check_output(['go','list','-deps','-json','./cmd/oxpio'],text=True)
 decoder=json.JSONDecoder(); offset=0; packages=[]
 while offset < len(raw):
     while offset < len(raw) and raw[offset].isspace(): offset += 1
@@ -42,7 +42,7 @@ for package in packages:
     for embedded in package.get('EmbedFiles') or []:
         if 'testdata/quality' in embedded or '/jp/' in embedded or embedded.endswith('/idf.txt'):
             raise SystemExit(f'excluded embedded file in production closure: {import_path}: {embedded}')
-chinese=next((p for p in packages if p.get('ImportPath')=='github.com/simp-lee/obsite/internal/recommend/chinese'),None)
+chinese=next((p for p in packages if p.get('ImportPath')=='github.com/simp-lee/oxpio/internal/recommend/chinese'),None)
 if chinese is None:
     raise SystemExit('Chinese tokenizer package missing from production closure')
 if sorted(chinese.get('EmbedFiles') or []) != ['data/s_1.txt','data/stop_tokens.txt','data/t_1.txt']:

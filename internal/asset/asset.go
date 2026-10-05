@@ -13,9 +13,9 @@ import (
 	"sort"
 	"strings"
 
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/model"
-	internalslug "github.com/simp-lee/obsite/internal/slug"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
+	internalslug "github.com/simp-lee/oxpio/internal/slug"
 )
 
 const outputDirPrefix = "assets"
@@ -360,7 +360,7 @@ func shouldSkipPublishableAssetPath(relPath string) bool {
 		switch segment {
 		case "":
 			continue
-		case ".obsidian", ".obsite", "node_modules":
+		case ".obsidian", ".oxpio", "node_modules":
 			return true
 		}
 	}

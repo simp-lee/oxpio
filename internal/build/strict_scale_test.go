@@ -6,13 +6,13 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/render"
+	"github.com/simp-lee/oxpio/internal/render"
 )
 
 func TestStrictBuildSidebarFallbackHTMLContainsCompleteTree(t *testing.T) {
 	const articleCount = 8
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "obsite.yaml", `title: Sidebar Scale
+	writeStrictFile(t, vault, "oxpio.yaml", `title: Sidebar Scale
 baseURL: https://scale.example/
 navigation: []
 sidebar:
@@ -94,7 +94,7 @@ versions:
 	for version := 1; version <= versionCount; version++ {
 		_, _ = fmt.Fprintf(&config, "    - id: v%d\n      label: Version %d\n      source: v%d\n", version, version, version)
 	}
-	writeStrictFile(t, vault, "obsite.yaml", config.String())
+	writeStrictFile(t, vault, "oxpio.yaml", config.String())
 
 	sectionIndex := "---\ntitle: %s\npublish: true\nbanner: images/shared-banner.png\nbannerAlt: Shared section banner\n---\nSection landing\n"
 	writeStrictFile(t, vault, "_index.md", fmt.Sprintf(sectionIndex, "Home"))

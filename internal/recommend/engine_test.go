@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestEmptyAndSingletonCorpus(t *testing.T) {

@@ -28,7 +28,7 @@ import (
 const (
 	Width                = 1200
 	Height               = 630
-	GeneratorVersion     = "obsite-social-card-v2"
+	GeneratorVersion     = "oxpio-social-card-v2"
 	cardPrimaryFontName  = "KaTeX_Main-Regular.ttf"
 	cardFallbackFontName = "DroidSansFallbackFull.ttf"
 )

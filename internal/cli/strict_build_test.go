@@ -15,13 +15,13 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/diag"
+	"github.com/simp-lee/oxpio/internal/diag"
 )
 
 func TestStrictBuildPublishesSectionAndArticlePages(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation:\n  - name: Home\n    section: .\n")
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation:\n  - name: Home\n    section: .\n")
 	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nWelcome\n")
 	writeValidateFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\nGuide body\n")
 	writeValidateFile(t, vault, "guide/01-start.md", "---\ntitle: Start\npublish: true\ntype: doc\n---\nStart body\n")
@@ -46,7 +46,7 @@ func TestStrictBuildPublishesSectionAndArticlePages(t *testing.T) {
 func TestCLICommandsPublishSectionReadingFlow(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeValidateFile(t, vault, `obsite.yaml`, `title: Reading Site
+	writeValidateFile(t, vault, `oxpio.yaml`, `title: Reading Site
 baseURL: https://example.test/
 navigation:
   - name: Home
@@ -117,7 +117,7 @@ navigation:
 func TestCLICommandsPublishSectionAndArticleBanners(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeValidateFile(t, vault, `obsite.yaml`, "title: Banner Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, `oxpio.yaml`, "title: Banner Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeValidateFile(t, vault, `_index.md`, "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeValidateFile(t, vault, `guide/_index.md`, "---\ntitle: Guide\npublish: true\nbanner: images/guide.png\nbannerAlt: Guide banner\n---\nGuide\n")
 	writeValidateFile(t, vault, `guide/article.md`, "---\ntitle: Article\npublish: true\ntype: page\nbanner: images/article.png\nbannerAlt: Article banner\n---\nArticle\n")
@@ -202,7 +202,7 @@ func readCLIOutputFile(t *testing.T, root, relPath string) []byte {
 func TestBuildCommandPublishesVersionSwitchingAndEscapedSourceTemplates(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeValidateFile(t, vault, "obsite.yaml", `title: Versioned Site
+	writeValidateFile(t, vault, "oxpio.yaml", `title: Versioned Site
 baseURL: https://example.test/base/
 navigation:
   - name: Docs
@@ -252,7 +252,7 @@ versions:
 func TestStrictBuildPublishesBannersAndIndependentSocialCards(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultImg: images/cover.png\n")
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultImg: images/cover.png\n")
 	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\nbanner: images/banner.png\nbannerAlt: Home banner\n---\n")
 	writeValidateFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: page\nbanner: images/banner.png\nbannerAlt: Article banner\ncover: images/cover.png\n---\nArticle\n")
 	for _, name := range []string{"banner.png", "cover.png"} {
@@ -289,7 +289,7 @@ func TestBuildCommandPreservesPublishedOutputWhenSocialGenerationFails(t *testin
 	vault := t.TempDir()
 	outputRoot := t.TempDir()
 	output := filepath.Join(outputRoot, "public")
-	writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
 	writeValidateFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: page\ncover: images/cover.png\n---\n")
 	var validCover bytes.Buffer
@@ -306,7 +306,7 @@ func TestBuildCommandPreservesPublishedOutputWhenSocialGenerationFails(t *testin
 	// and the final cover read. This stateful test decoder lets those checks pass
 	// and then fails inside social.Generate, without replacing the CLI's real
 	// build dependency with a synthetic callback.
-	magic := "OBSITE-CLI-SOCIAL-FAILURE:" + vault + ":"
+	magic := "OXPIO-CLI-SOCIAL-FAILURE:" + vault + ":"
 	injectedFailure := errors.New("injected social image decode failure")
 	var decodeCalls atomic.Int32
 	image.RegisterFormat("png", magic, func(io.Reader) (image.Image, error) {
@@ -353,9 +353,9 @@ func TestCLIRejectsInputFailuresWithSharedDiagnosticsAndPreservesOutput(t *testi
 		{
 			name: "missing navigation target",
 			mutate: func(t *testing.T, vault string) {
-				writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation:\n  - name: Missing\n    section: missing\n")
+				writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation:\n  - name: Missing\n    section: missing\n")
 			},
-			want: expectedDiagnostic{kind: diag.KindNavigation, pathSuffix: "obsite.yaml", line: 5, field: "navigation[0].section", message: `targets missing section "missing"`},
+			want: expectedDiagnostic{kind: diag.KindNavigation, pathSuffix: "oxpio.yaml", line: 5, field: "navigation[0].section", message: `targets missing section "missing"`},
 		},
 		{
 			name: "collection sort tie",
@@ -375,9 +375,9 @@ func TestCLIRejectsInputFailuresWithSharedDiagnosticsAndPreservesOutput(t *testi
 		{
 			name: "duplicate configuration key",
 			mutate: func(t *testing.T, vault string) {
-				writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\ntitle: Other\n")
+				writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\ntitle: Other\n")
 			},
-			want: expectedDiagnostic{kind: diag.KindSchema, pathSuffix: "obsite.yaml", line: 4, field: "title", message: `duplicate key "title"`},
+			want: expectedDiagnostic{kind: diag.KindSchema, pathSuffix: "oxpio.yaml", line: 4, field: "title", message: `duplicate key "title"`},
 		},
 		{
 			name: "null frontmatter field",
@@ -389,14 +389,14 @@ func TestCLIRejectsInputFailuresWithSharedDiagnosticsAndPreservesOutput(t *testi
 		{
 			name: "invalid source template",
 			mutate: func(t *testing.T, vault string) {
-				writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nsource:\n  editURL: https://git.example/edit/:path/:branch\n")
+				writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nsource:\n  editURL: https://git.example/edit/:path/:branch\n")
 			},
-			want: expectedDiagnostic{kind: diag.KindSchema, pathSuffix: "obsite.yaml", line: 5, field: "source.editURL", message: `unknown template placeholder ":branch"`},
+			want: expectedDiagnostic{kind: diag.KindSchema, pathSuffix: "oxpio.yaml", line: 5, field: "source.editURL", message: `unknown template placeholder ":branch"`},
 		},
 		{
 			name: "invalid version source",
 			mutate: func(t *testing.T, vault string) {
-				writeValidateFile(t, vault, "obsite.yaml", `title: Site
+				writeValidateFile(t, vault, "oxpio.yaml", `title: Site
 baseURL: https://example.test/
 navigation: []
 versions:
@@ -448,7 +448,7 @@ versions:
 			vault := t.TempDir()
 			outputRoot := t.TempDir()
 			output := filepath.Join(outputRoot, "public")
-			writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+			writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 			writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nPublished baseline\n")
 			writeValidateFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\nGuide baseline\n")
 			writeValidateFile(t, vault, "guide/article.md", "---\ntitle: Guide article\npublish: true\ntype: doc\n---\nGuide article baseline\n")
@@ -504,7 +504,7 @@ func TestValidateNormalAndStrictBuildShareWarningDiagnostics(t *testing.T) {
 	vault := t.TempDir()
 	normalOutput := filepath.Join(t.TempDir(), "normal")
 	strictOutput := filepath.Join(t.TempDir(), "strict")
-	writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeValidateFile(t, vault, "broken.md", "---\ntitle: Broken\npublish: true\ntype: page\n---\nSee [[Missing]].\n")
 
@@ -645,7 +645,7 @@ func assertCLIOutputUnchanged(t *testing.T, root string, before map[string][]byt
 
 func assertNoCLITransactionResidue(t *testing.T, parent, output string) {
 	t.Helper()
-	prefix := "." + filepath.Base(output) + "-obsite-"
+	prefix := "." + filepath.Base(output) + "-oxpio-"
 	entries, err := os.ReadDir(parent)
 	if err != nil {
 		t.Fatal(err)
@@ -660,7 +660,7 @@ func assertNoCLITransactionResidue(t *testing.T, parent, output string) {
 func TestStrictBuildStopsBeforePublicationOnSchemaFailure(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeValidateFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultPublish: true\n")
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultPublish: true\n")
 	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
 	_, stderr, err := executeForTest(t, defaultCommandDependencies(), []string{"build", "--vault", vault, "--output", output, "--strict"})
 	if err == nil || !strings.Contains(err.Error(), "defaultPublish") {

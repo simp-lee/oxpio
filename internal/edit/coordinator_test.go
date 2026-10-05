@@ -10,14 +10,14 @@ import (
 	"strings"
 	"testing"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 )
 
 func TestCoordinatorPreservesCASAndPublishesSourceAndOutputTogether(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
 	writeEditFile(t, vault, "article.md", original)
@@ -103,7 +103,7 @@ func TestCoordinatorPreservesCASAndPublishesSourceAndOutputTogether(t *testing.T
 func TestCoordinatorCandidateExcludesFormalOutput(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(vault, "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
 	writeEditFile(t, vault, "article.md", original)
@@ -126,7 +126,7 @@ func TestCoordinatorCandidateExcludesFormalOutput(t *testing.T) {
 func TestCoordinatorEditsScannerAcceptedUppercaseMarkdownRelPath(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
 	writeEditFile(t, vault, "Article.MD", original)
@@ -177,7 +177,7 @@ func TestCoordinatorEditsScannerAcceptedUppercaseMarkdownRelPath(t *testing.T) {
 func TestCoordinatorKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
-	writeEditFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
 	writeEditFile(t, vault, "article.md", original)
@@ -193,7 +193,7 @@ func TestCoordinatorKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 	cleanupFailure := errors.New("simulated partial backup cleanup failure")
 	originalRemove := editOutputRemoveAll
 	editOutputRemoveAll = func(name string) error {
-		if strings.Contains(filepath.Base(name), ".obsite-output-backup-") {
+		if strings.Contains(filepath.Base(name), ".oxpio-output-backup-") {
 			if err := os.RemoveAll(name); err != nil {
 				return err
 			}

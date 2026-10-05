@@ -24,13 +24,14 @@ body {
   box-shadow: 0 1.5rem 4rem rgba(31, 50, 68, .14);
 }
 .brand {
-  color: #1769aa;
-  font-size: 1.05rem;
-  font-weight: 750;
-  letter-spacing: .08em;
+  display: inline-block;
+  width: min(100%, 13rem);
+  overflow: hidden;
+  border-radius: .35rem;
+  background: #fff;
   text-decoration: none;
-  text-transform: uppercase;
 }
+.brand img { display: block; width: 100%; height: auto; }
 .eyebrow {
   margin: 2rem 0 .45rem;
   color: #687687;

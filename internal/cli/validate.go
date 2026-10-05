@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	internalanalyze "github.com/simp-lee/obsite/internal/analyze"
+	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
 	"github.com/spf13/cobra"
 )
 

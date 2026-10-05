@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 func TestStrictLeadingTitlePlacementAvoidsRetainedIDCollisions(t *testing.T) {
@@ -37,7 +37,7 @@ func TestStrictDropLeadingTitleHeadingInsideWrapperPreservesWrapperBytes(t *test
 
 func TestStrictDropLeadingTitleHeadingPreservesComments(t *testing.T) {
 	prefix := "\n<!-- keep this comment -->\n"
-	suffix := "<p class='authored' data-example=Obsite>Body &amp; content</p><!-- tail -->"
+	suffix := "<p class='authored' data-example=OXPIO>Body &amp; content</p><!-- tail -->"
 	content := prefix + "<h1 id=title>Title<!-- keep inside heading --><script><!-- keep script comment --></script><style><!-- keep style comment --></style></h1>" + suffix
 	got, removed, headingID, err := strictDropLeadingTitleHeading(content, "Title")
 	if err != nil {

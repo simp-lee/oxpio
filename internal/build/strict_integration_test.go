@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 	xhtml "golang.org/x/net/html"
 )
 
@@ -67,7 +67,7 @@ func readBuildOutputFile(t *testing.T, root, relPath string) []byte {
 
 func TestStrictBuildPreservesAuthoredHTMLComments(t *testing.T) {
 	vaultPath := t.TempDir()
-	writeStrictFile(t, vaultPath, "obsite.yaml", "title: Comments\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vaultPath, "oxpio.yaml", "title: Comments\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vaultPath, "_index.md", "---\ntitle: Home\npublish: true\n---\n<!-- preserve this comment --><script><!-- preserve script comment --></script><style><!-- preserve style comment --></style><p>Body</p>\n")
 	outputPath := filepath.Join(t.TempDir(), "site")
 	if _, err := BuildWithOptions(vaultPath, outputPath, Options{}); err != nil {
@@ -91,7 +91,7 @@ func TestStrictBuildUsesCanonicalSectionPlanAndRichMarkdown(t *testing.T) {
 	if result.NotePages != 2 {
 		t.Fatalf("NotePages = %d, want 2", result.NotePages)
 	}
-	for _, rel := range []string{"index.html", "guide/index.html", "guide/article/index.html", "roadmap/index.html", "tags/feature/index.html", "updates/index.html", "404.html", "assets/custom.css", ".obsite-cache/manifest.json", "sitemap.xml", "index.xml"} {
+	for _, rel := range []string{"index.html", "guide/index.html", "guide/article/index.html", "roadmap/index.html", "tags/feature/index.html", "updates/index.html", "404.html", "assets/custom.css", ".oxpio-cache/manifest.json", "sitemap.xml", "index.xml"} {
 		if _, err := os.Stat(filepath.Join(outputPath, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("missing output %q: %v", rel, err)
 		}
@@ -117,7 +117,7 @@ func TestStrictBuildUsesCanonicalSectionPlanAndRichMarkdown(t *testing.T) {
 		t.Fatal("article missing generated social image")
 	}
 	rss := string(readBuildOutputFile(t, outputPath, "index.xml"))
-	for _, want := range []string{"<link>https://example.com/blog/</link>", "<description>Integration coverage for strict section features.</description>", "<obsite:status>deprecated</obsite:status>", "<obsite:audience>Developers</obsite:audience>", "<obsite:productVersion>2.0</obsite:productVersion>", "<obsite:series>Releases</obsite:series>"} {
+	for _, want := range []string{"<link>https://example.com/blog/</link>", "<description>Integration coverage for strict section features.</description>", "<oxpio:status>deprecated</oxpio:status>", "<oxpio:audience>Developers</oxpio:audience>", "<oxpio:productVersion>2.0</oxpio:productVersion>", "<oxpio:series>Releases</oxpio:series>"} {
 		if !strings.Contains(rss, want) {
 			t.Fatalf("RSS missing %q: %s", want, rss)
 		}
@@ -129,7 +129,7 @@ func TestStrictBuildUsesCanonicalSectionPlanAndRichMarkdown(t *testing.T) {
 
 func TestStrictBuildRendersCompleteHTMLSidebarTree(t *testing.T) {
 	vaultPath := t.TempDir()
-	writeStrictFile(t, vaultPath, "obsite.yaml", `title: Nested Sidebar
+	writeStrictFile(t, vaultPath, "oxpio.yaml", `title: Nested Sidebar
 baseURL: https://example.test/blog/
 navigation: []
 sidebar:
@@ -190,7 +190,7 @@ func assertStrictHTMLSidebarMatchesPayload(t *testing.T, outputPath, route, vers
 		Default  []model.SidebarNode            `json:"default"`
 		Versions map[string][]model.SidebarNode `json:"versions"`
 	}
-	if err := json.Unmarshal(readBuildOutputFile(t, outputPath, "assets/obsite/sidebar.json"), &payload); err != nil {
+	if err := json.Unmarshal(readBuildOutputFile(t, outputPath, "assets/oxpio/sidebar.json"), &payload); err != nil {
 		t.Fatalf("decode Sidebar payload: %v", err)
 	}
 	nodes := payload.Default

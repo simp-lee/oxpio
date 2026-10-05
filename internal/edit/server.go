@@ -22,18 +22,19 @@ import (
 	"sync"
 	"time"
 
-	internalconfig "github.com/simp-lee/obsite/internal/config"
-	"github.com/simp-lee/obsite/internal/diag"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/model"
-	internalserver "github.com/simp-lee/obsite/internal/server"
+	"github.com/simp-lee/oxpio/internal/branding"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
+	"github.com/simp-lee/oxpio/internal/diag"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
+	internalserver "github.com/simp-lee/oxpio/internal/server"
 	"golang.org/x/term"
 )
 
 const (
-	sessionCookieName = "obsite_session"
-	csrfHeaderName    = "X-Obsite-CSRF"
-	controlPrefix     = "/_obsite/"
+	sessionCookieName = "oxpio_session"
+	csrfHeaderName    = "X-OXPIO-CSRF"
+	controlPrefix     = "/_oxpio/"
 	sessionLifetime   = 12 * time.Hour
 )
 
@@ -164,6 +165,8 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 		s.serveLogin(w, r)
 	case "login.css":
 		s.serveLoginAsset(w, r)
+	case "logo.svg":
+		s.serveLogoAsset(w, r)
 	case "editor":
 		s.serveEditor(w, r)
 	case "editor.css":
@@ -291,7 +294,7 @@ func (s *Server) serveSourceRead(w http.ResponseWriter, r *http.Request) {
 	}
 	hash := sha256.Sum256(data)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	w.Header().Set("X-Obsite-Source-Hash", hex.EncodeToString(hash[:]))
+	w.Header().Set("X-OXPIO-Source-Hash", hex.EncodeToString(hash[:]))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
 }
@@ -311,7 +314,7 @@ func (s *Server) serveSourceSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 		return
 	}
-	result, err := s.coordinator.Save(entry.RelPath, r.Header.Get("X-Obsite-Source-Hash"), content)
+	result, err := s.coordinator.Save(entry.RelPath, r.Header.Get("X-OXPIO-Source-Hash"), content)
 	if err != nil {
 		s.writeMutationError(w, err)
 		return
@@ -334,7 +337,7 @@ func (s *Server) serveSourceCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	result, err := s.coordinator.Create(pathValue, r.Header.Get("X-Obsite-Source-Hash"), content)
+	result, err := s.coordinator.Create(pathValue, r.Header.Get("X-OXPIO-Source-Hash"), content)
 	if err != nil {
 		s.writeMutationError(w, err)
 		return
@@ -351,7 +354,7 @@ func (s *Server) serveSourceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete confirmation is required", http.StatusBadRequest)
 		return
 	}
-	result, err := s.coordinator.Delete(r.URL.Query().Get("path"), r.Header.Get("X-Obsite-Source-Hash"))
+	result, err := s.coordinator.Delete(r.URL.Query().Get("path"), r.Header.Get("X-OXPIO-Source-Hash"))
 	if err != nil {
 		s.writeMutationError(w, err)
 		return
@@ -546,7 +549,7 @@ func (s *Server) serveDecoratedStatic(w http.ResponseWriter, r *http.Request, en
 	body := append([]byte(nil), recorder.Body.Bytes()...)
 	contentType := strings.ToLower(recorder.Header().Get("Content-Type"))
 	if r.Method != http.MethodHead && status >= 200 && status < 300 && strings.Contains(contentType, "text/html") {
-		link := `<a class="edit-page-link" href="/_obsite/editor?path=` + url.QueryEscape(entry.RelPath) + `">Edit</a>`
+		link := `<a class="edit-page-link" href="/_oxpio/editor?path=` + url.QueryEscape(entry.RelPath) + `">Edit</a>`
 		lower := strings.ToLower(string(body))
 		if index := strings.LastIndex(lower, "</body>"); index >= 0 {
 			body = append(append(append([]byte(nil), body[:index]...), []byte(link)...), body[index:]...)
@@ -570,7 +573,7 @@ func injectEditorBasePath(data []byte, basePath string) []byte {
 	if strings.TrimSpace(basePath) == "" {
 		basePath = "/"
 	}
-	return bytes.ReplaceAll(data, []byte("__OBSITE_BASE_PATH__"), []byte(stdhtml.EscapeString(basePath)))
+	return bytes.ReplaceAll(data, []byte("__OXPIO_BASE_PATH__"), []byte(stdhtml.EscapeString(basePath)))
 }
 
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
@@ -643,6 +646,22 @@ func (s *Server) serveLoginAsset(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(data)
+	}
+}
+
+func (s *Server) serveLogoAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data := branding.LogoSVG()
+	w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
 	w.WriteHeader(http.StatusOK)
@@ -886,7 +905,7 @@ func atomicReplaceConfig(vaultRoot, configPath string, expected, updated []byte)
 	if _, _, err := internalfsutil.InspectContainedRegularFile(vaultRoot, configPath); err != nil {
 		return fmt.Errorf("inspect config before setup: %w", err)
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(configPath), ".obsite-config-*")
+	temporary, err := os.CreateTemp(filepath.Dir(configPath), ".oxpio-config-*")
 	if err != nil {
 		return fmt.Errorf("create atomic config file: %w", err)
 	}

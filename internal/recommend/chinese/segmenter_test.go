@@ -154,7 +154,7 @@ func TestEmbeddedResourceHashes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadFile(hmm_model.go) error = %v", err)
 	}
-	const wantHMMSource = "86f6d27d540d7ad63b3f9b2de8d234e1c26b2cc8cd5a11d8a1ab3e6fe880c86a"
+	const wantHMMSource = "a85802ff04319e4f8043b7ae5c9442ca62747f3a3e6d6d731ab058a3678eed58"
 	if got := fmt.Sprintf("%x", sha256.Sum256(hmmSource)); got != wantHMMSource {
 		t.Errorf("hmm_model.go SHA-256 = %s, want %s", got, wantHMMSource)
 	}

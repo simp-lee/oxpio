@@ -8,11 +8,11 @@ import (
 	"strings"
 
 	"github.com/gohugoio/hugo-goldmark-extensions/passthrough"
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/markdown/callout"
-	"github.com/simp-lee/obsite/internal/markdown/pathutil"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/resourcepath"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/markdown/callout"
+	"github.com/simp-lee/oxpio/internal/markdown/pathutil"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/resourcepath"
 	"github.com/yuin/goldmark"
 	highlighting "github.com/yuin/goldmark-highlighting/v2"
 	gast "github.com/yuin/goldmark/ast"
@@ -351,7 +351,7 @@ func (r *mathTrackingHTMLRenderer) renderInlineMath(w util.BufWriter, source []b
 		r.note.HasMath = true
 	}
 	mathNode := node.(*passthrough.PassthroughInline)
-	_, _ = w.WriteString(`<span data-obsite-math-source="inline">`)
+	_, _ = w.WriteString(`<span data-oxpio-math-source="inline">`)
 	_, _ = w.WriteString(html.EscapeString(string(mathNode.Segment.Value(source))))
 	_, _ = w.WriteString(`</span>`)
 	return gast.WalkContinue, nil
@@ -364,7 +364,7 @@ func (r *mathTrackingHTMLRenderer) renderDisplayMath(w util.BufWriter, source []
 	if r.note != nil {
 		r.note.HasMath = true
 	}
-	_, _ = w.WriteString(`<div data-obsite-math-source="display">`)
+	_, _ = w.WriteString(`<div data-oxpio-math-source="display">`)
 	block := node.(*passthrough.PassthroughBlock)
 	containers := r.sourceContainers[block]
 	if containers == nil {

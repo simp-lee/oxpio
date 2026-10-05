@@ -15,19 +15,19 @@ import (
 	"strings"
 	"testing"
 
-	internalanalyze "github.com/simp-lee/obsite/internal/analyze"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/recommend"
-	"github.com/simp-lee/obsite/internal/render"
-	"github.com/simp-lee/obsite/internal/siteplan"
-	"github.com/simp-lee/obsite/internal/testutil/relatedfixture"
+	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/recommend"
+	"github.com/simp-lee/oxpio/internal/render"
+	"github.com/simp-lee/oxpio/internal/siteplan"
+	"github.com/simp-lee/oxpio/internal/testutil/relatedfixture"
 )
 
-const relatedEndToEndRSSHelperEnv = "OBSITE_RELATED_END_TO_END_RSS_HELPER"
+const relatedEndToEndRSSHelperEnv = "OXPIO_RELATED_END_TO_END_RSS_HELPER"
 
 func TestRelatedPerformanceBudgets(t *testing.T) {
-	if os.Getenv("OBSITE_RELATED_PERF") != "1" {
-		t.Skip("set OBSITE_RELATED_PERF=1 on the fixed acceptance host")
+	if os.Getenv("OXPIO_RELATED_PERF") != "1" {
+		t.Skip("set OXPIO_RELATED_PERF=1 on the fixed acceptance host")
 	}
 	root, err := filepath.Abs("../..")
 	if err != nil {
@@ -117,9 +117,9 @@ func TestRSSHelperIsolation(t *testing.T) {
 }
 
 func TestRelatedMemoryLifetimes(t *testing.T) {
-	profileDir := os.Getenv("OBSITE_RELATED_PROFILE_DIR")
+	profileDir := os.Getenv("OXPIO_RELATED_PROFILE_DIR")
 	if profileDir == "" {
-		t.Skip("set OBSITE_RELATED_PROFILE_DIR to an external profile directory")
+		t.Skip("set OXPIO_RELATED_PROFILE_DIR to an external profile directory")
 	}
 
 	previousProfileRate := runtime.MemProfileRate
@@ -240,7 +240,7 @@ func writeRelatedBuildFixture(tb testing.TB, kind string, count int) string {
 	}
 
 	vault := tb.TempDir()
-	writeRelatedBuildFile(tb, vault, "obsite.yaml", `title: Related Performance Garden
+	writeRelatedBuildFile(tb, vault, "oxpio.yaml", `title: Related Performance Garden
 baseURL: https://related.example.test/
 navigation: []
 sidebar:

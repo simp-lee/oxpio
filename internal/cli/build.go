@@ -3,7 +3,7 @@ package cli
 import (
 	"fmt"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	"github.com/spf13/cobra"
 )
 

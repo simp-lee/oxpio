@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strings"
 
-	internalmarkdown "github.com/simp-lee/obsite/internal/markdown"
-	internalwikilink "github.com/simp-lee/obsite/internal/markdown/wikilink"
-	"github.com/simp-lee/obsite/internal/model"
+	internalmarkdown "github.com/simp-lee/oxpio/internal/markdown"
+	internalwikilink "github.com/simp-lee/oxpio/internal/markdown/wikilink"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 // BuildGraph derives a deterministic public note link graph from pass-2 resolved outlinks.

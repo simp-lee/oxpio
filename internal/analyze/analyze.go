@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"strconv"
 
-	diagnostic "github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/siteplan"
+	diagnostic "github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/siteplan"
 )
 
 // Result is the complete read-only analysis result. No output path is opened or
@@ -94,7 +94,7 @@ func analyzeErrorDiagnostic(vaultPath string, err error) diagnostic.Diagnostic {
 }
 
 func analyzeErrorLocation(vaultPath string, err error) diagnostic.Location {
-	location := diagnostic.Location{Path: filepath.Join(vaultPath, "obsite.yaml")}
+	location := diagnostic.Location{Path: filepath.Join(vaultPath, "oxpio.yaml")}
 	if err == nil {
 		return location
 	}

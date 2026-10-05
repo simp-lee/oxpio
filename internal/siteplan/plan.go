@@ -18,15 +18,15 @@ import (
 	"strconv"
 	"strings"
 
-	internalasset "github.com/simp-lee/obsite/internal/asset"
-	internalconfig "github.com/simp-lee/obsite/internal/config"
-	"github.com/simp-lee/obsite/internal/diag"
-	internalfsutil "github.com/simp-lee/obsite/internal/fsutil"
-	"github.com/simp-lee/obsite/internal/markdown"
-	"github.com/simp-lee/obsite/internal/model"
-	"github.com/simp-lee/obsite/internal/render"
-	"github.com/simp-lee/obsite/internal/slug"
-	"github.com/simp-lee/obsite/internal/vault"
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
+	"github.com/simp-lee/oxpio/internal/diag"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/markdown"
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/render"
+	"github.com/simp-lee/oxpio/internal/slug"
+	"github.com/simp-lee/oxpio/internal/vault"
 	_ "golang.org/x/image/webp"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -353,21 +353,21 @@ func planVersions(config *model.VersionsConfig, vaultRoot string, sections map[s
 	}
 	root, err := normalizeVersionDirectory(config.Root)
 	if err != nil {
-		record(collector, diag.KindVersion, "obsite.yaml", "versions.root: %v", err)
+		record(collector, diag.KindVersion, "oxpio.yaml", "versions.root: %v", err)
 	}
 	if root != "" {
 		if _, _, statErr := internalfsutil.InspectContainedDirectory(vaultRoot, root); statErr != nil {
-			record(collector, diag.KindVersion, "obsite.yaml", "versions.root %q: %v", root, statErr)
+			record(collector, diag.KindVersion, "oxpio.yaml", "versions.root %q: %v", root, statErr)
 		}
 		if _, ok := sections[root]; !ok {
 			record(collector, diag.KindVersion, sectionSourcePath(root), "versions.root %q must contain _index.md", root)
 		}
 	}
 	if strings.TrimSpace(config.Default) == "" {
-		record(collector, diag.KindVersion, "obsite.yaml", "versions.default is required")
+		record(collector, diag.KindVersion, "oxpio.yaml", "versions.default is required")
 	}
 	if len(config.Entries) == 0 {
-		record(collector, diag.KindVersion, "obsite.yaml", "versions.entries must not be empty")
+		record(collector, diag.KindVersion, "oxpio.yaml", "versions.entries must not be empty")
 	}
 
 	versions := make([]*model.Version, 0, len(config.Entries))
@@ -375,29 +375,29 @@ func planVersions(config *model.VersionsConfig, vaultRoot string, sections map[s
 	bySource := make([]string, 0, len(config.Entries))
 	for index, entry := range config.Entries {
 		if entry.ID == "" || !validVersionID(entry.ID) {
-			record(collector, diag.KindVersion, "obsite.yaml", "versions.entries[%d].id is not a valid ASCII path segment", index)
+			record(collector, diag.KindVersion, "oxpio.yaml", "versions.entries[%d].id is not a valid ASCII path segment", index)
 		}
 		if entry.Label == "" {
-			record(collector, diag.KindVersion, "obsite.yaml", "versions.entries[%d].label is required", index)
+			record(collector, diag.KindVersion, "oxpio.yaml", "versions.entries[%d].label is required", index)
 		}
 		if _, exists := byID[entry.ID]; exists {
-			record(collector, diag.KindVersion, "obsite.yaml", "versions entry id %q is duplicated", entry.ID)
+			record(collector, diag.KindVersion, "oxpio.yaml", "versions entry id %q is duplicated", entry.ID)
 		}
 		byID[entry.ID] = struct{}{}
 		source, sourceErr := normalizeVersionDirectory(entry.Source)
 		if sourceErr != nil {
-			record(collector, diag.KindVersion, "obsite.yaml", "versions entry %q source: %v", entry.ID, sourceErr)
+			record(collector, diag.KindVersion, "oxpio.yaml", "versions entry %q source: %v", entry.ID, sourceErr)
 			continue
 		}
 		for _, other := range bySource {
 			if source == other || isDescendant(source, other) || isDescendant(other, source) {
-				record(collector, diag.KindVersion, "obsite.yaml", "version source %q overlaps %q", source, other)
+				record(collector, diag.KindVersion, "oxpio.yaml", "version source %q overlaps %q", source, other)
 			}
 		}
 		bySource = append(bySource, source)
 		fullSource := path.Join(root, source)
 		if _, _, statErr := internalfsutil.InspectContainedDirectory(vaultRoot, fullSource); statErr != nil {
-			record(collector, diag.KindVersion, "obsite.yaml", "version %q source %q: %v", entry.ID, fullSource, statErr)
+			record(collector, diag.KindVersion, "oxpio.yaml", "version %q source %q: %v", entry.ID, fullSource, statErr)
 		}
 		if section, ok := sections[fullSource]; !ok {
 			record(collector, diag.KindVersion, sectionSourcePath(fullSource), "version source %q must contain _index.md", fullSource)
@@ -411,7 +411,7 @@ func planVersions(config *model.VersionsConfig, vaultRoot string, sections map[s
 	}
 	if config.Default != "" {
 		if _, ok := byID[config.Default]; !ok {
-			record(collector, diag.KindVersion, "obsite.yaml", "versions.default %q does not identify an entry", config.Default)
+			record(collector, diag.KindVersion, "oxpio.yaml", "versions.default %q does not identify an entry", config.Default)
 		}
 	}
 
@@ -671,7 +671,7 @@ func validateNavigation(sections map[string]*model.Section, navigation []model.N
 			field = fmt.Sprintf("navigation[%d].section", index)
 		}
 		report := func(format string, args ...any) {
-			collector.Add(diag.Diagnostic{Severity: diag.SeverityError, Kind: diag.KindNavigation, Location: diag.Location{Path: "obsite.yaml", Line: lines[field]}, Field: field, Message: fmt.Sprintf(format, args...)})
+			collector.Add(diag.Diagnostic{Severity: diag.SeverityError, Kind: diag.KindNavigation, Location: diag.Location{Path: "oxpio.yaml", Line: lines[field]}, Field: field, Message: fmt.Sprintf(format, args...)})
 		}
 		targetKey := navigationTargetKey(item, sections, baseURL)
 		if previous, exists := seen[targetKey]; exists {
@@ -1380,7 +1380,7 @@ func breadcrumbs(section *model.Section) []model.Breadcrumb {
 }
 
 func reservedRoutes() map[string]struct{} {
-	values := []string{"/assets/", "/style.css", "/sitemap.xml", "/robots.txt", "/index.xml", "/404.html", "/.obsite-output", "/.obsite-cache/", "/_popover/", "/_obsite/"}
+	values := []string{"/assets/", "/style.css", "/sitemap.xml", "/robots.txt", "/index.xml", "/404.html", "/.oxpio-output", "/.oxpio-cache/", "/_popover/", "/_oxpio/"}
 	result := make(map[string]struct{}, len(values))
 	for _, v := range values {
 		result[v] = struct{}{}

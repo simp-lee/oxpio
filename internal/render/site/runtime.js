@@ -2,17 +2,17 @@
   "use strict";
 
   var root = document.documentElement;
-  var basePath = root.getAttribute("data-obsite-base-path") || "/";
-  var storageKey = "obsite.theme.v1:" + basePath;
+  var basePath = root.getAttribute("data-oxpio-base-path") || "/";
+  var storageKey = "oxpio.theme.v1:" + basePath;
   var media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
   var runtimeScript = document.currentScript;
-  var vendorBaseURL = runtimeScript && runtimeScript.src ? new URL("../obsite-runtime/", runtimeScript.src) : null;
+  var vendorBaseURL = runtimeScript && runtimeScript.src ? new URL("../oxpio-runtime/", runtimeScript.src) : null;
   var servedSiteRootURL = runtimeScript && runtimeScript.src ? new URL("../../", runtimeScript.src) : null;
 
   function report(level, message, error) {
     var logger = window.console && window.console[level];
     if (typeof logger === "function") {
-      logger.call(window.console, "[obsite] " + message, error || "");
+      logger.call(window.console, "[oxpio] " + message, error || "");
     }
   }
 
@@ -112,7 +112,7 @@
   }
 
   function initSidebar() {
-    if (!root.hasAttribute("data-obsite-sidebar") || !runtimeScript || !runtimeScript.src) {
+    if (!root.hasAttribute("data-oxpio-sidebar") || !runtimeScript || !runtimeScript.src) {
       return;
     }
 
@@ -123,10 +123,10 @@
     var closeButton = document.querySelector("[data-sidebar-close]");
     var overlay = document.querySelector("[data-sidebar-overlay]");
     var media = window.matchMedia ? window.matchMedia("(max-width: 56rem)") : null;
-    var storageKey = "obsite.sidebar.expanded.v1:" + basePath;
+    var storageKey = "oxpio.sidebar.expanded.v1:" + basePath;
     var expanded = {};
     var currentPath = currentSitePath();
-    var popoverEnabled = root.hasAttribute("data-obsite-popover");
+    var popoverEnabled = root.hasAttribute("data-oxpio-popover");
 
     if (!shell || !sidebarRoot || !siteBody) {
       report("error", "Sidebar mount points are unavailable.");
@@ -144,7 +144,7 @@
     }).then(function (payload) {
       var nodes = payload;
       if (payload && !Array.isArray(payload) && typeof payload === "object") {
-        var versionID = root.getAttribute("data-obsite-version") || "";
+        var versionID = root.getAttribute("data-oxpio-version") || "";
         nodes = versionID && payload.versions && Array.isArray(payload.versions[versionID]) ? payload.versions[versionID] : payload.default;
       }
       if (!Array.isArray(nodes)) {
@@ -434,7 +434,7 @@
   }
 
   function initPopover() {
-    if (!root.hasAttribute("data-obsite-popover")) {
+    if (!root.hasAttribute("data-oxpio-popover")) {
       return;
     }
     var card = document.querySelector("[data-popover-card]");
@@ -709,7 +709,7 @@
   }
 
   function initMath() {
-    if (!root.hasAttribute("data-obsite-math") || !vendorBaseURL) {
+    if (!root.hasAttribute("data-oxpio-math") || !vendorBaseURL) {
       return;
     }
     loadScript(new URL("katex.min.js", vendorBaseURL).href, "KaTeX")
@@ -733,7 +733,7 @@
             report("error", "KaTeX could not render formula: " + message, error);
           }
         });
-        var sources = target.querySelectorAll("[data-obsite-math-source]");
+        var sources = target.querySelectorAll("[data-oxpio-math-source]");
         for (var index = 0; index < sources.length; index += 1) {
           if (!sources[index].querySelector(".katex") && !sources[index].querySelector(".katex-error")) {
             report("error", "KaTeX could not render formula: " + sources[index].textContent);
@@ -750,7 +750,7 @@
   }
 
   function initMermaid() {
-    if (!root.hasAttribute("data-obsite-mermaid") || !vendorBaseURL) {
+    if (!root.hasAttribute("data-oxpio-mermaid") || !vendorBaseURL) {
       return;
     }
     loadScript(new URL("mermaid.min.js", vendorBaseURL).href, "Mermaid")

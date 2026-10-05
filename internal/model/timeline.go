@@ -4,7 +4,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/slug"
 )
 
 // TimelinePage identifies one generated timeline page and the slice of posts

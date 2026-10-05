@@ -9,7 +9,7 @@ import (
 
 func TestAnalyzeUsesStrictPlanWithoutWritingVault(t *testing.T) {
 	vault := t.TempDir()
-	writeAnalyzeFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeAnalyzeFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeAnalyzeFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
 	writeAnalyzeFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\n")
 	before, err := os.ReadDir(vault)
@@ -34,9 +34,9 @@ func TestAnalyzeUsesStrictPlanWithoutWritingVault(t *testing.T) {
 
 func TestAnalyzeDoesNotInferOutputBoundaryFromDirectoryNameOrMarker(t *testing.T) {
 	vault := t.TempDir()
-	writeAnalyzeFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeAnalyzeFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeAnalyzeFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
-	writeAnalyzeFile(t, vault, "public/.obsite-output", "managed by obsite\n")
+	writeAnalyzeFile(t, vault, "public/.oxpio-output", "managed by oxpio\n")
 	writeAnalyzeFile(t, vault, "public/old.html", "generated output")
 	writeAnalyzeFile(t, vault, "public/invalid.md", "not strict frontmatter")
 	result, err := Analyze(vault)
@@ -52,14 +52,14 @@ func TestAnalyzeWithOutputExcludesFixedInputsWithinBoundary(t *testing.T) {
 		badInput   string
 		content    string
 	}{
-		{name: "theme", outputPath: ".obsite", badInput: ".obsite/theme/unsupported.txt", content: "stale output"},
-		{name: "nested theme asset", outputPath: ".obsite/theme/assets/generated", badInput: ".obsite/theme/assets/generated/bad.css", content: "body { background: url(missing.png); }"},
+		{name: "theme", outputPath: ".oxpio", badInput: ".oxpio/theme/unsupported.txt", content: "stale output"},
+		{name: "nested theme asset", outputPath: ".oxpio/theme/assets/generated", badInput: ".oxpio/theme/assets/generated/bad.css", content: "body { background: url(missing.png); }"},
 		{name: "Obsidian metadata", outputPath: ".obsidian", badInput: ".obsidian/app.json", content: "not JSON"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			vault := t.TempDir()
-			writeAnalyzeFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+			writeAnalyzeFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 			writeAnalyzeFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
 			writeAnalyzeFile(t, vault, test.badInput, test.content)
 
@@ -73,7 +73,7 @@ func TestAnalyzeWithOutputExcludesFixedInputsWithinBoundary(t *testing.T) {
 
 func TestAnalyzeReturnsStableSchemaDiagnostic(t *testing.T) {
 	vault := t.TempDir()
-	writeAnalyzeFile(t, vault, "obsite.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultPublish: true\n")
+	writeAnalyzeFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultPublish: true\n")
 	result, err := Analyze(vault)
 	if err == nil || len(result.Diagnostics) != 1 {
 		t.Fatalf("Analyze() error=%v diagnostics=%v", err, result.Diagnostics)

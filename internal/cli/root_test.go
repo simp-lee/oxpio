@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	internalbuild "github.com/simp-lee/obsite/internal/build"
+	internalbuild "github.com/simp-lee/oxpio/internal/build"
 )
 
 func TestExecuteShowsRootHelp(t *testing.T) {
@@ -35,7 +35,7 @@ func TestExecuteVersionFormsMatch(t *testing.T) {
 		}
 		outputs = append(outputs, stdout)
 	}
-	if outputs[0] != outputs[1] || outputs[0] != "obsite version=dev commit=unknown date=unknown type=dev\n" {
+	if outputs[0] != outputs[1] || outputs[0] != "oxpio version=dev commit=unknown date=unknown type=dev\n" {
 		t.Fatalf("version outputs = %#v", outputs)
 	}
 	for _, args := range [][]string{{"version", "extra"}, {"--version", "extra"}} {
@@ -57,7 +57,7 @@ func TestExecuteRejectsUnknownCommand(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty stderr", stderr)
 	}
-	if !strings.Contains(err.Error(), `unknown command "foo" for "obsite"`) {
+	if !strings.Contains(err.Error(), `unknown command "foo" for "oxpio"`) {
 		t.Fatalf("error = %q, want unknown command message", err.Error())
 	}
 }

@@ -3,7 +3,7 @@ package model
 import (
 	"strings"
 
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/slug"
 )
 
 // NormalizeTagName applies the shared canonical tag contract used by indexing and rendering.

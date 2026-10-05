@@ -10,10 +10,10 @@ import (
 
 	"github.com/gohugoio/hugo-goldmark-extensions/passthrough"
 	figureast "github.com/mangoumbrella/goldmark-figure/ast"
-	"github.com/simp-lee/obsite/internal/diag"
-	"github.com/simp-lee/obsite/internal/markdown/callout"
-	internalhighlight "github.com/simp-lee/obsite/internal/markdown/highlight"
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/diag"
+	"github.com/simp-lee/oxpio/internal/markdown/callout"
+	internalhighlight "github.com/simp-lee/oxpio/internal/markdown/highlight"
+	"github.com/simp-lee/oxpio/internal/model"
 	gast "github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/text"
 	gmwikilink "go.abhg.dev/goldmark/wikilink"
@@ -2016,7 +2016,7 @@ func TestNewMarkdownRendersNoteEmbeds(t *testing.T) {
 		t.Fatalf("Convert(display math adjacency) error = %v", err)
 	}
 	mathHTML := mathOutput.String()
-	if !strings.Contains(mathHTML, `data-obsite-math-source="display"`) || !strings.Contains(mathHTML, "<p>Child paragraph.</p>") || strings.Contains(mathHTML, "<p>\n</p>") || strings.Contains(mathHTML, "<p><p>") {
+	if !strings.Contains(mathHTML, `data-oxpio-math-source="display"`) || !strings.Contains(mathHTML, "<p>Child paragraph.</p>") || strings.Contains(mathHTML, "<p>\n</p>") || strings.Contains(mathHTML, "<p><p>") {
 		t.Fatalf("display-math adjacency HTML = %q, want sibling display math and block-level note embed", mathHTML)
 	}
 

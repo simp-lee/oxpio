@@ -6,7 +6,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/model"
 )
 
 // HasImageExtension reports whether the destination ends with a supported image extension.

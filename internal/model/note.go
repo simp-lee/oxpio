@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/slug"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )

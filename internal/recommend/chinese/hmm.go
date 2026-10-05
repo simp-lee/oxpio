@@ -1,6 +1,6 @@
 // Copyright 2016 ego authors
 //
-// Modified by the Obsite authors in 2026 to make the model immutable and
+// Modified by the OXPIO authors in 2026 to make the model immutable and
 // retain only deterministic Han-span cutting.
 //
 // Licensed under the Apache License, Version 2.0 (the "License");

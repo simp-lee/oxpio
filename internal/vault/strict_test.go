@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/simp-lee/obsite/internal/diag"
+	"github.com/simp-lee/oxpio/internal/diag"
 )
 
 func TestParseStrictFrontmatterSeparatesSectionsAndRequiresExplicitArticleFields(t *testing.T) {

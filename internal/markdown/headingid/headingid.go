@@ -4,7 +4,7 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/simp-lee/obsite/internal/slug"
+	"github.com/simp-lee/oxpio/internal/slug"
 )
 
 // CanonicalText applies the shared lowercase NFC + whitespace-collapsing

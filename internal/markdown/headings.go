@@ -6,8 +6,8 @@ import (
 	"strings"
 
 	"github.com/gohugoio/hugo-goldmark-extensions/passthrough"
-	"github.com/simp-lee/obsite/internal/markdown/headingid"
-	"github.com/simp-lee/obsite/internal/model"
+	"github.com/simp-lee/oxpio/internal/markdown/headingid"
+	"github.com/simp-lee/oxpio/internal/model"
 	gast "github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/parser"
 	"github.com/yuin/goldmark/text"
