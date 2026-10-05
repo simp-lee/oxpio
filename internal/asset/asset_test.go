@@ -239,6 +239,8 @@ func TestAssetCollectorRegisterRejectsScanExcludedInputsAndKeepsVisiblePathPlain
 	writeAssetFile(t, vaultRoot, ".hidden/attachments/photo.png", "right")
 	writeAssetFile(t, vaultRoot, ".obsidian/assets/photo.png", "obsidian")
 	writeAssetFile(t, vaultRoot, "node_modules/pkg/photo.png", "node")
+	writeAssetFile(t, vaultRoot, "oxpio.yaml", "passwordHash: secret")
+	writeAssetFile(t, vaultRoot, ".git/config", "url = https://user:secret@example.test/repo.git")
 
 	indexed := map[string]*model.Asset{
 		"images/photo.png": {SrcPath: "images/photo.png", RefCount: 1},
@@ -254,6 +256,8 @@ func TestAssetCollectorRegisterRejectsScanExcludedInputsAndKeepsVisiblePathPlain
 	for _, input := range []string{
 		".obsidian/assets/photo.png",
 		"node_modules/pkg/photo.png",
+		"oxpio.yaml",
+		".git/config",
 	} {
 		if got := collector.Register(input); got != "" {
 			t.Fatalf("Register(%q) = %q, want empty path for scan-excluded input", input, got)

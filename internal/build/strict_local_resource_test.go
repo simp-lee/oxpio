@@ -2,6 +2,7 @@ package build
 
 import (
 	"bytes"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,48 @@ import (
 
 	xhtml "golang.org/x/net/html"
 )
+
+func TestBuildWithOptionsExcludesOverlayInsideFormalOutput(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "site")
+	formalOutput := filepath.Join(vault, "public")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+
+	result, err := BuildWithOptions(vault, output, Options{
+		Strict:           true,
+		SourceOutputPath: formalOutput,
+		SourceOverlay: map[string][]byte{
+			"public/injected.md": []byte("---\ntitle: Injected\npublish: true\ntype: page\n---\nInjected\n"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildWithOptions() error = %v", err)
+	}
+	for _, entry := range result.Catalog.Entries {
+		if entry.RelPath == "public/injected.md" {
+			t.Fatal("formal output overlay was analyzed as a source")
+		}
+	}
+}
+
+func TestStrictBuildRejectsVaultControlFilesAsMarkdownAssets(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "site")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Protected\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: secret-hash\n")
+	writeStrictFile(t, vault, ".git/config", "[remote \"origin\"]\nurl = https://user:secret@example.test/repo.git\n")
+	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n![config](oxpio.yaml) ![git](.git/config)\n")
+
+	result, err := BuildWithOptions(vault, output, Options{Strict: true})
+	if err == nil || result == nil || result.ErrorCount == 0 {
+		t.Fatalf("BuildWithOptions() = (%#v, %v), want protected asset rejection", result, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(output, "assets")); statErr == nil {
+		t.Fatal("protected control files created a published assets directory")
+	} else if !os.IsNotExist(statErr) {
+		t.Fatalf("stat published assets directory: %v", statErr)
+	}
+}
 
 func TestStrictBuildPlansRawHTMLAndCustomCSSLocalResources(t *testing.T) {
 	vault := t.TempDir()

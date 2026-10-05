@@ -136,6 +136,78 @@ func PathWithinRoot(root string, candidate string) bool {
 	}
 }
 
+// PathWithinRootAfterSymlinks reports whether candidate resolves to root or one
+// of its descendants, including when candidate's final components do not yet
+// exist. It is intended for virtual paths such as immutable build overlays.
+func PathWithinRootAfterSymlinks(root string, candidate string) bool {
+	resolvedRoot, err := ResolvePathAfterSymlinks(root)
+	if err != nil {
+		return false
+	}
+	resolvedCandidate, err := ResolvePathAfterSymlinks(candidate)
+	if err != nil {
+		return false
+	}
+	return PathWithinRoot(resolvedRoot, resolvedCandidate)
+}
+
+// ResolvePathAfterSymlinks resolves existing path components while preserving
+// missing final components. It is useful for validating virtual paths before a
+// build creates them.
+func ResolvePathAfterSymlinks(value string) (string, error) {
+	return resolvePathWithMissingLeaf(value)
+}
+
+func resolvePathWithMissingLeaf(value string) (string, error) {
+	absolute, err := filepath.Abs(value)
+	if err != nil {
+		return "", err
+	}
+	current := filepath.Clean(absolute)
+	missingSuffix := make([]string, 0, 4)
+	for attempts := 0; attempts < 256; attempts++ {
+		info, statErr := os.Lstat(current)
+		if statErr == nil {
+			resolved, resolveErr := filepath.EvalSymlinks(current)
+			if resolveErr == nil {
+				resolved, err = filepath.Abs(resolved)
+				if err != nil {
+					return "", err
+				}
+				for index := len(missingSuffix) - 1; index >= 0; index-- {
+					resolved = filepath.Join(resolved, missingSuffix[index])
+				}
+				return filepath.Clean(resolved), nil
+			}
+			if info.Mode()&os.ModeSymlink == 0 {
+				return "", resolveErr
+			}
+			target, readErr := os.Readlink(current)
+			if readErr != nil {
+				return "", readErr
+			}
+			if target == "" {
+				return "", errors.New("symbolic link target is empty")
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(current), target)
+			}
+			current = filepath.Clean(target)
+			continue
+		}
+		if !errors.Is(statErr, os.ErrNotExist) {
+			return "", statErr
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return "", statErr
+		}
+		missingSuffix = append(missingSuffix, filepath.Base(current))
+		current = parent
+	}
+	return "", errors.New("too many symbolic-link components")
+}
+
 // SamePath compares lexical paths and, when both paths exist, their filesystem identity.
 func SamePath(left string, right string) bool {
 	cleanLeft := filepath.Clean(left)

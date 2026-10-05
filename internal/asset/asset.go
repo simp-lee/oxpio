@@ -15,6 +15,7 @@ import (
 
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/publishpath"
 	internalslug "github.com/simp-lee/oxpio/internal/slug"
 )
 
@@ -356,16 +357,7 @@ func shouldSkipPublishableAssetPath(relPath string) bool {
 		return false
 	}
 
-	for _, segment := range strings.Split(normalized, "/") {
-		switch segment {
-		case "":
-			continue
-		case ".obsidian", ".oxpio", "node_modules":
-			return true
-		}
-	}
-
-	return false
+	return publishpath.IsReservedPath(normalized)
 }
 
 func assetSourceInfo(vaultRoot string, srcPath string) (string, os.FileInfo, error) {

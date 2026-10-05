@@ -27,6 +27,8 @@ const (
 	fileMutationDelete    = "delete"
 )
 
+var fileManagerRemoveAll = os.RemoveAll
+
 type fileManagerMutation struct {
 	operation   string
 	path        string
@@ -249,11 +251,11 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		// removed backup and destroy the committed output.
 		built.OutputCleanupError = err
 	}
-	if err := finalize(); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
-	}
+	// Source cleanup is also post-commit: neither source nor output backups
+	// are safe to use for rollback once cleanup has started.
+	sourceCleanupErr := finalize()
 	coordinator.catalog = cloneCatalog(built.Catalog)
-	return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, Build: built}, nil
+	return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, Build: built, SourceCleanupError: sourceCleanupErr}, nil
 }
 
 func (coordinator *Coordinator) validateEditableFileManagerTarget(relPath string, isDir bool) error {
@@ -347,10 +349,7 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 			}
 			return createFileNoReplace(source, original)
 		}
-		finalize = func() error {
-			_ = os.RemoveAll(displaced)
-			return nil
-		}
+		finalize = func() error { return fileManagerRemoveAll(displaced) }
 		return rollback, finalize, expected, nil
 
 	case fileMutationRename:
@@ -359,7 +358,7 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 		if err != nil {
 			return nil, nil, fileManagerState{}, err
 		}
-		cleanupBackup := func() error { return os.RemoveAll(backup) }
+		cleanupBackup := func() error { return fileManagerRemoveAll(backup) }
 		displaced, err := movePathForCAS(source)
 		if err != nil {
 			return nil, nil, fileManagerState{}, errors.Join(fmt.Errorf("rename %q: %w", mutation.path, err), cleanupBackup())
@@ -381,10 +380,7 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 			removeErr := removeCreatedPath(vault, mutation.destination, expected.hash)
 			return errors.Join(restoreErr, removeErr)
 		}
-		return rollback, func() error {
-			_ = cleanupBackup()
-			return nil
-		}, expected, nil
+		return rollback, cleanupBackup, expected, nil
 	}
 	return nil, nil, fileManagerState{}, fmt.Errorf("unsupported file operation %q", mutation.operation)
 }

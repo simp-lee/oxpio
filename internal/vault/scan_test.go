@@ -18,6 +18,11 @@ func TestScanCollectsMarkdownAndResourceCandidates(t *testing.T) {
 	vaultPath := t.TempDir()
 	writeVaultFile(t, vaultPath, ".obsidian/app.json", `{"attachmentFolderPath":"assets/uploads"}`)
 	writeVaultFile(t, vaultPath, ".obsidian/workspace.json", `{}`)
+	writeVaultFile(t, vaultPath, "oxpio.yaml", "edit:\n  passwordHash: secret\n")
+	writeVaultFile(t, vaultPath, ".git/config", "[remote \"origin\"]\nurl = https://user:secret@example.test/repo.git\n")
+	writeVaultFile(t, vaultPath, ".oxpio-output-backup-stale/index.html", "stale output")
+	writeVaultFile(t, vaultPath, ".public-oxpio-stage-stale/index.html", "stale stage")
+	writeVaultFile(t, vaultPath, ".oxpio-displaced-stale", "stale source")
 	writeVaultFile(t, vaultPath, "notes/alpha.md", "# Alpha")
 	writeVaultFile(t, vaultPath, "notes/Guide.MD", "# Guide")
 	writeVaultFile(t, vaultPath, "notes/diagram.png", "png")
@@ -69,6 +74,11 @@ func TestScanCollectsMarkdownAndResourceCandidates(t *testing.T) {
 	if got.LookupResourcePath("node_modules/pkg/readme.md").Path != "" {
 		t.Fatal("HasResource(node_modules/pkg/readme.md) = true, want false")
 	}
+	for _, reserved := range []string{"oxpio.yaml", ".git/config", ".oxpio-output-backup-stale/index.html", ".public-oxpio-stage-stale/index.html", ".oxpio-displaced-stale"} {
+		if got.LookupResourcePath(reserved).Path != "" {
+			t.Fatalf("LookupResourcePath(%q) = %q, want reserved path excluded", reserved, got.LookupResourcePath(reserved).Path)
+		}
+	}
 	if got.LookupResourcePath(".hidden/private.md").Path != "" {
 		t.Fatal("HasResource(.hidden/private.md) = true, want false")
 	}
@@ -97,6 +107,141 @@ func TestScanExcludesResolvedOutputAndInternalInputDirectories(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got.ResourceFiles, []string{"assets/kept.png"}) {
 		t.Fatalf("ResourceFiles = %#v, want only assets/kept.png", got.ResourceFiles)
+	}
+}
+
+func TestScanNormalizesOverlayPathsAndExcludesOutputBoundary(t *testing.T) {
+	t.Parallel()
+
+	vaultPath := t.TempDir()
+	outputPath := filepath.Join(vaultPath, "public")
+	got, err := ScanWithOptions(vaultPath, ScanOptions{
+		OutputPath: outputPath,
+		OverlayMarkdown: map[string][]byte{
+			`notes\draft.md`:     []byte("# Draft"),
+			"public/injected.md": []byte("# Injected"),
+			"publicity.md":       []byte("# Publicity"),
+			"oxpio.yaml":         []byte("# Config"),
+		},
+		OverlayDeleted: map[string]bool{
+			`notes\deleted.md`:  true,
+			"public/deleted.md": true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ScanWithOptions() error = %v", err)
+	}
+	if !reflect.DeepEqual(got.MarkdownFiles, []string{"notes/draft.md", "publicity.md"}) {
+		t.Fatalf("MarkdownFiles = %#v, want normalized visible overlays", got.MarkdownFiles)
+	}
+	if string(got.OverlayMarkdown["notes/draft.md"]) != "# Draft" {
+		t.Fatalf("OverlayMarkdown[notes/draft.md] = %q, want normalized overlay bytes", got.OverlayMarkdown["notes/draft.md"])
+	}
+	for _, excluded := range []string{"public/injected.md", "oxpio.yaml"} {
+		if _, ok := got.OverlayMarkdown[excluded]; ok {
+			t.Fatalf("OverlayMarkdown contains excluded path %q", excluded)
+		}
+	}
+	if _, ok := got.OverlayDeleted["notes/deleted.md"]; !ok {
+		t.Fatal("OverlayDeleted is missing normalized deleted path")
+	}
+	if _, ok := got.OverlayDeleted["public/deleted.md"]; ok {
+		t.Fatal("OverlayDeleted contains output path")
+	}
+}
+
+func TestScanExcludesOverlayThroughOutputSymlinkAlias(t *testing.T) {
+	t.Parallel()
+
+	vaultPath := t.TempDir()
+	outputPath := filepath.Join(vaultPath, "public")
+	if err := os.Mkdir(outputPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outputPath, filepath.Join(vaultPath, "alias")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+
+	got, err := ScanWithOptions(vaultPath, ScanOptions{
+		OutputPath: outputPath,
+		OverlayMarkdown: map[string][]byte{
+			"alias/injected.md": []byte("# Injected"),
+		},
+	})
+	if err != nil {
+		t.Fatalf("ScanWithOptions() error = %v", err)
+	}
+	if len(got.MarkdownFiles) != 0 {
+		t.Fatalf("MarkdownFiles = %#v, want output symlink alias excluded", got.MarkdownFiles)
+	}
+	if _, ok := got.OverlayMarkdown["alias/injected.md"]; ok {
+		t.Fatal("OverlayMarkdown retained a path resolving inside the formal output")
+	}
+}
+
+func TestScanExcludesOverlayThroughReservedSymlinkAlias(t *testing.T) {
+	t.Parallel()
+
+	vaultPath := t.TempDir()
+	writeVaultFile(t, vaultPath, "oxpio.yaml", "title: Protected\n")
+	if err := os.Mkdir(filepath.Join(vaultPath, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(filepath.Join(vaultPath, "oxpio.yaml"), filepath.Join(vaultPath, "credential.md")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(vaultPath, ".git"), filepath.Join(vaultPath, "git-alias")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+
+	got, err := ScanWithOptions(vaultPath, ScanOptions{OverlayMarkdown: map[string][]byte{
+		"credential.md":    []byte("# Credential"),
+		"git-alias/config": []byte("# Git config"),
+	}})
+	if err != nil {
+		t.Fatalf("ScanWithOptions() error = %v", err)
+	}
+	if len(got.OverlayMarkdown) != 0 {
+		t.Fatalf("OverlayMarkdown = %#v, want reserved symlink aliases excluded", got.OverlayMarkdown)
+	}
+}
+
+func TestScanRejectsOverlayThroughExternalSymlink(t *testing.T) {
+	t.Parallel()
+
+	vaultPath := t.TempDir()
+	outsidePath := t.TempDir()
+	if err := os.Symlink(outsidePath, filepath.Join(vaultPath, "escape")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+
+	_, err := ScanWithOptions(vaultPath, ScanOptions{
+		OverlayMarkdown: map[string][]byte{
+			"escape/injected.md": []byte("# Injected"),
+		},
+	})
+	if err == nil {
+		t.Fatal("ScanWithOptions() accepted an overlay resolving outside the vault")
+	}
+}
+
+func TestScanRejectsUnsafeOverlayPaths(t *testing.T) {
+	t.Parallel()
+
+	for _, relPath := range []string{
+		"/absolute.md",
+		`C:\absolute.md`,
+		`\\server\share\injected.md`,
+		"../outside.md",
+		"notes/../outside.md",
+	} {
+		t.Run(relPath, func(t *testing.T) {
+			vaultPath := t.TempDir()
+			_, err := ScanWithOptions(vaultPath, ScanOptions{OverlayMarkdown: map[string][]byte{relPath: []byte("# Unsafe")}})
+			if err == nil {
+				t.Fatalf("ScanWithOptions(%q) error = nil, want unsafe overlay rejection", relPath)
+			}
+		})
 	}
 }
 

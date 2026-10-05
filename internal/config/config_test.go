@@ -224,7 +224,7 @@ func TestNormalizeSiteConfigSupportsOnlyExplicitDefaultImageModes(t *testing.T) 
 			}
 		})
 	}
-	for _, value := range []string{"images/hero.png?v=1", "images/hero.png#card", `images\\hero.png`, "/images/hero.png", "../hero.png", "data:image/png;base64,AA"} {
+	for _, value := range []string{"images/hero.png?v=1", "images/hero.png#card", `images\\hero.png`, "/images/hero.png", "../hero.png", "data:image/png;base64,AA", "https://user:secret@example.test/card.png"} {
 		t.Run(value, func(t *testing.T) {
 			_, err := NormalizeSiteConfig(model.SiteConfig{Title: "Site", BaseURL: "https://example.test/", DefaultImg: value})
 			if err == nil || !strings.Contains(err.Error(), "defaultImg") {

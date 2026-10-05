@@ -102,7 +102,10 @@ test.beforeEach(async () => {
 });
 
 test.afterEach(async () => {
-  if (child && !child.killed) child.kill('SIGTERM');
+  if (child) {
+    if (!child.killed) child.kill('SIGTERM');
+    await waitForExit(child);
+  }
   if (tempRoot) await fs.rm(tempRoot, {recursive: true, force: true});
   child = undefined;
 });

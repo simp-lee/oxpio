@@ -933,6 +933,9 @@ func normalizeDefaultImg(raw string) (string, bool, error) {
 	}
 	parsed, err := url.Parse(trimmed)
 	if err == nil && parsed.IsAbs() && parsed.Host != "" && (strings.EqualFold(parsed.Scheme, "http") || strings.EqualFold(parsed.Scheme, "https")) {
+		if parsed.User != nil {
+			return "", false, fmt.Errorf("defaultImg must not include user info")
+		}
 		return trimmed, true, nil
 	}
 	if strings.Contains(trimmed, `\`) || strings.ContainsAny(trimmed, "?#:") || strings.HasPrefix(trimmed, "/") || strings.HasPrefix(trimmed, "//") || hasWindowsDrivePrefix(trimmed) {

@@ -53,6 +53,9 @@ type TransactionResult struct {
 	SourceHash string
 	RelPath    string
 	Build      *internalbuild.BuildResult
+	// SourceCleanupError reports temporary source/backup cleanup failure after
+	// a successful commit. The mutation is still published and must not be retried.
+	SourceCleanupError error
 }
 
 // Coordinator serializes source mutations and candidate builds for one edit

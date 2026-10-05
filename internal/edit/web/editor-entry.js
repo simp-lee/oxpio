@@ -287,7 +287,9 @@ async function responseJSON(response) {
   return data;
 }
 function postCommitWarning(result) {
-  return result?.outputCleanupWarning ? " Output cleanup needs attention." : "";
+  let warning = result?.outputCleanupWarning ? " Output cleanup needs attention." : "";
+  if (result?.sourceCleanupWarning) warning += " Temporary source/backup cleanup needs attention.";
+  return warning;
 }
 async function mutation(method, url, body, headers = {}) {
   const session = await responseJSON(await fetch("/_oxpio/csrf"));

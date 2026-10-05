@@ -266,6 +266,95 @@ func TestRenameRollbackPreservesExternalDestinationAndSource(t *testing.T) {
 	}
 }
 
+func TestFileManagerFinalizeReportsCleanupErrors(t *testing.T) {
+	cleanupFailure := errors.New("simulated file-manager cleanup failure")
+	originalRemove := fileManagerRemoveAll
+	fileManagerRemoveAll = func(string) error { return cleanupFailure }
+	defer func() { fileManagerRemoveAll = originalRemove }()
+
+	t.Run("delete", func(t *testing.T) {
+		vault := t.TempDir()
+		source := filepath.Join(vault, "source.md")
+		if err := os.WriteFile(source, []byte("original"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		current, err := inspectFileManagerState(vault, "source.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, finalize, _, err := applyFileManagerMutation(vault, fileManagerMutation{operation: fileMutationDelete, path: "source.md"}, current)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := finalize(); !errors.Is(err, cleanupFailure) {
+			t.Fatalf("delete finalize error = %v, want %v", err, cleanupFailure)
+		}
+	})
+
+	t.Run("rename", func(t *testing.T) {
+		vault := t.TempDir()
+		source := filepath.Join(vault, "source.md")
+		if err := os.WriteFile(source, []byte("original"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		current, err := inspectFileManagerState(vault, "source.md")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, finalize, _, err := applyFileManagerMutation(vault, fileManagerMutation{operation: fileMutationRename, path: "source.md", destination: "renamed.md"}, current)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := finalize(); !errors.Is(err, cleanupFailure) {
+			t.Fatalf("rename finalize error = %v, want %v", err, cleanupFailure)
+		}
+	})
+}
+
+func TestFileManagerReportsPostCommitSourceCleanupWarning(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeEditFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\nArticle\n")
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(vault, output, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupFailure := errors.New("simulated file-manager cleanup failure")
+	originalRemove := fileManagerRemoveAll
+	fileManagerRemoveAll = func(name string) error {
+		if strings.Contains(filepath.Base(name), ".oxpio-rename-backup-") {
+			return cleanupFailure
+		}
+		return originalRemove(name)
+	}
+	defer func() { fileManagerRemoveAll = originalRemove }()
+
+	current, err := inspectFileManagerState(vault, "article.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := coordinator.RenamePath("article.md", "renamed.md", current.hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !errors.Is(result.SourceCleanupError, cleanupFailure) {
+		t.Fatalf("source cleanup error = %v, want %v", result.SourceCleanupError, cleanupFailure)
+	}
+	if _, err := os.Stat(filepath.Join(vault, "renamed.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(vault, "article.md")); !os.IsNotExist(err) {
+		t.Fatalf("old source stat error = %v", err)
+	}
+}
+
 func TestDeleteRollbackCleansDisplacedSourceOnExternalReplacement(t *testing.T) {
 	vault := t.TempDir()
 	source := filepath.Join(vault, "source.md")

@@ -365,6 +365,10 @@ func (s *Server) serveSourceDelete(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeMutationResult(w http.ResponseWriter, result TransactionResult) {
 	response := map[string]any{"ok": true, "sourceHash": result.SourceHash}
+	if result.SourceCleanupError != nil {
+		// Report the post-commit warning without exposing private filesystem paths.
+		response["sourceCleanupWarning"] = true
+	}
 	if result.RelPath != "" {
 		response["path"] = result.RelPath
 	}
@@ -804,6 +808,8 @@ func newToken() (string, error) {
 // It refuses non-terminal input so credentials are never silently generated or
 // accepted from a redirected command stream.
 func Setup(vaultPath string, input io.Reader, output io.Writer) error {
+	setupMu.Lock()
+	defer setupMu.Unlock()
 	cfg, err := internalconfig.LoadForBuild(vaultPath)
 	if err != nil {
 		return err
@@ -818,8 +824,6 @@ func Setup(vaultPath string, input io.Reader, output io.Writer) error {
 	if output == nil {
 		output = io.Discard
 	}
-	setupMu.Lock()
-	defer setupMu.Unlock()
 	resolvedVault, err := internalfsutil.ResolveVaultPath(vaultPath)
 	if err != nil {
 		return err
@@ -894,7 +898,16 @@ func appendEditConfig(original []byte, username, hash string) []byte {
 	return updated
 }
 
+// atomicReplaceConfig holds the cross-process lock across both CAS checks and
+// the final rename, so another cooperating config writer cannot change the
+// file between the last check and commit.
 func atomicReplaceConfig(vaultRoot, configPath string, expected, updated []byte) error {
+	releaseConfigLock, err := acquireConfigLock(vaultRoot)
+	if err != nil {
+		return fmt.Errorf("acquire config lock before setup: %w", err)
+	}
+	defer func() { _ = releaseConfigLock() }()
+
 	_, current, _, err := internalfsutil.ReadContainedRegularFile(vaultRoot, internalconfig.Filename)
 	if err != nil {
 		return fmt.Errorf("recheck config before setup: %w", err)

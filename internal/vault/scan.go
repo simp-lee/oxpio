@@ -13,13 +13,12 @@ import (
 
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/publishpath"
 )
 
 const (
-	obsidianConfigDir  = ".obsidian"
-	obsidianAppJSON    = ".obsidian/app.json"
-	nodeModulesDirName = "node_modules"
-	oxpioDirName       = ".oxpio"
+	obsidianConfigDir = ".obsidian"
+	obsidianAppJSON   = ".obsidian/app.json"
 )
 
 // ScanResult is the Step 11 handoff for later frontmatter parsing and index building.
@@ -56,8 +55,10 @@ func Scan(vaultPath string) (ScanResult, error) {
 // ScanWithOptions walks a vault once and returns the Markdown and resource
 // candidates needed by later phases. Hidden entries, node_modules, the resolved
 // output, all .obsidian content except the separately-read app.json, symlinks,
-// and non-regular files are excluded. attachmentFolderPath is preserved as
-// normalized metadata only and does not relax scan boundaries.
+// and non-regular files are excluded. Overlay keys are normalized before
+// merging; malformed keys fail the scan and reserved/output paths are ignored.
+// attachmentFolderPath is preserved as normalized metadata only and does not
+// relax scan boundaries.
 func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) {
 	absVaultPath, err := normalizeVaultPath(vaultPath)
 	if err != nil {
@@ -69,6 +70,15 @@ func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) 
 		excludedOutput = ""
 	}
 
+	overlayMarkdown, err := normalizeOverlayMarkdown(absVaultPath, excludedOutput, options.OverlayMarkdown)
+	if err != nil {
+		return ScanResult{}, err
+	}
+	overlayDeleted, err := normalizeOverlayDeleted(absVaultPath, excludedOutput, options.OverlayDeleted)
+	if err != nil {
+		return ScanResult{}, err
+	}
+
 	attachmentFolderPath, err := readAttachmentFolderPath(absVaultPath, excludedOutput)
 	if err != nil {
 		return ScanResult{}, err
@@ -77,8 +87,8 @@ func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) 
 	result := ScanResult{
 		VaultPath:            absVaultPath,
 		AttachmentFolderPath: attachmentFolderPath,
-		OverlayMarkdown:      cloneOverlay(options.OverlayMarkdown),
-		OverlayDeleted:       cloneDeleted(options.OverlayDeleted),
+		OverlayMarkdown:      overlayMarkdown,
+		OverlayDeleted:       overlayDeleted,
 		markdownSet:          make(map[string]struct{}),
 	}
 
@@ -193,28 +203,133 @@ func (r ScanResult) LookupResourcePath(relPath string) model.PathLookupResult {
 	return model.PathLookupResult{Path: r.resourceLookup[canonicalKey]}
 }
 
-func cloneOverlay(input map[string][]byte) map[string][]byte {
+func normalizeOverlayMarkdown(vaultPath, outputPath string, input map[string][]byte) (map[string][]byte, error) {
 	if len(input) == 0 {
-		return nil
+		return nil, nil
 	}
+
+	keys := make([]string, 0, len(input))
+	for relPath := range input {
+		keys = append(keys, relPath)
+	}
+	sort.Strings(keys)
+
 	output := make(map[string][]byte, len(input))
-	for relPath, data := range input {
-		output[relPath] = append([]byte(nil), data...)
+	for _, rawPath := range keys {
+		relPath, err := normalizeOverlayPath(rawPath)
+		if err != nil {
+			return nil, fmt.Errorf("overlay Markdown path %q: %w", rawPath, err)
+		}
+		resolvedRelPath, err := resolveOverlayPath(vaultPath, relPath)
+		if err != nil {
+			return nil, fmt.Errorf("overlay Markdown path %q: %w", rawPath, err)
+		}
+		if shouldSkipPath(resolvedRelPath) || shouldExcludeOverlayPath(vaultPath, outputPath, relPath) {
+			continue
+		}
+		if _, exists := output[relPath]; exists {
+			return nil, fmt.Errorf("overlay Markdown paths %q and %q normalize to the same path", rawPath, relPath)
+		}
+		output[relPath] = append([]byte(nil), input[rawPath]...)
 	}
-	return output
+	if len(output) == 0 {
+		return nil, nil
+	}
+	return output, nil
 }
 
-func cloneDeleted(input map[string]bool) map[string]bool {
+func normalizeOverlayDeleted(vaultPath, outputPath string, input map[string]bool) (map[string]bool, error) {
 	if len(input) == 0 {
-		return nil
+		return nil, nil
 	}
-	output := make(map[string]bool, len(input))
+
+	keys := make([]string, 0, len(input))
 	for relPath, deleted := range input {
 		if deleted {
-			output[relPath] = true
+			keys = append(keys, relPath)
 		}
 	}
-	return output
+	sort.Strings(keys)
+
+	output := make(map[string]bool, len(keys))
+	for _, rawPath := range keys {
+		relPath, err := normalizeOverlayPath(rawPath)
+		if err != nil {
+			return nil, fmt.Errorf("deleted overlay path %q: %w", rawPath, err)
+		}
+		resolvedRelPath, err := resolveOverlayPath(vaultPath, relPath)
+		if err != nil {
+			return nil, fmt.Errorf("deleted overlay path %q: %w", rawPath, err)
+		}
+		if shouldSkipPath(resolvedRelPath) || shouldExcludeOverlayPath(vaultPath, outputPath, relPath) {
+			continue
+		}
+		if _, exists := output[relPath]; exists {
+			return nil, fmt.Errorf("deleted overlay paths %q and %q normalize to the same path", rawPath, relPath)
+		}
+		output[relPath] = true
+	}
+	if len(output) == 0 {
+		return nil, nil
+	}
+	return output, nil
+}
+
+func normalizeOverlayPath(rawPath string) (string, error) {
+	trimmed := strings.TrimSpace(rawPath)
+	if trimmed == "" {
+		return "", errors.New("path must be non-empty")
+	}
+
+	normalized := strings.ReplaceAll(trimmed, `\`, "/")
+	if strings.ContainsRune(normalized, '\x00') {
+		return "", errors.New("path must not contain NUL bytes")
+	}
+	if strings.HasPrefix(normalized, "/") || hasWindowsDrivePathPrefix(normalized) {
+		return "", errors.New("path must be vault-relative")
+	}
+	for _, segment := range strings.Split(normalized, "/") {
+		if segment == ".." {
+			return "", errors.New("path must not contain traversal segments")
+		}
+	}
+
+	cleaned := path.Clean(normalized)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", errors.New("path must be a non-empty vault-relative path")
+	}
+	return cleaned, nil
+}
+
+func hasWindowsDrivePathPrefix(value string) bool {
+	return len(value) >= 2 && isASCIILetter(value[0]) && value[1] == ':'
+}
+
+func resolveOverlayPath(vaultPath, relPath string) (string, error) {
+	candidate := filepath.Join(vaultPath, filepath.FromSlash(relPath))
+	resolved, err := internalfsutil.ResolvePathAfterSymlinks(candidate)
+	if err != nil {
+		return "", fmt.Errorf("resolve path: %w", err)
+	}
+	if !internalfsutil.PathWithinRoot(vaultPath, resolved) {
+		return "", errors.New("path must resolve inside the vault")
+	}
+	relative, err := filepath.Rel(vaultPath, resolved)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", errors.New("path must resolve inside the vault")
+	}
+	return filepath.ToSlash(relative), nil
+}
+
+func shouldExcludeOverlayPath(vaultPath, outputPath, relPath string) bool {
+	if shouldSkipPath(relPath) {
+		return true
+	}
+	if outputPath == "" {
+		return false
+	}
+	candidate := filepath.Join(vaultPath, filepath.FromSlash(relPath))
+	return internalfsutil.PathWithinRootAfterSymlinks(outputPath, candidate)
 }
 
 func normalizeVaultPath(vaultPath string) (string, error) {
@@ -316,7 +431,7 @@ func shouldSkipPath(relPath string) bool {
 	if normalizedRelPath == "" || normalizedRelPath == "." {
 		return false
 	}
-	return hasSkippedPathSegment(normalizedRelPath)
+	return publishpath.IsReservedPath(normalizedRelPath)
 }
 
 func isSymlinkEntry(entry fs.DirEntry) (bool, error) {
@@ -347,19 +462,6 @@ func isRegularFileEntry(entry fs.DirEntry) (bool, error) {
 		return false, err
 	}
 	return info.Mode().IsRegular(), nil
-}
-
-func hasSkippedPathSegment(relPath string) bool {
-	for _, segment := range strings.Split(relPath, "/") {
-		if shouldSkipPathSegment(segment) {
-			return true
-		}
-	}
-	return false
-}
-
-func shouldSkipPathSegment(name string) bool {
-	return name == obsidianConfigDir || name == nodeModulesDirName || name == oxpioDirName
 }
 
 func isMarkdownFile(name string) bool {

@@ -39,6 +39,25 @@ func TestMutationResultReportsPostCommitOutputCleanupWarning(t *testing.T) {
 	}
 }
 
+func TestMutationResultReportsPostCommitSourceCleanupWarning(t *testing.T) {
+	server := &Server{}
+	recorder := httptest.NewRecorder()
+	server.writeMutationResult(recorder, TransactionResult{SourceCleanupError: errors.New("/private/vault/.oxpio-rename-backup")})
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusOK)
+	}
+	var response map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if warning, ok := response["sourceCleanupWarning"].(bool); !ok || !warning {
+		t.Fatalf("response = %s, want sourceCleanupWarning=true", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "/private/vault") {
+		t.Fatalf("response leaked cleanup path: %s", recorder.Body.String())
+	}
+}
+
 func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	vault := t.TempDir()
 	output := t.TempDir()
