@@ -52,8 +52,8 @@ notice_paths = {
     'internal/recommend/chinese/LICENSE-CEDAR-BSD-2-CLAUSE',
     'internal/recommend/chinese/LICENSE-JIEBA-MIT',
     'internal/recommend/chinese/THIRD_PARTY.md',
-    'internal/render/vendor/katex/LICENSE',
-    'internal/render/vendor/mermaid/LICENSE',
+    'internal/render/runtime-assets/katex/LICENSE',
+    'internal/render/runtime-assets/mermaid/LICENSE',
     'internal/social/assets/DroidSansFallbackFull.LICENSE',
 }
 expected_matrix = {(os_name, arch) for os_name in ('linux', 'darwin', 'windows') for arch in ('amd64', 'arm64')}
@@ -77,8 +77,8 @@ for relative, expected in notice_hashes.items():
 embedded_resources = [
     'internal/social/assets/DroidSansFallbackFull.ttf',
     'internal/social/assets/KaTeX_Main-Regular.ttf',
-    'internal/render/vendor/katex/katex.min.js',
-    'internal/render/vendor/mermaid/mermaid.min.js',
+    'internal/render/runtime-assets/katex/katex.min.js',
+    'internal/render/runtime-assets/mermaid/mermaid.min.js',
 ]
 embedded_bytes = {relative: (root / relative).read_bytes() for relative in embedded_resources}
 

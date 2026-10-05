@@ -13,7 +13,7 @@ trap cleanup EXIT HUP INT TERM
 
 check_search() {
   matches=$(git grep -in -E 'pagefind|_pagefind|HasSearch|SearchConfig|data-oxpio-search-ui|oxpio-search-root|install-pagefind|cfg\.Search' -- . \
-    ':(exclude)internal/render/vendor/**' \
+    ':(exclude)internal/render/runtime-assets/**' \
     ':(exclude)scripts/verify-product-boundary.sh' \
     ':(exclude)scripts/verify-release.sh' || true)
   unexpected=$(printf '%s\n' "$matches" | grep -Ev \
@@ -54,7 +54,7 @@ check_packages() {
 
 check_embed_inventory() {
   embed_files=$(git grep -l '//go:embed' -- '*.go' ':(exclude)**/*_test.go' | sort)
-  expected_embed_files=$(printf '%s\n' internal/edit/web.go internal/recommend/chinese/embed.go internal/render/site_assets.go internal/social/card.go | sort)
+  expected_embed_files=$(printf '%s\n' internal/branding/logo.go internal/edit/web.go internal/recommend/chinese/embed.go internal/render/site_assets.go internal/social/card.go | sort)
   if [ "$embed_files" != "$expected_embed_files" ]; then
     printf 'production embed owners changed:\n%s\n' "$embed_files" >&2
     exit 1
@@ -74,11 +74,11 @@ check_embed_inventory() {
     exit 1
   fi
 
-  vendor_files=$(find internal/render/vendor -type f -print | sort)
+  vendor_files=$(find internal/render/runtime-assets -type f -print | sort)
   expected_vendor_files=$(
     {
-      sed -n 's/^- `[0-9a-f]\{64\}  \(internal\/render\/vendor\/[^`]*\)`$/\1/p' THIRD_PARTY.md
-      printf '%s\n' internal/render/vendor/katex/LICENSE internal/render/vendor/mermaid/LICENSE
+      sed -n 's/^- `[0-9a-f]\{64\}  \(internal\/render\/runtime-assets\/[^`]*\)`$/\1/p' THIRD_PARTY.md
+      printf '%s\n' internal/render/runtime-assets/katex/LICENSE internal/render/runtime-assets/mermaid/LICENSE
     } | sort
   )
   if [ "$vendor_files" != "$expected_vendor_files" ]; then

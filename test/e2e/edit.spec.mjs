@@ -476,7 +476,7 @@ test('structured editor exposes metadata forms, draft preview, and media managem
 
   await page.locator('#read-mode').click();
   const contentPreview = page.frameLocator('#preview-frame');
-  await expect(contentPreview.locator('img')).toHaveCount(2);
+  await expect(contentPreview.locator('[data-page-content] img')).toHaveCount(2);
   await page.getByRole('button', {name: 'New folder'}).click();
   await page.locator('#file-path').fill('docs');
   await page.locator('#file-submit').click();

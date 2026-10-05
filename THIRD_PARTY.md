@@ -1,7 +1,7 @@
 # Third-Party Notices
 
 ## KaTeX
-Version: 0.18.4. License: MIT (`internal/render/vendor/katex/LICENSE`). The same pinned `KaTeX_Main-Regular.ttf` is embedded by the deterministic social-card generator.
+Version: 0.18.4. License: MIT (`internal/render/runtime-assets/katex/LICENSE`). The same pinned `KaTeX_Main-Regular.ttf` is embedded by the deterministic social-card generator.
 
 ## Droid Sans Fallback Full
 Pinned deterministic CJK fallback font from Debian source package
@@ -12,7 +12,7 @@ Google Corp.; License Apache-2.0 (`internal/social/assets/DroidSansFallbackFull.
 The font is embedded for social-card rendering and is never loaded from the host system.
 
 ## Mermaid
-Version: 11.17.2. License: MIT (`internal/render/vendor/mermaid/LICENSE`).
+Version: 11.17.2. License: MIT (`internal/render/runtime-assets/mermaid/LICENSE`).
 
 ## CodeMirror 6 editor
 Pinned browser editor packages in `package-lock.json`, including CodeMirror 6,
@@ -40,68 +40,68 @@ all paths referenced by this notice.
 - `acb6440a713d880a13a21b468ba7cd43f5a2b2934972e51be791c880730777b8  internal/social/assets/DroidSansFallbackFull.ttf`
 - `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  internal/social/assets/DroidSansFallbackFull.LICENSE`
 
-- `e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4  internal/render/vendor/katex/contrib/auto-render.min.js`
-- `68534840bcfdd2bffb6f0e8deb48684dd01e7f04ea2813267577afb906de1d13  internal/render/vendor/katex/fonts/KaTeX_AMS-Regular.ttf`
-- `30da91e84c893f875e252689faebdc590b2871145e8adc7f9a9d4dbd8ce0b251  internal/render/vendor/katex/fonts/KaTeX_AMS-Regular.woff`
-- `0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308  internal/render/vendor/katex/fonts/KaTeX_AMS-Regular.woff2`
-- `07d8e303ce4fc12b4bb54f1004170dd190a1f3db45d400fe68060df3e0897268  internal/render/vendor/katex/fonts/KaTeX_Caligraphic-Bold.ttf`
-- `1ae6bd7475590e97e7f145a89e09ccde322f7a6bc0b91607b1c8b8ee28290fed  internal/render/vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff`
-- `de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c  internal/render/vendor/katex/fonts/KaTeX_Caligraphic-Bold.woff2`
-- `ed0b74372feefcbb9c0666b2e210da37b7e49fa7fbbf3eeb11db5f693dacfbb7  internal/render/vendor/katex/fonts/KaTeX_Caligraphic-Regular.ttf`
-- `3398dd02302557a793f2863f88e02d96ce10df2abffa07c8e9fa90775116e65c  internal/render/vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff`
-- `5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b  internal/render/vendor/katex/fonts/KaTeX_Caligraphic-Regular.woff2`
-- `9163df9c7122432e6495b4229fa9071cf9ae86a758ae5efc4924ec2e1a6dbce1  internal/render/vendor/katex/fonts/KaTeX_Fraktur-Bold.ttf`
-- `9be7ceb88004ab8ad124082246fbfcca4091e36385d4ec6ed1df67375dad50fb  internal/render/vendor/katex/fonts/KaTeX_Fraktur-Bold.woff`
-- `74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f  internal/render/vendor/katex/fonts/KaTeX_Fraktur-Bold.woff2`
-- `1e6f9579e90e2cac37f8f60a597c436e075c114385652b7cbeb0dec0421291b3  internal/render/vendor/katex/fonts/KaTeX_Fraktur-Regular.ttf`
-- `5e28753be717dac97f559f49bc10be9cf3c124ddcabda6659d11cb68febc6463  internal/render/vendor/katex/fonts/KaTeX_Fraktur-Regular.woff`
-- `51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc  internal/render/vendor/katex/fonts/KaTeX_Fraktur-Regular.woff2`
-- `138ac28d1663b3037e9c5f52371fa5c63d8324f4a38d22cd573e6ea3a3fd0cf8  internal/render/vendor/katex/fonts/KaTeX_Main-Bold.ttf`
-- `c76c5d696297d51b9cb1639c7da4334f0e7dec81b42b11213b5e25ef671bb822  internal/render/vendor/katex/fonts/KaTeX_Main-Bold.woff`
-- `0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021  internal/render/vendor/katex/fonts/KaTeX_Main-Bold.woff2`
-- `70ee1f64a20f2048c21940ef46d0144fd215baa953ca69afd1e31e98544f708f  internal/render/vendor/katex/fonts/KaTeX_Main-BoldItalic.ttf`
-- `a6f7ec0d846ac7ad975adb8959c37ed49b94acbc4ae436db9ce9e20287e4a64c  internal/render/vendor/katex/fonts/KaTeX_Main-BoldItalic.woff`
-- `99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b  internal/render/vendor/katex/fonts/KaTeX_Main-BoldItalic.woff2`
-- `0d85ae7cc30f23790a7f1a58c4a112fdca8aae769b6ba11429af1d98b1b6cb3a  internal/render/vendor/katex/fonts/KaTeX_Main-Italic.ttf`
-- `f1d6ef86f3b11a528bd5185199bd2443ecb2b0dead96d88674b5a2c12be24bdf  internal/render/vendor/katex/fonts/KaTeX_Main-Italic.woff`
-- `97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267  internal/render/vendor/katex/fonts/KaTeX_Main-Italic.woff2`
-- `d0332f52868370fd83ae7fa46470f90c8f2eab2fcf12bc4f88080b340c95a830  internal/render/vendor/katex/fonts/KaTeX_Main-Regular.ttf`
+- `e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4  internal/render/runtime-assets/katex/contrib/auto-render.min.js`
+- `68534840bcfdd2bffb6f0e8deb48684dd01e7f04ea2813267577afb906de1d13  internal/render/runtime-assets/katex/fonts/KaTeX_AMS-Regular.ttf`
+- `30da91e84c893f875e252689faebdc590b2871145e8adc7f9a9d4dbd8ce0b251  internal/render/runtime-assets/katex/fonts/KaTeX_AMS-Regular.woff`
+- `0cdd387c9590a1a9f9794560022dbb59654a7d86f187aa0c81495ad42d3a7308  internal/render/runtime-assets/katex/fonts/KaTeX_AMS-Regular.woff2`
+- `07d8e303ce4fc12b4bb54f1004170dd190a1f3db45d400fe68060df3e0897268  internal/render/runtime-assets/katex/fonts/KaTeX_Caligraphic-Bold.ttf`
+- `1ae6bd7475590e97e7f145a89e09ccde322f7a6bc0b91607b1c8b8ee28290fed  internal/render/runtime-assets/katex/fonts/KaTeX_Caligraphic-Bold.woff`
+- `de7701e42cf1f4cf0b766c03fb27977207eee2f4fd5d76fa82188406da43ea4c  internal/render/runtime-assets/katex/fonts/KaTeX_Caligraphic-Bold.woff2`
+- `ed0b74372feefcbb9c0666b2e210da37b7e49fa7fbbf3eeb11db5f693dacfbb7  internal/render/runtime-assets/katex/fonts/KaTeX_Caligraphic-Regular.ttf`
+- `3398dd02302557a793f2863f88e02d96ce10df2abffa07c8e9fa90775116e65c  internal/render/runtime-assets/katex/fonts/KaTeX_Caligraphic-Regular.woff`
+- `5d53e70ad607c2352162dec9e0923fb54ecdafaccbf604cd8dcf7d00facb989b  internal/render/runtime-assets/katex/fonts/KaTeX_Caligraphic-Regular.woff2`
+- `9163df9c7122432e6495b4229fa9071cf9ae86a758ae5efc4924ec2e1a6dbce1  internal/render/runtime-assets/katex/fonts/KaTeX_Fraktur-Bold.ttf`
+- `9be7ceb88004ab8ad124082246fbfcca4091e36385d4ec6ed1df67375dad50fb  internal/render/runtime-assets/katex/fonts/KaTeX_Fraktur-Bold.woff`
+- `74444efd593c005e3f4573b44524704c0af0a937fe911cca9e94068d0d140d3f  internal/render/runtime-assets/katex/fonts/KaTeX_Fraktur-Bold.woff2`
+- `1e6f9579e90e2cac37f8f60a597c436e075c114385652b7cbeb0dec0421291b3  internal/render/runtime-assets/katex/fonts/KaTeX_Fraktur-Regular.ttf`
+- `5e28753be717dac97f559f49bc10be9cf3c124ddcabda6659d11cb68febc6463  internal/render/runtime-assets/katex/fonts/KaTeX_Fraktur-Regular.woff`
+- `51814d270d06ff0255dba0799994fa4d8c84d11f09951d47595f4abb1f3602dc  internal/render/runtime-assets/katex/fonts/KaTeX_Fraktur-Regular.woff2`
+- `138ac28d1663b3037e9c5f52371fa5c63d8324f4a38d22cd573e6ea3a3fd0cf8  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Bold.ttf`
+- `c76c5d696297d51b9cb1639c7da4334f0e7dec81b42b11213b5e25ef671bb822  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Bold.woff`
+- `0f60d1b897938ec918c8ce073092411baf9438f6739465693ff18b0f9d20b021  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Bold.woff2`
+- `70ee1f64a20f2048c21940ef46d0144fd215baa953ca69afd1e31e98544f708f  internal/render/runtime-assets/katex/fonts/KaTeX_Main-BoldItalic.ttf`
+- `a6f7ec0d846ac7ad975adb8959c37ed49b94acbc4ae436db9ce9e20287e4a64c  internal/render/runtime-assets/katex/fonts/KaTeX_Main-BoldItalic.woff`
+- `99cd42a3c072d918f2f44984a807cf7aa16e13545fd0875fc07c6c65f99e715b  internal/render/runtime-assets/katex/fonts/KaTeX_Main-BoldItalic.woff2`
+- `0d85ae7cc30f23790a7f1a58c4a112fdca8aae769b6ba11429af1d98b1b6cb3a  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Italic.ttf`
+- `f1d6ef86f3b11a528bd5185199bd2443ecb2b0dead96d88674b5a2c12be24bdf  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Italic.woff`
+- `97479ca6cce906abc961ecac96faa5f9ca2e61b8e7670d475826bcdee9a7c267  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Italic.woff2`
+- `d0332f52868370fd83ae7fa46470f90c8f2eab2fcf12bc4f88080b340c95a830  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Regular.ttf`
 - `d0332f52868370fd83ae7fa46470f90c8f2eab2fcf12bc4f88080b340c95a830  internal/social/assets/KaTeX_Main-Regular.ttf`
-- `c6368d87e8a1a3a5d337623d83d8dc4b868f242a9ad476237d6f8d1e0f168cdc  internal/render/vendor/katex/fonts/KaTeX_Main-Regular.woff`
-- `c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866  internal/render/vendor/katex/fonts/KaTeX_Main-Regular.woff2`
-- `f9377ab0271cda59af24bcffbd46a4d0c8a3572ffafdbb38de2ad5ea7b0d5ee5  internal/render/vendor/katex/fonts/KaTeX_Math-BoldItalic.ttf`
-- `850c0af5c2238497febaf5e461d880bf458c341f42f4f330f1b1ab5698b1998e  internal/render/vendor/katex/fonts/KaTeX_Math-BoldItalic.woff`
-- `dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1  internal/render/vendor/katex/fonts/KaTeX_Math-BoldItalic.woff2`
-- `08ce98e51b04d58945a301e639e02b6998af29fdfd61a7b8afdd07bbfc479d4a  internal/render/vendor/katex/fonts/KaTeX_Math-Italic.ttf`
-- `8a8d244581371912b8f3f5a23e2437cb2a59cd9bcaebb0346e722c05737a2571  internal/render/vendor/katex/fonts/KaTeX_Math-Italic.woff`
-- `7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264  internal/render/vendor/katex/fonts/KaTeX_Math-Italic.woff2`
-- `1ece03f79f95277d57dc7f6b435a74e1379b0d46104a8530286b60ff49369ea0  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Bold.ttf`
-- `ece03cfd83e22c212cdef66feb8442d25a083beb988db3f1883f3f9738d750ba  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Bold.woff`
-- `e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Bold.woff2`
-- `3931dd81faed86ba021bb2bbdc36f5bed9a38d6b4f4077aca59b265aa1b02083  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Italic.ttf`
-- `91ee67500cc0129aa0ace3ac5c61ff1692102f0f31d02b69347fba35dcb75bf2  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Italic.woff`
-- `00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Italic.woff2`
-- `f36ea897e19f4a2e571d1e900e4e3710e438deb05a842486045ba0a3e616a4ad  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Regular.ttf`
-- `11e4dc8a6471ff6d6ee561d53d10fde8f7489e798257ff449c5d37c197435605  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Regular.woff`
-- `68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342  internal/render/vendor/katex/fonts/KaTeX_SansSerif-Regular.woff2`
-- `1c67f068fea8bb09bf099c088b1cf64bd27516a6e07f4684344873564bb66a67  internal/render/vendor/katex/fonts/KaTeX_Script-Regular.ttf`
-- `d96cdf2b3bdd4d64a8fd5f74a4c467f123a8a73931cd435889f08ffaf9bf947a  internal/render/vendor/katex/fonts/KaTeX_Script-Regular.woff`
-- `036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b  internal/render/vendor/katex/fonts/KaTeX_Script-Regular.woff2`
-- `95b6d2f1a50173bfedb8c63e1d1c99b10427d0a4df4201cb44513b226951a22b  internal/render/vendor/katex/fonts/KaTeX_Size1-Regular.ttf`
-- `c943cc986384f59e86bea5fd7dc50a9c4dfe567a7c05eb40d6790720dead97c9  internal/render/vendor/katex/fonts/KaTeX_Size1-Regular.woff`
-- `6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe  internal/render/vendor/katex/fonts/KaTeX_Size1-Regular.woff2`
-- `a6b2099fb555c60e3a0db3a08842ebf1d732c6eb4e4bf44913613bed4fc4e39b  internal/render/vendor/katex/fonts/KaTeX_Size2-Regular.ttf`
-- `2014c523c3210bcc166648c4d4cc57f05b747df07a24277bf71c51e67dc79e3d  internal/render/vendor/katex/fonts/KaTeX_Size2-Regular.woff`
-- `d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd  internal/render/vendor/katex/fonts/KaTeX_Size2-Regular.woff2`
-- `500e04d54f0d51666332c9d2089aa803be22aa878eca539e59fa53c6e522b082  internal/render/vendor/katex/fonts/KaTeX_Size3-Regular.ttf`
-- `6ab6b62e9b62dae2c00dd90f791bd10950be0ecc3490d7d6045f51c2e8fe0949  internal/render/vendor/katex/fonts/KaTeX_Size3-Regular.woff`
-- `73d591271b1604960cb10bb90fee021670af7297017e0e98480b332d11f51995  internal/render/vendor/katex/fonts/KaTeX_Size3-Regular.woff2`
-- `c647367d1dd4e162468717d020e1fc0f1dc5c26ebfdffbe55261713bf88c5877  internal/render/vendor/katex/fonts/KaTeX_Size4-Regular.ttf`
-- `99f9c6750b489c9462bf04900bd3f939df9b829339daaaaa99ef5495cdddea58  internal/render/vendor/katex/fonts/KaTeX_Size4-Regular.woff`
-- `a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0  internal/render/vendor/katex/fonts/KaTeX_Size4-Regular.woff2`
-- `f01f3e87d9c6a61c0c081ceb577abd864eb00a612f7ac1620dd6915fad2ef5aa  internal/render/vendor/katex/fonts/KaTeX_Typewriter-Regular.ttf`
-- `e14fed02b1aba7ce9f5afd5844b5d0321b22351febc720e0de8b8723527609f7  internal/render/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff`
-- `71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b  internal/render/vendor/katex/fonts/KaTeX_Typewriter-Regular.woff2`
-- `180c2d77d434d7da51d6625c50a964d4fd6fdbdb9bc8796a0a016c30c49931fb  internal/render/vendor/katex/katex.min.css`
-- `2ec5916941ef4383e0314eaabcc712301b06001d9fb68e08d751d2bae5a27a1a  internal/render/vendor/katex/katex.min.js`
-- `581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8  internal/render/vendor/mermaid/mermaid.min.js`
+- `c6368d87e8a1a3a5d337623d83d8dc4b868f242a9ad476237d6f8d1e0f168cdc  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Regular.woff`
+- `c2342cd8b869e01752a9321dc17213fc40d4d04c79688c1d43f2cf316abd7866  internal/render/runtime-assets/katex/fonts/KaTeX_Main-Regular.woff2`
+- `f9377ab0271cda59af24bcffbd46a4d0c8a3572ffafdbb38de2ad5ea7b0d5ee5  internal/render/runtime-assets/katex/fonts/KaTeX_Math-BoldItalic.ttf`
+- `850c0af5c2238497febaf5e461d880bf458c341f42f4f330f1b1ab5698b1998e  internal/render/runtime-assets/katex/fonts/KaTeX_Math-BoldItalic.woff`
+- `dc47344dbb6cb5b655c8460d561f4df5f501b90c804ad3c6cec65fe322351ab1  internal/render/runtime-assets/katex/fonts/KaTeX_Math-BoldItalic.woff2`
+- `08ce98e51b04d58945a301e639e02b6998af29fdfd61a7b8afdd07bbfc479d4a  internal/render/runtime-assets/katex/fonts/KaTeX_Math-Italic.ttf`
+- `8a8d244581371912b8f3f5a23e2437cb2a59cd9bcaebb0346e722c05737a2571  internal/render/runtime-assets/katex/fonts/KaTeX_Math-Italic.woff`
+- `7af58c5ec8f132a2ddde9027c6d7814decce4d3b822a11192a42a20e2e973264  internal/render/runtime-assets/katex/fonts/KaTeX_Math-Italic.woff2`
+- `1ece03f79f95277d57dc7f6b435a74e1379b0d46104a8530286b60ff49369ea0  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Bold.ttf`
+- `ece03cfd83e22c212cdef66feb8442d25a083beb988db3f1883f3f9738d750ba  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Bold.woff`
+- `e99ae51144bf1232efcc1bfe5add36262c6866b0faab24fa75740e1b98577a62  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Bold.woff2`
+- `3931dd81faed86ba021bb2bbdc36f5bed9a38d6b4f4077aca59b265aa1b02083  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Italic.ttf`
+- `91ee67500cc0129aa0ace3ac5c61ff1692102f0f31d02b69347fba35dcb75bf2  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Italic.woff`
+- `00b26ac825e2095056396e0553b8ac26d3f8ad158c3826e28b4c45b385c4714a  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Italic.woff2`
+- `f36ea897e19f4a2e571d1e900e4e3710e438deb05a842486045ba0a3e616a4ad  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Regular.ttf`
+- `11e4dc8a6471ff6d6ee561d53d10fde8f7489e798257ff449c5d37c197435605  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Regular.woff`
+- `68e8c73ef42afd3ccec58bf0fba302cce448938e7fc020a5e31f8a952eee1342  internal/render/runtime-assets/katex/fonts/KaTeX_SansSerif-Regular.woff2`
+- `1c67f068fea8bb09bf099c088b1cf64bd27516a6e07f4684344873564bb66a67  internal/render/runtime-assets/katex/fonts/KaTeX_Script-Regular.ttf`
+- `d96cdf2b3bdd4d64a8fd5f74a4c467f123a8a73931cd435889f08ffaf9bf947a  internal/render/runtime-assets/katex/fonts/KaTeX_Script-Regular.woff`
+- `036d4e95149b69ff9bcc0cd55771efeb25ffa3947293e69acd78d5ac328c684b  internal/render/runtime-assets/katex/fonts/KaTeX_Script-Regular.woff2`
+- `95b6d2f1a50173bfedb8c63e1d1c99b10427d0a4df4201cb44513b226951a22b  internal/render/runtime-assets/katex/fonts/KaTeX_Size1-Regular.ttf`
+- `c943cc986384f59e86bea5fd7dc50a9c4dfe567a7c05eb40d6790720dead97c9  internal/render/runtime-assets/katex/fonts/KaTeX_Size1-Regular.woff`
+- `6b47c40166b6dbe21a5dfca7718413f2147fd2399be1ba605d8ad39cedf25dfe  internal/render/runtime-assets/katex/fonts/KaTeX_Size1-Regular.woff2`
+- `a6b2099fb555c60e3a0db3a08842ebf1d732c6eb4e4bf44913613bed4fc4e39b  internal/render/runtime-assets/katex/fonts/KaTeX_Size2-Regular.ttf`
+- `2014c523c3210bcc166648c4d4cc57f05b747df07a24277bf71c51e67dc79e3d  internal/render/runtime-assets/katex/fonts/KaTeX_Size2-Regular.woff`
+- `d04c54219f9eaec6d4d4fd42dfb28785975a4794d6b2fc71e566b9cd6db842dd  internal/render/runtime-assets/katex/fonts/KaTeX_Size2-Regular.woff2`
+- `500e04d54f0d51666332c9d2089aa803be22aa878eca539e59fa53c6e522b082  internal/render/runtime-assets/katex/fonts/KaTeX_Size3-Regular.ttf`
+- `6ab6b62e9b62dae2c00dd90f791bd10950be0ecc3490d7d6045f51c2e8fe0949  internal/render/runtime-assets/katex/fonts/KaTeX_Size3-Regular.woff`
+- `73d591271b1604960cb10bb90fee021670af7297017e0e98480b332d11f51995  internal/render/runtime-assets/katex/fonts/KaTeX_Size3-Regular.woff2`
+- `c647367d1dd4e162468717d020e1fc0f1dc5c26ebfdffbe55261713bf88c5877  internal/render/runtime-assets/katex/fonts/KaTeX_Size4-Regular.ttf`
+- `99f9c6750b489c9462bf04900bd3f939df9b829339daaaaa99ef5495cdddea58  internal/render/runtime-assets/katex/fonts/KaTeX_Size4-Regular.woff`
+- `a4af7d414440a1c1790825cfb700cf9cf43b0f2c4b04f0ebc523011ad9853ec0  internal/render/runtime-assets/katex/fonts/KaTeX_Size4-Regular.woff2`
+- `f01f3e87d9c6a61c0c081ceb577abd864eb00a612f7ac1620dd6915fad2ef5aa  internal/render/runtime-assets/katex/fonts/KaTeX_Typewriter-Regular.ttf`
+- `e14fed02b1aba7ce9f5afd5844b5d0321b22351febc720e0de8b8723527609f7  internal/render/runtime-assets/katex/fonts/KaTeX_Typewriter-Regular.woff`
+- `71d517d67827787cfabdf186914cc3358eda539e37931941f2b2fd4a21f68c0b  internal/render/runtime-assets/katex/fonts/KaTeX_Typewriter-Regular.woff2`
+- `180c2d77d434d7da51d6625c50a964d4fd6fdbdb9bc8796a0a016c30c49931fb  internal/render/runtime-assets/katex/katex.min.css`
+- `2ec5916941ef4383e0314eaabcc712301b06001d9fb68e08d751d2bae5a27a1a  internal/render/runtime-assets/katex/katex.min.js`
+- `581ed7d74bd9048d0e3a91363927d72ef22942d7722546b27f7cc29e35390eb8  internal/render/runtime-assets/mermaid/mermaid.min.js`

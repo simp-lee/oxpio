@@ -49,9 +49,9 @@ archives:
           mtime: "{{.CommitDate}}"
       - src: THIRD_PARTY.md
         info: *notice_info
-      - src: internal/render/vendor/katex/LICENSE
+      - src: internal/render/runtime-assets/katex/LICENSE
         info: *notice_info
-      - src: internal/render/vendor/mermaid/LICENSE
+      - src: internal/render/runtime-assets/mermaid/LICENSE
         info: *notice_info
       - src: internal/social/assets/DroidSansFallbackFull.LICENSE
         info: *notice_info

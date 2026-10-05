@@ -28,12 +28,12 @@ type embeddedOutputAsset struct {
 
 var runtimeTemplateAssets = func() []embeddedOutputAsset {
 	assets := []embeddedOutputAsset{
-		{name: "vendor/katex/katex.min.css", outputPath: katexCSSOutputPath},
-		{name: "vendor/katex/katex.min.js", outputPath: katexJSOutputPath},
-		{name: "vendor/katex/contrib/auto-render.min.js", outputPath: katexAutoOutputPath},
-		{name: "vendor/mermaid/mermaid.min.js", outputPath: mermaidJSOutputPath},
+		{name: "runtime-assets/katex/katex.min.css", outputPath: katexCSSOutputPath},
+		{name: "runtime-assets/katex/katex.min.js", outputPath: katexJSOutputPath},
+		{name: "runtime-assets/katex/contrib/auto-render.min.js", outputPath: katexAutoOutputPath},
+		{name: "runtime-assets/mermaid/mermaid.min.js", outputPath: mermaidJSOutputPath},
 	}
-	fonts, _ := fs.Glob(embeddedSiteFS, "vendor/katex/fonts/*")
+	fonts, _ := fs.Glob(embeddedSiteFS, "runtime-assets/katex/fonts/*")
 	for _, name := range fonts {
 		assets = append(assets, embeddedOutputAsset{name: name, outputPath: path.Join("assets/oxpio-runtime/fonts", path.Base(name))})
 	}
@@ -108,7 +108,7 @@ func SharedRuntimeOutputPath() (string, error) {
 
 func readEmbeddedAsset(name string) ([]byte, error) {
 	assetPath := name
-	if !strings.HasPrefix(assetPath, "vendor/") {
+	if !strings.HasPrefix(assetPath, "runtime-assets/") {
 		assetPath = embeddedSiteAssetPath(name)
 	}
 	data, err := embeddedSiteFS.ReadFile(assetPath)
