@@ -92,7 +92,7 @@ func CandidatePathsWithAttachmentFolder(note *model.Note, attachmentFolderPath s
 // path rather than an external URL, protocol-relative URL, or fragment.
 func IsLocalTarget(rawTarget string) bool {
 	target := strings.TrimSpace(rawTarget)
-	if target == "" || strings.HasPrefix(target, "#") || strings.HasPrefix(target, "//") {
+	if target == "" || strings.HasPrefix(target, "#") || isUNCPath(target) {
 		return false
 	}
 	if isWindowsDrivePath(target) {
@@ -100,6 +100,19 @@ func IsLocalTarget(rawTarget string) bool {
 	}
 	parsed, err := url.Parse(target)
 	return err != nil || parsed.Scheme == ""
+}
+
+func isUNCPath(value string) bool {
+	normalized := strings.ReplaceAll(strings.TrimSpace(value), "\\", "/")
+	if strings.HasPrefix(normalized, "//") {
+		return true
+	}
+
+	decoded, err := url.PathUnescape(normalized)
+	if err != nil {
+		return false
+	}
+	return strings.HasPrefix(strings.ReplaceAll(strings.TrimSpace(decoded), "\\", "/"), "//")
 }
 
 func isWindowsDrivePath(value string) bool {

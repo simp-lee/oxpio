@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
@@ -46,11 +47,16 @@ func newEditCommand(deps commandDependencies) *cobra.Command {
 			}
 			srv, err := deps.newEditServer(boundary.VaultPath, boundary.OutputPath, port, buildResult.Catalog)
 			if err != nil {
-				return fmt.Errorf("create edit server: %w", err)
+				return errors.Join(fmt.Errorf("create edit server: %w", err), closePreviewServer(srv))
 			}
 			srv.EnableLiveReload()
-			if err := srv.ListenAndServe(); err != nil {
-				return fmt.Errorf("listen and serve: %w", err)
+			listenErr := srv.ListenAndServe()
+			closeErr := closePreviewServer(srv)
+			if listenErr != nil {
+				return errors.Join(fmt.Errorf("listen and serve: %w", listenErr), closeErr)
+			}
+			if closeErr != nil {
+				return fmt.Errorf("close edit server: %w", closeErr)
 			}
 			return nil
 		},

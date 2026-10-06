@@ -3,6 +3,7 @@ package edit
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
 	"net/http"
@@ -63,7 +64,11 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := parts[0]
-	preview := s.lookupPreview(token)
+	preview, cleanupErr := s.lookupPreview(token)
+	if cleanupErr != nil {
+		http.Error(w, fmt.Sprintf("preview cleanup failed: %v", cleanupErr), http.StatusInternalServerError)
+		return
+	}
 	if preview == nil || preview.static == nil {
 		http.NotFound(w, r)
 		return
@@ -324,36 +329,52 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not create preview workspace", http.StatusInternalServerError)
 		return
 	}
+	if cleanupErr := s.trackPreviewRoot(root); cleanupErr != nil {
+		http.Error(w, previewFailureMessage("editor is closed", cleanupErr), http.StatusServiceUnavailable)
+		return
+	}
 	stageOutput := filepath.Join(root, "public")
 	built, buildErr := internalbuild.BuildWithOptions(s.vault, stageOutput, internalbuild.Options{
 		SourceOverlay:    overlay,
 		SourceOutputPath: s.output,
 	})
 	if buildErr != nil {
-		_ = os.RemoveAll(root)
+		cleanupErr := s.discardUnpublishedPreview(nil, root)
 		if built != nil {
-			writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]any{"error": s.editorDiagnosticText(buildErr.Error()), "diagnostics": s.editorDiagnostics(built.Diagnostics)})
+			message := previewFailureMessage(s.editorDiagnosticText(buildErr.Error()), cleanupErr)
+			writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]any{"error": message, "diagnostics": s.editorDiagnostics(built.Diagnostics)})
 		} else {
-			http.Error(w, buildErr.Error(), http.StatusUnprocessableEntity)
+			http.Error(w, previewFailureMessage(buildErr.Error(), cleanupErr), http.StatusUnprocessableEntity)
 		}
 		return
 	}
 	previewEntry := catalogEntry(built.Catalog, entry.RelPath)
 	if previewEntry == nil || previewEntry.Route == "" {
-		_ = os.RemoveAll(root)
-		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": "source has no preview route; publish its parent section or repair its frontmatter"})
+		cleanupErr := s.discardUnpublishedPreview(nil, root)
+		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": previewFailureMessage("source has no preview route; publish its parent section or repair its frontmatter", cleanupErr)})
+		return
+	}
+	s.previewMu.Lock()
+	if s.closed {
+		s.previewMu.Unlock()
+		cleanupErr := s.discardUnpublishedPreview(nil, root)
+		http.Error(w, previewFailureMessage("editor is closed", cleanupErr), http.StatusServiceUnavailable)
 		return
 	}
 	static, err := internalserver.New(stageOutput, 0)
+	if err == nil {
+		s.previewRoots[root] = static
+	}
+	s.previewMu.Unlock()
 	if err != nil {
-		_ = os.RemoveAll(root)
-		http.Error(w, "could not create preview server", http.StatusInternalServerError)
+		cleanupErr := s.discardUnpublishedPreview(nil, root)
+		http.Error(w, previewFailureMessage("could not create preview server", cleanupErr), http.StatusInternalServerError)
 		return
 	}
 	token, err := newToken()
 	if err != nil {
-		_ = os.RemoveAll(root)
-		http.Error(w, "could not create preview token", http.StatusInternalServerError)
+		cleanupErr := s.discardUnpublishedPreview(static, root)
+		http.Error(w, previewFailureMessage("could not create preview token", cleanupErr), http.StatusInternalServerError)
 		return
 	}
 	basePath := ""
@@ -363,18 +384,30 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 	fullURL := "/_oxpio/preview/" + token + basePath + previewEntry.Route
 	fullPage, err := renderPreviewPage(static, previewSitePath(basePath, previewEntry.Route))
 	if err != nil {
-		_ = os.RemoveAll(root)
-		http.Error(w, "could not render preview page", http.StatusInternalServerError)
+		cleanupErr := s.discardUnpublishedPreview(static, root)
+		http.Error(w, previewFailureMessage("could not render preview page", cleanupErr), http.StatusInternalServerError)
 		return
 	}
 	contentHTML, err := renderContentPreview(fullPage, token, previewEntry.Title, previewSitePath(basePath, previewEntry.Route))
 	if err != nil {
-		_ = os.RemoveAll(root)
-		http.Error(w, "could not render content preview", http.StatusInternalServerError)
+		cleanupErr := s.discardUnpublishedPreview(static, root)
+		http.Error(w, previewFailureMessage("could not render content preview", cleanupErr), http.StatusInternalServerError)
 		return
 	}
 	s.previewMu.Lock()
-	s.cleanupPreviewsLocked(time.Now())
+	if s.closed {
+		s.previewMu.Unlock()
+		cleanupErr := s.discardUnpublishedPreview(static, root)
+		http.Error(w, previewFailureMessage("editor is closed", cleanupErr), http.StatusServiceUnavailable)
+		return
+	}
+	if err := s.cleanupPreviewsLocked(time.Now()); err != nil {
+		s.previewMu.Unlock()
+		cleanupErr := errors.Join(err, s.discardUnpublishedPreview(static, root))
+		http.Error(w, previewFailureMessage("could not clean up expired preview", cleanupErr), http.StatusInternalServerError)
+		return
+	}
+	delete(s.previewRoots, root)
 	s.previews[token] = &editorPreview{static: static, root: root, contentHTML: contentHTML, expires: time.Now().Add(previewLifetime)}
 	s.previewMu.Unlock()
 	response := map[string]any{
@@ -431,23 +464,85 @@ func forceEditorPublish(content []byte) ([]byte, error) {
 	return append(append(append([]byte(nil), content[:document.BodyStart]...), block...), content[document.CloseStart:]...), nil
 }
 
-func (s *Server) lookupPreview(token string) *editorPreview {
+func (s *Server) trackPreviewRoot(root string) error {
+	s.previewMu.Lock()
+	defer s.previewMu.Unlock()
+	if s.closed {
+		cleanupErr := discardPreview(nil, root)
+		if cleanupErr != nil {
+			if s.previewRoots == nil {
+				s.previewRoots = make(map[string]*internalserver.Server)
+			}
+			s.previewRoots[root] = nil
+		}
+		return cleanupErr
+	}
+	if s.previewRoots == nil {
+		s.previewRoots = make(map[string]*internalserver.Server)
+	}
+	s.previewRoots[root] = nil
+	return nil
+}
+
+func (s *Server) discardUnpublishedPreview(static *internalserver.Server, root string) error {
+	s.previewMu.Lock()
+	defer s.previewMu.Unlock()
+	cleanupErr := discardPreview(static, root)
+	if cleanupErr == nil {
+		delete(s.previewRoots, root)
+	} else {
+		if s.previewRoots == nil {
+			s.previewRoots = make(map[string]*internalserver.Server)
+		}
+		s.previewRoots[root] = static
+	}
+	return cleanupErr
+}
+
+func (s *Server) lookupPreview(token string) (*editorPreview, error) {
 	now := time.Now()
 	s.previewMu.Lock()
 	defer s.previewMu.Unlock()
-	s.cleanupPreviewsLocked(now)
-	return s.previews[token]
+	if cleanupErr := s.cleanupPreviewsLocked(now); cleanupErr != nil {
+		return nil, cleanupErr
+	}
+	return s.previews[token], nil
 }
 
-func (s *Server) cleanupPreviewsLocked(now time.Time) {
+func (s *Server) cleanupPreviewsLocked(now time.Time) error {
+	var cleanupErr error
 	for token, preview := range s.previews {
-		if preview == nil || now.After(preview.expires) {
-			if preview != nil {
-				_ = os.RemoveAll(preview.root)
+		if preview == nil {
+			delete(s.previews, token)
+			continue
+		}
+		if now.After(preview.expires) {
+			if err := discardPreview(preview.static, preview.root); err != nil {
+				cleanupErr = errors.Join(cleanupErr, err)
+				continue
 			}
 			delete(s.previews, token)
 		}
 	}
+	return cleanupErr
+}
+
+func discardPreview(static *internalserver.Server, root string) error {
+	var cleanupErr error
+	if static != nil {
+		cleanupErr = errors.Join(cleanupErr, static.Close())
+	}
+	if strings.TrimSpace(root) != "" {
+		cleanupErr = errors.Join(cleanupErr, os.RemoveAll(root))
+	}
+	return cleanupErr
+}
+
+func previewFailureMessage(message string, cleanupErr error) string {
+	if cleanupErr == nil {
+		return message
+	}
+	return fmt.Sprintf("%s: cleanup preview: %v", message, cleanupErr)
 }
 
 var (

@@ -2,8 +2,10 @@ package server
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	stdhtml "html"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -36,6 +38,9 @@ type Server struct {
 	outputPath     string
 	fileServer     http.Handler
 	realOutputPath string
+	outputParent   *os.File
+	outputRootName string
+	outputParentMu sync.RWMutex
 	port           int
 	notFoundPath   string
 	basePath       string
@@ -69,13 +74,31 @@ func New(outputPath string, port int) (*Server, error) {
 		return nil, err
 	}
 
+	outputParent, err := openOutputParent(filepath.Dir(realOutputPath))
+	if err != nil {
+		return nil, fmt.Errorf("open output parent %q: %w", filepath.Dir(realOutputPath), err)
+	}
+	parentInfo, err := outputParent.Stat()
+	if err != nil {
+		return nil, errors.Join(fmt.Errorf("stat output parent %q: %w", filepath.Dir(realOutputPath), err), outputParent.Close())
+	}
+	if !parentInfo.IsDir() {
+		return nil, errors.Join(fmt.Errorf("output parent %q is not a directory", filepath.Dir(realOutputPath)), outputParent.Close())
+	}
+
+	outputRootName := filepath.Base(realOutputPath)
+	if outputRootName == string(filepath.Separator) || outputRootName == "." {
+		outputRootName = "."
+	}
 	server := &Server{
 		outputPath:     normalizedOutputPath,
 		fileServer:     http.FileServer(http.Dir(normalizedOutputPath)),
 		realOutputPath: realOutputPath,
+		outputParent:   outputParent,
+		outputRootName: outputRootName,
 		port:           normalizedPort,
-		basePath:       detectOutputBasePath(normalizedOutputPath),
 	}
+	server.basePath = server.detectOutputBasePath()
 
 	notFoundPath := filepath.Join(normalizedOutputPath, "404.html")
 	if resolvedNotFoundPath, info, err := server.resolveExistingOutputPath(notFoundPath); err == nil && !info.IsDir() {
@@ -83,6 +106,24 @@ func New(outputPath string, port int) (*Server, error) {
 	}
 
 	return server, nil
+}
+
+// Close releases resources held by the preview server.
+func (s *Server) Close() error {
+	if s == nil {
+		return nil
+	}
+
+	s.outputParentMu.Lock()
+	defer s.outputParentMu.Unlock()
+	if s.outputParent == nil {
+		return nil
+	}
+	if err := s.outputParent.Close(); err != nil {
+		return err
+	}
+	s.outputParent = nil
+	return nil
 }
 
 // Addr returns the listen address for the preview server.
@@ -217,7 +258,7 @@ func (s *Server) resolvePath(requestPath string) (servePath string, redirectPath
 }
 
 func (s *Server) serveNotFound(w http.ResponseWriter, r *http.Request) {
-	body, err := os.ReadFile(s.notFoundPath)
+	body, err := s.readOutputFile(s.notFoundPath)
 	if err != nil {
 		http.NotFound(w, r)
 		return
@@ -287,7 +328,19 @@ func (s *Server) serveOutput(w http.ResponseWriter, r *http.Request, servePath s
 			s.fileServer.ServeHTTP(writer, request)
 			return
 		}
-		http.ServeFile(writer, request, filePath)
+		file, openErr := s.openOutputFile(filePath)
+		if openErr != nil {
+			http.NotFound(writer, request)
+			return
+		}
+		defer file.Close()
+
+		info, statErr := file.Stat()
+		if statErr != nil || !info.Mode().IsRegular() {
+			http.NotFound(writer, request)
+			return
+		}
+		http.ServeContent(writer, request, filePath, info.ModTime(), file)
 	}
 	if s.liveReload == nil || !shouldBufferInjectedResponse(req, servePath) {
 		serve(w, req)
@@ -350,6 +403,36 @@ func (s *Server) serveInjectedResponse(w http.ResponseWriter, r *http.Request, s
 	}
 
 	_, _ = w.Write(body)
+}
+
+func (s *Server) openOutputFile(filePath string) (*os.File, error) {
+	if s == nil || strings.TrimSpace(filePath) == "" {
+		return nil, os.ErrNotExist
+	}
+	if !pathWithinRoot(s.realOutputPath, filePath) {
+		return nil, os.ErrPermission
+	}
+	relativePath, err := filepath.Rel(s.realOutputPath, filePath)
+	if err != nil || relativePath == "." {
+		return nil, os.ErrPermission
+	}
+
+	s.outputParentMu.RLock()
+	defer s.outputParentMu.RUnlock()
+	if s.outputParent == nil {
+		return nil, os.ErrNotExist
+	}
+	return openOutputFileRelative(s.outputParent, s.outputRootName, relativePath)
+}
+
+func (s *Server) readOutputFile(filePath string) ([]byte, error) {
+	file, err := s.openOutputFile(filePath)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+
+	return io.ReadAll(file)
 }
 
 func (s *Server) resolveOutputFilePath(servePath string) (string, error) {
@@ -420,8 +503,12 @@ func clearRangeHeaders(headers http.Header) {
 
 var outputBasePathPattern = regexp.MustCompile(`data-oxpio-base-path=(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
 
-func detectOutputBasePath(outputPath string) string {
-	data, err := os.ReadFile(filepath.Join(outputPath, "index.html"))
+func (s *Server) detectOutputBasePath() string {
+	indexPath, _, err := s.resolveExistingOutputPath(filepath.Join(s.outputPath, "index.html"))
+	if err != nil {
+		return "/"
+	}
+	data, err := s.readOutputFile(indexPath)
 	if err != nil {
 		return "/"
 	}
@@ -449,7 +536,7 @@ func (s *Server) RefreshBasePath() {
 	if s == nil {
 		return
 	}
-	basePath := detectOutputBasePath(s.outputPath)
+	basePath := s.detectOutputBasePath()
 	s.basePathMu.Lock()
 	s.basePath = basePath
 	s.basePathMu.Unlock()

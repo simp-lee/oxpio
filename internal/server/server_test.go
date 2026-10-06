@@ -72,6 +72,29 @@ func TestNewValidatesOutputPathAndPort(t *testing.T) {
 	}
 }
 
+func TestServerDetectsBasePathThroughOutputSymlink(t *testing.T) {
+	t.Parallel()
+
+	parent := t.TempDir()
+	target := filepath.Join(parent, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeServerTestFile(t, target, "index.html", `<html data-oxpio-base-path="/docs/"><body>home</body></html>`)
+	outputPath := filepath.Join(parent, "public")
+	if err := os.Symlink(target, outputPath); err != nil {
+		t.Skipf("os.Symlink(%q, %q) unsupported: %v", target, outputPath, err)
+	}
+
+	srv, err := New(outputPath, 0)
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if got := srv.BasePath(); got != "/docs/" {
+		t.Fatalf("New().BasePath() = %q, want %q", got, "/docs/")
+	}
+}
+
 func TestNewDefaultsZeroPortToDefaultPort(t *testing.T) {
 	t.Parallel()
 
@@ -439,6 +462,68 @@ func TestServerRejectsSymlinkedPathsEscapingOutputRoot(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestServerSecureOutputOpenDoesNotFollowReplacementSymlink(t *testing.T) {
+	t.Parallel()
+
+	outputPath := t.TempDir()
+	outsideRoot := t.TempDir()
+	safePath := filepath.Join(outputPath, "page.html")
+	outsidePath := filepath.Join(outsideRoot, "secret.html")
+	if err := os.WriteFile(safePath, []byte("safe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(outsidePath, []byte("outside secret"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	srv, err := New(outputPath, DefaultPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedPath, err := srv.resolveOutputFilePath("/page.html")
+	if err != nil {
+		t.Fatalf("resolveOutputFilePath() error = %v", err)
+	}
+
+	if err := os.Remove(safePath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outsidePath, safePath); err != nil {
+		t.Skipf("os.Symlink(%q, %q) unsupported: %v", outsidePath, safePath, err)
+	}
+
+	file, err := srv.openOutputFile(resolvedPath)
+	if err == nil {
+		_ = file.Close()
+		t.Fatal("openOutputFile() followed a replacement symlink")
+	}
+}
+
+func TestServerCloseReleasesOutputParent(t *testing.T) {
+	t.Parallel()
+
+	outputPath := t.TempDir()
+	writeServerTestFile(t, outputPath, "page.html", "page")
+	srv, err := New(outputPath, DefaultPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filePath, err := srv.resolveOutputFilePath("/page.html")
+	if err != nil {
+		t.Fatalf("resolveOutputFilePath() error = %v", err)
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if file, err := srv.openOutputFile(filePath); err == nil {
+		_ = file.Close()
+		t.Fatal("openOutputFile() succeeded after Close()")
+	}
+	if err := srv.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
 	}
 }
 

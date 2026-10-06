@@ -93,7 +93,11 @@ func normalizeDestination(rawDestination string) string {
 		baseDestination = decoded
 	}
 
-	return strings.ReplaceAll(strings.TrimSpace(baseDestination), "\\", "/")
+	baseDestination = strings.ReplaceAll(strings.TrimSpace(baseDestination), "\\", "/")
+	if strings.HasPrefix(baseDestination, "//") {
+		return ""
+	}
+	return baseDestination
 }
 
 func resolveVaultPath(note *model.Note, normalized string) string {

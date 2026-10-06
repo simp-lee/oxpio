@@ -21,6 +21,21 @@ func TestValidateLocalSVGAcceptsInternalReferences(t *testing.T) {
 	}
 }
 
+func TestValidateLocalSVGRejectsScriptingConstructs(t *testing.T) {
+	for _, source := range []string{
+		`<svg><script>alert(1)</script></svg>`,
+		`<svg><SCRIPT>alert(1)</SCRIPT></svg>`,
+		`<svg><path onload="alert(1)"/></svg>`,
+		`<svg><g OnMouseOver="alert(1)"/></svg>`,
+		`<svg><animate attributeName="onload" to="alert(1)"/></svg>`,
+		`<svg><set attributeName="OnClick" to="alert(1)"/></svg>`,
+	} {
+		if err := ValidateLocalSVG([]byte(source)); err == nil {
+			t.Fatalf("ValidateLocalSVG(%q) error = nil", source)
+		}
+	}
+}
+
 func TestValidateLocalSVGRejectsDuplicateExpandedAttributes(t *testing.T) {
 	for _, source := range []string{
 		`<svg><rect width="16" width="8" height="5"/></svg>`,

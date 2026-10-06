@@ -25,6 +25,20 @@ type previewServer interface {
 	NotifyReload()
 }
 
+func closePreviewServer(server previewServer) error {
+	if closer, ok := server.(interface{ Close() error }); ok {
+		return closer.Close()
+	}
+	return nil
+}
+
+func closeFileWatcher(watcher fileWatcher) error {
+	if watcher == nil {
+		return nil
+	}
+	return watcher.Close()
+}
+
 type commandDependencies struct {
 	buildSiteWithOptions func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error)
 	newPreviewServer     func(outputPath string, port int) (previewServer, error)

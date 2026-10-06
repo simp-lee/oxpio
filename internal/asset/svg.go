@@ -44,6 +44,9 @@ func ValidateLocalSVG(data []byte) error {
 		switch value := token.(type) {
 		case xml.StartElement:
 			seenPreambleContent = true
+			if strings.EqualFold(value.Name.Local, "script") {
+				return fmt.Errorf("SVG script elements are not allowed")
+			}
 			attributeNames := make(map[xml.Name]struct{}, len(value.Attr))
 			for _, attribute := range value.Attr {
 				if _, exists := attributeNames[attribute.Name]; exists {
@@ -89,6 +92,9 @@ func ValidateLocalSVG(data []byte) error {
 			for _, attribute := range value.Attr {
 				name := strings.ToLower(attribute.Name.Local)
 				text := strings.TrimSpace(attribute.Value)
+				if attribute.Name.Space != "xmlns" && isSVGEventHandlerName(name) {
+					return fmt.Errorf("SVG event handler attribute %q is not allowed", attribute.Name.Local)
+				}
 				if attribute.Name.Space == xmlNamespace && name == "base" && text != "" {
 					return fmt.Errorf("SVG xml:base reference %q is not allowed", text)
 				}
@@ -194,6 +200,9 @@ func validateSVGAnimationReferences(attributes map[string]string, namespaces map
 	if target == "" {
 		return nil
 	}
+	if isSVGEventHandlerName(target) {
+		return fmt.Errorf("SVG animation cannot set event handler attribute %q", target)
+	}
 
 	for _, valueName := range []string{"from", "to", "by", "values"} {
 		value := attributes[valueName]
@@ -232,6 +241,14 @@ func resolveSVGAnimationAttributeName(value string, namespaces map[string]string
 	default:
 		return strings.ToLower(value)
 	}
+}
+
+func isSVGEventHandlerName(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if _, local, qualified := strings.Cut(name, ":"); qualified {
+		name = local
+	}
+	return strings.HasPrefix(name, "on")
 }
 
 func svgAttributeMayReferenceCSSResource(name string) bool {

@@ -1235,6 +1235,46 @@ func TestRewriteRawHTMLResourcesPreservesMarkupAndRewritesEverySrcsetCandidate(t
 	}
 }
 
+func TestNewMarkdownDoesNotRewriteUNCPathsAsVaultAssets(t *testing.T) {
+	t.Parallel()
+
+	const uncTarget = `\\server\share\image.png`
+	markdownTarget := strings.Repeat("\\", 4) + "server\\share\\image.png"
+	sink := &recordingAssetSink{
+		paths: map[string]string{
+			"server/share/image.png": "assets/image.123.png",
+		},
+	}
+	diagnostics := diag.NewCollector()
+	note := &model.Note{Slug: "posts/unc", RelPath: "notes/unc.md"}
+	idx := &model.VaultIndex{
+		Assets: map[string]*model.Asset{
+			"server/share/image.png": {SrcPath: "server/share/image.png"},
+		},
+	}
+	md, _ := NewMarkdown(idx, note, sink, diagnostics)
+
+	var buf bytes.Buffer
+	source := []byte("![UNC](" + markdownTarget + ")\n\n[UNC link](" + markdownTarget + ")\n\n<img src=\"" + uncTarget + "\">\n")
+	if err := md.Convert(source, &buf); err != nil {
+		t.Fatalf("Convert() error = %v", err)
+	}
+
+	html := buf.String()
+	if strings.Contains(html, "assets/image.123.png") {
+		t.Fatalf("HTML = %q, want UNC targets to remain external", html)
+	}
+	if !strings.Contains(html, `<img src="\\server\share\image.png">`) {
+		t.Fatalf("HTML = %q, want raw HTML UNC target preserved", html)
+	}
+	if len(sink.registered) != 0 {
+		t.Fatalf("registered = %#v, want no UNC asset registration", sink.registered)
+	}
+	if got := diagnostics.Diagnostics(); len(got) != 0 {
+		t.Fatalf("diagnostics = %#v, want no UNC diagnostics", got)
+	}
+}
+
 func TestNewMarkdownKeepsRawHTMLPassthroughWhileBlockingDangerousMarkdownURLs(t *testing.T) {
 	t.Parallel()
 

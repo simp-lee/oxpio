@@ -945,7 +945,7 @@ func strictSocialCardInput(plan *model.SitePlan, article *model.Note, cover []by
 		CanonicalURL: strictBuildCanonicalURL(plan.Config.BaseURL, article.Route), SiteTitle: plan.Config.Title,
 		Title: article.Frontmatter.Title, Context: context, Description: article.Frontmatter.Description,
 		Date: strictCardDate(article.Frontmatter.Date), Updated: strictCardDate(article.Frontmatter.Updated),
-		Tags: append([]string(nil), article.Frontmatter.Tags...), Aliases: append([]string(nil), article.Frontmatter.Aliases...),
+		Tags: append([]string(nil), article.Tags...), Aliases: append([]string(nil), article.Frontmatter.Aliases...),
 		Slug: article.Frontmatter.Slug, Type: article.Frontmatter.Type, Order: article.Frontmatter.Order,
 		Author: article.Frontmatter.Author, Reviewed: strictCardDate(article.Frontmatter.Reviewed),
 		Status: article.Frontmatter.Status, Audience: article.Frontmatter.Audience,

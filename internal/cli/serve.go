@@ -51,6 +51,7 @@ type serveWatchLoop struct {
 	watchedDirs            map[string]struct{}
 	vaultWatchDirs         map[string]struct{}
 	fixedWatchDirs         map[string]struct{}
+	done                   chan error
 }
 
 func newServeCommand(deps commandDependencies) *cobra.Command {
@@ -77,13 +78,16 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 
 			srv, err := deps.newPreviewServer(boundary.OutputPath, port)
 			if err != nil {
-				return fmt.Errorf("create preview server: %w", err)
+				return errors.Join(fmt.Errorf("create preview server: %w", err), closePreviewServer(srv))
 			}
-
-			if err := srv.ListenAndServe(); err != nil {
-				return fmt.Errorf("listen and serve: %w", err)
+			listenErr := srv.ListenAndServe()
+			closeErr := closePreviewServer(srv)
+			if listenErr != nil {
+				return errors.Join(fmt.Errorf("listen and serve: %w", listenErr), closeErr)
 			}
-
+			if closeErr != nil {
+				return fmt.Errorf("close preview server: %w", closeErr)
+			}
 			return nil
 		},
 	}
@@ -97,7 +101,7 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 	return cmd
 }
 
-func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedVaultPath string, resolvedOutputPath string, port int) error {
+func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedVaultPath string, resolvedOutputPath string, port int) (runErr error) {
 	resolvedConfigPath := filepath.Join(normalizedVaultPath, defaultConfigFilename)
 	outputTransactionPaths := make(map[string]struct{})
 	trackOutputTransactionPath := func(path string) {
@@ -123,17 +127,17 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 
 	srv, err := deps.newPreviewServer(resolvedOutputPath, port)
 	if err != nil {
-		return fmt.Errorf("create preview server: %w", err)
+		return errors.Join(fmt.Errorf("create preview server: %w", err), closePreviewServer(srv))
 	}
 	srv.EnableLiveReload()
 
 	watcher, err := deps.newFileWatcher()
 	if err != nil {
-		return fmt.Errorf("create file watcher: %w", err)
+		return errors.Join(fmt.Errorf("create file watcher: %w", err), closePreviewServer(srv), closeFileWatcher(watcher))
 	}
 
 	ctx, cancel := context.WithCancel(cmd.Context())
-	defer cancel()
+	done := make(chan error, 1)
 
 	refreshInputs := func() map[string]struct{} {
 		return plannedWatchFiles(normalizedVaultPath, resolvedOutputPath)
@@ -147,6 +151,7 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 		relevantWatchFiles:     refreshInputs(),
 		refreshRelevantInputs:  refreshInputs,
 		debounce:               defaultWatchDebounce,
+		done:                   done,
 		rebuild:                build,
 		notifyReload: func() {
 			if refresher, ok := srv.(interface{ RefreshBasePath() }); ok {
@@ -158,8 +163,14 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "watch: %v\n", err)
 		},
 	}); err != nil {
-		return fmt.Errorf("start watch loop: %w", err)
+		cancel()
+		return errors.Join(fmt.Errorf("start watch loop: %w", err), closePreviewServer(srv))
 	}
+	defer func() {
+		cancel()
+		watchErr := <-done
+		runErr = errors.Join(runErr, watchErr, closePreviewServer(srv))
+	}()
 
 	if err := srv.ListenAndServe(); err != nil {
 		return fmt.Errorf("listen and serve: %w", err)
@@ -225,7 +236,16 @@ func startServeWatchLoop(ctx context.Context, loop serveWatchLoop) error {
 }
 
 func (loop *serveWatchLoop) run(ctx context.Context) {
-	defer loop.closeWatcher()
+	defer func() {
+		closeErr := loop.closeWatcher()
+		if loop.done != nil {
+			loop.done <- closeErr
+			return
+		}
+		if closeErr != nil {
+			loop.reportError(fmt.Errorf("close watcher: %w", closeErr))
+		}
+	}()
 
 	var timer *time.Timer
 	var timerC <-chan time.Time
@@ -318,14 +338,12 @@ func closeServeWatchLoopWatcher(cause error, watcher fileWatcher) error {
 	return cause
 }
 
-func (loop *serveWatchLoop) closeWatcher() {
+func (loop *serveWatchLoop) closeWatcher() error {
 	if loop == nil || loop.watcher == nil {
-		return
+		return nil
 	}
 
-	if err := loop.watcher.Close(); err != nil {
-		loop.reportError(fmt.Errorf("close watcher: %w", err))
-	}
+	return loop.watcher.Close()
 }
 
 func (loop *serveWatchLoop) addVaultTree(root string) error {

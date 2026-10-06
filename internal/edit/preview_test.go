@@ -63,6 +63,44 @@ func TestServePreviewRejectsAnonymousAndExpiredTokens(t *testing.T) {
 	}
 }
 
+func TestServerCloseRemovesTemporaryPreviews(t *testing.T) {
+	t.Parallel()
+
+	mainOutput := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mainOutput, "index.html"), []byte("main"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	previewRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(previewRoot, "index.html"), []byte("preview"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	static, err := internalserver.New(mainOutput, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previewStatic, err := internalserver.New(previewRoot, 0)
+	if err != nil {
+		_ = static.Close()
+		t.Fatal(err)
+	}
+	server := &Server{
+		static: static,
+		previews: map[string]*editorPreview{
+			"preview": {static: previewStatic, root: previewRoot},
+		},
+	}
+
+	if err := server.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if _, err := os.Stat(previewRoot); !os.IsNotExist(err) {
+		t.Fatalf("preview root stat error = %v, want not exist", err)
+	}
+	if err := server.Close(); err != nil {
+		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
 func TestRenderContentPreviewUsesRenderedEntryContentOnly(t *testing.T) {
 	fullPage := []byte(`<!doctype html><html lang="zh"><head>
 		<script src="/docs/assets/oxpio/runtime.abc.js"></script>

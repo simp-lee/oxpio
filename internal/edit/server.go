@@ -53,8 +53,10 @@ type Server struct {
 	mu       sync.Mutex
 	sessions map[string]session
 
-	previewMu sync.Mutex
-	previews  map[string]*editorPreview
+	previewMu    sync.Mutex
+	previews     map[string]*editorPreview
+	previewRoots map[string]*internalserver.Server
+	closed       bool
 }
 
 var setupMu sync.Mutex
@@ -93,20 +95,56 @@ func New(vaultPath, outputPath string, port int, catalogs ...*model.SourceCatalo
 	}
 	coordinator, err := NewCoordinator(resolvedVault, outputPath, catalog)
 	if err != nil {
-		return nil, err
+		return nil, errors.Join(err, static.Close())
 	}
 	return &Server{
-		static:      static,
-		port:        port,
-		vault:       resolvedVault,
-		output:      boundary.OutputPath,
-		catalog:     catalog,
-		coordinator: coordinator,
-		username:    cfg.Edit.Username,
-		hash:        cfg.Edit.PasswordHash,
-		sessions:    make(map[string]session),
-		previews:    make(map[string]*editorPreview),
+		static:       static,
+		port:         port,
+		vault:        resolvedVault,
+		output:       boundary.OutputPath,
+		catalog:      catalog,
+		coordinator:  coordinator,
+		username:     cfg.Edit.Username,
+		hash:         cfg.Edit.PasswordHash,
+		sessions:     make(map[string]session),
+		previews:     make(map[string]*editorPreview),
+		previewRoots: make(map[string]*internalserver.Server),
 	}, nil
+}
+
+// Close releases the static output server and all temporary previews.
+func (s *Server) Close() error {
+	if s == nil {
+		return nil
+	}
+
+	s.previewMu.Lock()
+	s.closed = true
+	var closeErr error
+	for token, preview := range s.previews {
+		if preview == nil {
+			delete(s.previews, token)
+			continue
+		}
+		if err := discardPreview(preview.static, preview.root); err != nil {
+			closeErr = errors.Join(closeErr, err)
+			continue
+		}
+		delete(s.previews, token)
+	}
+	for root, static := range s.previewRoots {
+		if err := discardPreview(static, root); err != nil {
+			closeErr = errors.Join(closeErr, err)
+			continue
+		}
+		delete(s.previewRoots, root)
+	}
+	s.previewMu.Unlock()
+
+	if s.static != nil {
+		closeErr = errors.Join(closeErr, s.static.Close())
+	}
+	return closeErr
 }
 
 // Handler exposes the HTTP handler for httptest and embedding.

@@ -121,6 +121,22 @@ func TestHasImageExtensionRecognizesEscapedSuffix(t *testing.T) {
 	}
 }
 
+func TestCandidatePathsRejectUNCPaths(t *testing.T) {
+	t.Parallel()
+
+	note := &model.Note{RelPath: "notes/current.md"}
+	for _, target := range []string{`\\server\share\image.png`, `%5C%5Cserver%5Cshare%5Cimage.png`} {
+		t.Run(target, func(t *testing.T) {
+			if got := CandidatePaths(note, "attachments", target); len(got) != 0 {
+				t.Fatalf("CandidatePaths(%q) = %#v, want no vault candidates", target, got)
+			}
+			if got := VaultRelativePathCandidate(target); got != "" {
+				t.Fatalf("VaultRelativePathCandidate(%q) = %q, want empty", target, got)
+			}
+		})
+	}
+}
+
 func TestResolvePathAttachmentFallbackOnlyForBarePaths(t *testing.T) {
 	t.Parallel()
 

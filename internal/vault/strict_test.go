@@ -113,6 +113,33 @@ func TestBuildStrictIndexResolvesMarkdownEntitiesBeforeAssetLookup(t *testing.T)
 	}
 }
 
+func TestBuildStrictIndexIgnoresUNCMarkdownAndRawHTMLResources(t *testing.T) {
+	vaultPath := t.TempDir()
+	writeVaultFile(t, vaultPath, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeVaultFile(t, vaultPath, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\n![UNC](\\\\\\\\server\\share\\image.png)\n\n<img src=\"\\\\server\\share\\image.png\">\n")
+	writeVaultFile(t, vaultPath, "server/share/image.png", "png")
+
+	scan, err := Scan(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources, err := ParseStrictFrontmatter(scan)
+	if err != nil {
+		t.Fatalf("ParseStrictFrontmatter() error = %v", err)
+	}
+	collector := diag.NewCollector()
+	result, err := BuildStrictIndex(scan, sources, sources.Articles, nil, collector, BuildIndexOptions{Concurrency: 1})
+	if err != nil {
+		t.Fatalf("BuildStrictIndex() error = %v", err)
+	}
+	if got := collector.Diagnostics(); len(got) != 0 {
+		t.Fatalf("collector.Diagnostics() = %#v, want no UNC resource diagnostics", got)
+	}
+	if asset := result.Index.Assets["server/share/image.png"]; asset != nil {
+		t.Fatalf("Index.Assets[server/share/image.png] = %#v, want UNC targets excluded from asset binding", asset)
+	}
+}
+
 func TestParseStrictFrontmatterRejectsImplicitFrontmatterAndDateBeforeUpdated(t *testing.T) {
 	vaultPath := t.TempDir()
 	writeVaultFile(t, vaultPath, "_index.md", "---\ntitle: Home\npublish: true\n---\n")

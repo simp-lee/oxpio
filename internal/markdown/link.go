@@ -87,6 +87,9 @@ func (r *strictLinkRenderer) rewriteDestination(raw string, sourceTarget string,
 	if sourceTarget == "" {
 		sourceTarget = raw
 	}
+	if !resourcepath.IsLocalTarget(sourceTarget) {
+		return raw
+	}
 	parsed, err := url.Parse(raw)
 	if err != nil {
 		r.recordUnresolvedLocalAttachment(raw, sourceTarget, line)

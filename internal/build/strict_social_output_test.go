@@ -4,8 +4,50 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestStrictBuildIncludesInlineHashtagsInSocialCardIdentity(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "site")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	article := "---\ntitle: Article\npublish: true\ntype: page\n---\nBody without tags.\n"
+	writeStrictFile(t, vault, "article.md", article)
+
+	first, err := BuildWithOptions(vault, output, Options{Strict: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstArticle := first.Index.Notes["article.md"]
+	if firstArticle == nil || firstArticle.SocialImage == "" {
+		t.Fatalf("first article = %#v, want generated social image", firstArticle)
+	}
+
+	writeStrictFile(t, vault, "article.md", strings.Replace(article, "Body without tags.", "Body with #inline.", 1))
+	second, err := BuildWithOptions(vault, output, Options{Strict: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondArticle := second.Index.Notes["article.md"]
+	if secondArticle == nil || secondArticle.SocialImage == "" {
+		t.Fatalf("second article = %#v, want generated social image", secondArticle)
+	}
+	foundInlineTag := false
+	for _, tag := range secondArticle.Tags {
+		if tag == "inline" {
+			foundInlineTag = true
+			break
+		}
+	}
+	if !foundInlineTag {
+		t.Fatalf("article tags = %#v, want inline hashtag", secondArticle.Tags)
+	}
+	if firstArticle.SocialImage == secondArticle.SocialImage {
+		t.Fatalf("social image path did not change after adding inline hashtag: %q", secondArticle.SocialImage)
+	}
+}
 
 func TestStrictBuildPublishesOneIndependentSocialCardPerArticle(t *testing.T) {
 	vault := copyFixtureVault(t, "feature-vault")

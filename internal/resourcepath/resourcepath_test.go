@@ -11,15 +11,17 @@ func TestIsLocalTargetDistinguishesLocalResourcesFromExternalDestinations(t *tes
 	t.Parallel()
 
 	tests := map[string]bool{
-		"missing.png":                    true,
-		"../outside.png":                 true,
-		"/assets/manual.pdf#page=2":      true,
-		`C:\\assets\\manual.pdf`:         true,
-		"https://example.test/image.png": false,
-		"//cdn.example.test/image.png":   false,
-		"data:image/png;base64,AA":       false,
-		"#local-fragment":                false,
-		"":                               false,
+		"missing.png":                      true,
+		"../outside.png":                   true,
+		"/assets/manual.pdf#page=2":        true,
+		`C:\\assets\\manual.pdf`:           true,
+		"https://example.test/image.png":   false,
+		"//cdn.example.test/image.png":     false,
+		`\\server\share\image.png`:         false,
+		`%5C%5Cserver%5Cshare%5Cimage.png`: false,
+		"data:image/png;base64,AA":         false,
+		"#local-fragment":                  false,
+		"":                                 false,
 	}
 	for target, want := range tests {
 		target, want := target, want
@@ -27,6 +29,19 @@ func TestIsLocalTargetDistinguishesLocalResourcesFromExternalDestinations(t *tes
 			t.Parallel()
 			if got := IsLocalTarget(target); got != want {
 				t.Fatalf("IsLocalTarget(%q) = %v, want %v", target, got, want)
+			}
+		})
+	}
+}
+
+func TestCandidatePathsRejectUNCPathsAfterSlashNormalization(t *testing.T) {
+	t.Parallel()
+
+	note := &model.Note{RelPath: "notes/current.md"}
+	for _, target := range []string{`\\server\share\image.png`, `%5C%5Cserver%5Cshare%5Cimage.png`} {
+		t.Run(target, func(t *testing.T) {
+			if got := CandidatePathsWithAttachmentFolder(note, "assets/uploads", target); len(got) != 0 {
+				t.Fatalf("CandidatePathsWithAttachmentFolder(%q) = %#v, want no vault candidates", target, got)
 			}
 		})
 	}
