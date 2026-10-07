@@ -333,7 +333,7 @@ func (s *Server) serveOutput(w http.ResponseWriter, r *http.Request, servePath s
 			http.NotFound(writer, request)
 			return
 		}
-		defer file.Close()
+		defer func() { _ = file.Close() }()
 
 		info, statErr := file.Stat()
 		if statErr != nil || !info.Mode().IsRegular() {
@@ -425,12 +425,12 @@ func (s *Server) openOutputFile(filePath string) (*os.File, error) {
 	return openOutputFileRelative(s.outputParent, s.outputRootName, relativePath)
 }
 
-func (s *Server) readOutputFile(filePath string) ([]byte, error) {
+func (s *Server) readOutputFile(filePath string) (content []byte, err error) {
 	file, err := s.openOutputFile(filePath)
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { err = errors.Join(err, file.Close()) }()
 
 	return io.ReadAll(file)
 }
