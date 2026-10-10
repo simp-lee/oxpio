@@ -11,12 +11,16 @@ import (
 
 func TestLoadForBuildRequiresStrictNavigationAndRejectsLegacyFields(t *testing.T) {
 	for name, content := range map[string]string{
-		"missing navigation": "title: Site\nbaseURL: https://example.test/\n",
-		"legacy default":     "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultPublish: true\n",
-		"unknown field":      "title: Site\nbaseURL: https://example.test/\nnavigation: []\nsearch: {}\n",
-		"legacy edit field":  "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit: {}\n",
-		"null navigation":    "title: Site\nbaseURL: https://example.test/\nnavigation: null\n",
-		"duplicate key":      "title: Site\nbaseURL: https://example.test/\nnavigation: []\ntitle: Other\n",
+		"missing navigation":  "title: Site\nbaseURL: https://example.test/\n",
+		"legacy default":      "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultPublish: true\n",
+		"unknown field":       "title: Site\nbaseURL: https://example.test/\nnavigation: []\nsearch: {}\n",
+		"legacy edit field":   "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit: {}\n",
+		"null navigation":     "title: Site\nbaseURL: https://example.test/\nnavigation: null\n",
+		"duplicate key":       "title: Site\nbaseURL: https://example.test/\nnavigation: []\ntitle: Other\n",
+		"empty author":        "title: Site\nbaseURL: https://example.test/\nnavigation: []\nauthor: ''\n",
+		"empty language":      "title: Site\nbaseURL: https://example.test/\nnavigation: []\nlanguage: ''\n",
+		"empty theme":         "title: Site\nbaseURL: https://example.test/\nnavigation: []\ntheme: ''\n",
+		"empty timeline path": "title: Site\nbaseURL: https://example.test/\nnavigation: []\ntimeline:\n  path: ''\n",
 	} {
 		t.Run(name, func(t *testing.T) {
 			vault := writeConfigVault(t, content)
@@ -142,6 +146,9 @@ func TestLoadForBuildUsesExplicitThemeAttachmentsAndEditorConfig(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(vault, ".oxpio", "themes", "minimal"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(vault, ".oxpio", "themes", "minimal", "theme.yaml"), []byte("apiVersion: 1\nname: minimal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.MkdirAll(filepath.Join(vault, "files"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +169,26 @@ editor:
 	}
 	if cfg.Theme != "minimal" || cfg.AttachmentDirectory != "files" || cfg.Editor == nil || cfg.Editor.Username != "admin" {
 		t.Fatalf("normalized config = %#v", cfg)
+	}
+}
+
+func TestLoadForBuildWithOutputRejectsAttachmentAndThemeOverlap(t *testing.T) {
+	vault := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(vault, "files"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(vault, ".oxpio", "themes", "minimal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vault, ".oxpio", "themes", "minimal", "theme.yaml"), []byte("apiVersion: 1\nname: minimal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	content := "title: Site\nbaseURL: https://example.test/\nnavigation: []\ntheme: minimal\nattachments:\n  directory: files\n"
+	writeConfigTestFile(t, vault, Filename, content)
+	for _, output := range []string{filepath.Join(vault, "files", "out"), filepath.Join(vault, ".oxpio", "themes", "minimal", "out"), filepath.Join(vault, ".oxpio", "cache", "out"), filepath.Join(vault, ".obsidian", "out")} {
+		if _, err := LoadForBuildWithOutput(vault, output); err == nil {
+			t.Fatalf("LoadForBuildWithOutput accepted overlapping output %q", output)
+		}
 	}
 }
 

@@ -27,11 +27,8 @@ func TestInitCommandDefaultsToCurrentVaultAndSeedsStrictRoot(t *testing.T) {
 	if _, err := internalconfig.LoadForBuild(vaultPath); err != nil {
 		t.Fatalf("strict config load error = %v", err)
 	}
-	if _, _, err := executeForTest(t, defaultCommandDependencies(), []string{"build"}); err != nil {
-		t.Fatalf("default build after init error = %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(vaultPath, "public", "index.html")); err != nil {
-		t.Fatalf("missing generated root page: %v", err)
+	if _, _, err := executeForTest(t, defaultCommandDependencies(), []string{"validate", "--vault", vaultPath}); err != nil {
+		t.Fatalf("default validate after init error = %v", err)
 	}
 }
 

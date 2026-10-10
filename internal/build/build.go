@@ -85,6 +85,13 @@ func BuildWithOptions(vaultPath, outputPath string, options Options) (*BuildResu
 	return strictResult, buildErr
 }
 
+// SourceCatalogForPlan exposes the canonical source mapping to shared
+// application adapters. The mapping is read-only and includes hidden sources
+// with an empty public route.
+func SourceCatalogForPlan(planned *siteplan.Result) *model.SourceCatalog {
+	return sourceCatalog(planned)
+}
+
 func sourceCatalog(planned *siteplan.Result) *model.SourceCatalog {
 	if planned == nil || planned.Plan == nil {
 		return nil

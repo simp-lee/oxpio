@@ -41,7 +41,7 @@ func newInitCommand() *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&vaultPath, "vault", "", "Path to the Obsidian vault (default current directory)")
+	flags.StringVar(&vaultPath, "vault", "", "Path to the OXPIO Vault (default current directory)")
 
 	return cmd
 }

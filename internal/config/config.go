@@ -35,10 +35,10 @@ const (
 type fileConfig struct {
 	Title       string                 `yaml:"title"`
 	BaseURL     string                 `yaml:"baseURL"`
-	Author      string                 `yaml:"author"`
-	Description string                 `yaml:"description"`
-	Language    string                 `yaml:"language"`
-	DefaultImg  string                 `yaml:"defaultImg"`
+	Author      *string                `yaml:"author"`
+	Description *string                `yaml:"description"`
+	Language    *string                `yaml:"language"`
+	DefaultImg  *string                `yaml:"defaultImg"`
 	Navigation  []navigationFileItem   `yaml:"navigation"`
 	Source      sourceFileConfig       `yaml:"source"`
 	Versions    *versionsFileConfig    `yaml:"versions"`
@@ -48,7 +48,7 @@ type fileConfig struct {
 	Related     relatedFileConfig      `yaml:"related"`
 	RSS         enabledFileConfig      `yaml:"rss"`
 	Timeline    timelineFileConfig     `yaml:"timeline"`
-	Theme       string                 `yaml:"theme"`
+	Theme       *string                `yaml:"theme"`
 	Attachments *attachmentsFileConfig `yaml:"attachments"`
 	Editor      *editFileConfig        `yaml:"editor"`
 }
@@ -90,8 +90,8 @@ type relatedFileConfig struct {
 }
 
 type timelineFileConfig struct {
-	Enabled *bool  `yaml:"enabled"`
-	Path    string `yaml:"path"`
+	Enabled *bool   `yaml:"enabled"`
+	Path    *string `yaml:"path"`
 }
 
 type attachmentsFileConfig struct {
@@ -188,22 +188,38 @@ func loadForBuild(resolvedVault, resolvedOutput string) (model.SiteConfig, error
 		}
 	}
 	if cfg.AttachmentDirectory != "" {
-		if insideOutputBoundary(resolvedOutput, filepath.Join(vaultRoot, filepath.FromSlash(cfg.AttachmentDirectory))) {
-			return model.SiteConfig{}, fmt.Errorf("attachments.directory %q must not contain the generated output", cfg.AttachmentDirectory)
+		attachmentPath := filepath.Join(vaultRoot, filepath.FromSlash(cfg.AttachmentDirectory))
+		if outputOverlapsPath(resolvedOutput, attachmentPath) {
+			return model.SiteConfig{}, fmt.Errorf("attachments.directory %q overlaps the generated output", cfg.AttachmentDirectory)
 		}
 		if _, err := discoverRequiredDirectory(vaultRoot, cfg.AttachmentDirectory, "attachments directory"); err != nil {
 			return model.SiteConfig{}, err
 		}
 	}
+	managementRoot := filepath.Join(vaultRoot, filepath.FromSlash(".oxpio"))
+	if outputOverlapsPath(resolvedOutput, managementRoot) {
+		return model.SiteConfig{}, fmt.Errorf("output must not overlap .oxpio")
+	}
+	obsidianRoot := filepath.Join(vaultRoot, filepath.FromSlash(".obsidian"))
+	if outputOverlapsPath(resolvedOutput, obsidianRoot) {
+		return model.SiteConfig{}, fmt.Errorf("output must not overlap .obsidian")
+	}
 	if cfg.Theme != ThemeBaseID {
 		themeRelPath := path.Join(ThemeRootRelPath, cfg.Theme)
 		themePath := filepath.Join(vaultRoot, filepath.FromSlash(themeRelPath))
-		if insideOutputBoundary(resolvedOutput, themePath) {
-			return model.SiteConfig{}, fmt.Errorf("theme %q must not be inside the generated output", cfg.Theme)
+		if outputOverlapsPath(resolvedOutput, themePath) {
+			return model.SiteConfig{}, fmt.Errorf("theme %q overlaps the generated output", cfg.Theme)
 		}
 		cfg.ThemeDir, err = discoverRequiredDirectory(vaultRoot, themeRelPath, "selected theme")
 		if err != nil {
 			return model.SiteConfig{}, err
+		}
+		entries, readErr := os.ReadDir(cfg.ThemeDir)
+		if readErr != nil {
+			return model.SiteConfig{}, fmt.Errorf("read selected theme %q: %w", cfg.Theme, readErr)
+		}
+		if len(entries) == 0 {
+			return model.SiteConfig{}, fmt.Errorf("selected theme %q must not be empty", cfg.Theme)
 		}
 	}
 	cfg.UnknownManagementPaths, err = discoverUnknownManagementPaths(vaultRoot)
@@ -215,6 +231,13 @@ func loadForBuild(resolvedVault, resolvedOutput string) (model.SiteConfig, error
 
 func insideOutputBoundary(outputPath, candidate string) bool {
 	return strings.TrimSpace(outputPath) != "" && internalfsutil.PathWithinRoot(outputPath, candidate)
+}
+
+func outputOverlapsPath(outputPath, candidate string) bool {
+	if strings.TrimSpace(outputPath) == "" || strings.TrimSpace(candidate) == "" {
+		return false
+	}
+	return internalfsutil.PathWithinRoot(outputPath, candidate) || internalfsutil.PathWithinRoot(candidate, outputPath)
 }
 
 // NormalizeSiteConfig normalizes an already-constructed internal config. The
@@ -354,6 +377,18 @@ func validateParsedFileConfig(parsed fileConfig) error {
 	if parsed.Related.Count != nil && (*parsed.Related.Count < 1 || *parsed.Related.Count > 20) {
 		return fmt.Errorf("related.count must be between 1 and 20")
 	}
+	if parsed.Author != nil && strings.TrimSpace(*parsed.Author) == "" {
+		return fmt.Errorf("author must be non-empty when provided")
+	}
+	if parsed.Language != nil && strings.TrimSpace(*parsed.Language) == "" {
+		return fmt.Errorf("language must be non-empty when provided")
+	}
+	if parsed.Theme != nil && strings.TrimSpace(*parsed.Theme) == "" {
+		return fmt.Errorf("theme must be non-empty when provided")
+	}
+	if parsed.Timeline.Path != nil && strings.TrimSpace(*parsed.Timeline.Path) == "" {
+		return fmt.Errorf("timeline.path must be non-empty when provided")
+	}
 	if parsed.Attachments != nil && strings.TrimSpace(parsed.Attachments.Directory) == "" {
 		return fmt.Errorf("attachments.directory is required")
 	}
@@ -368,12 +403,18 @@ func validateParsedFileConfig(parsed fileConfig) error {
 func applyFileConfig(cfg model.SiteConfig, parsed fileConfig) model.SiteConfig {
 	cfg.Title = strings.TrimSpace(parsed.Title)
 	cfg.BaseURL = strings.TrimSpace(parsed.BaseURL)
-	cfg.Author = strings.TrimSpace(parsed.Author)
-	cfg.Description = strings.TrimSpace(parsed.Description)
-	if value := strings.TrimSpace(parsed.Language); value != "" {
-		cfg.Language = value
+	if parsed.Author != nil {
+		cfg.Author = strings.TrimSpace(*parsed.Author)
 	}
-	cfg.DefaultImg = strings.TrimSpace(parsed.DefaultImg)
+	if parsed.Description != nil {
+		cfg.Description = strings.TrimSpace(*parsed.Description)
+	}
+	if parsed.Language != nil {
+		cfg.Language = strings.TrimSpace(*parsed.Language)
+	}
+	if parsed.DefaultImg != nil {
+		cfg.DefaultImg = strings.TrimSpace(*parsed.DefaultImg)
+	}
 	cfg.Navigation = make([]model.NavigationItem, 0, len(parsed.Navigation))
 	for _, item := range parsed.Navigation {
 		navigation := model.NavigationItem{Name: strings.TrimSpace(item.Name)}
@@ -422,10 +463,12 @@ func applyFileConfig(cfg model.SiteConfig, parsed fileConfig) model.SiteConfig {
 	if parsed.Timeline.Enabled != nil {
 		cfg.Timeline.Enabled = *parsed.Timeline.Enabled
 	}
-	if value := strings.TrimSpace(parsed.Timeline.Path); value != "" {
-		cfg.Timeline.Path = value
+	if parsed.Timeline.Path != nil {
+		cfg.Timeline.Path = strings.TrimSpace(*parsed.Timeline.Path)
 	}
-	cfg.Theme = strings.TrimSpace(parsed.Theme)
+	if parsed.Theme != nil {
+		cfg.Theme = strings.TrimSpace(*parsed.Theme)
+	}
 	if parsed.Attachments != nil {
 		cfg.AttachmentDirectory = strings.TrimSpace(parsed.Attachments.Directory)
 	} else {
@@ -1143,15 +1186,16 @@ func normalizeBaseURL(raw string) (string, error) {
 		escapedPath = rawPath
 	}
 	for component := range strings.SplitSeq(escapedPath, "/") {
-		if !strings.Contains(component, "%") {
-			continue
+		decoded := component
+		if strings.Contains(component, "%") {
+			var err error
+			decoded, err = url.PathUnescape(component)
+			if err != nil {
+				return "", fmt.Errorf("baseURL has an invalid escaped path component: %w", err)
+			}
 		}
-		decoded, err := url.PathUnescape(component)
-		if err != nil {
-			return "", fmt.Errorf("baseURL has an invalid escaped path component: %w", err)
-		}
-		if decoded == "." || decoded == ".." || strings.ContainsAny(decoded, `/\\`) {
-			return "", fmt.Errorf("baseURL must not contain encoded separators or dot segments")
+		if decoded == "." || decoded == ".." || decoded == "_oxpio" || strings.ContainsAny(decoded, `/\\`) {
+			return "", fmt.Errorf("baseURL must not contain encoded separators or dot segments or reserved _oxpio path components")
 		}
 	}
 

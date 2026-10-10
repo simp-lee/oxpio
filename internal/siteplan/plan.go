@@ -118,6 +118,11 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 	if err != nil {
 		return nil, err
 	}
+	if outputPath != "" {
+		if err := rejectOutputSourceOverlap(resolvedVault, outputPath); err != nil {
+			return &Result{Diagnostics: diagnosticsWithError(collector, diag.Location{Path: outputPath}, diag.KindSchema, err)}, err
+		}
+	}
 	for _, managementPath := range cfg.UnknownManagementPaths {
 		collector.Add(diag.Diagnostic{Severity: diag.SeverityWarning, Kind: diag.KindMetadata,
 			Location: diag.Location{Path: managementPath}, Field: ".oxpio",
@@ -258,6 +263,42 @@ func strictParseDiagnostic(vaultRoot string, err error) diag.Diagnostic {
 	}
 	diagnostic.Message = message
 	return diagnostic
+}
+
+func rejectOutputSourceOverlap(vaultRoot, outputPath string) error {
+	resolvedOutput, err := internalfsutil.ResolvePathAfterSymlinks(outputPath)
+	if err != nil {
+		return fmt.Errorf("resolve output boundary: %w", err)
+	}
+	scan, err := vault.ScanWithOptions(vaultRoot, vault.ScanOptions{OutputPath: outputPath})
+	if err != nil {
+		return fmt.Errorf("inspect output boundary inputs: %w", err)
+	}
+	allScan, err := vault.Scan(vaultRoot)
+	if err != nil {
+		return fmt.Errorf("inspect source boundary inputs: %w", err)
+	}
+	for _, relPath := range allScan.MarkdownFiles {
+		if filepath.Base(relPath) != "_index.md" {
+			continue
+		}
+		sourcePath := filepath.Join(vaultRoot, filepath.FromSlash(relPath))
+		resolvedSource, resolveErr := internalfsutil.ResolvePathAfterSymlinks(sourcePath)
+		if resolveErr == nil && internalfsutil.PathWithinRoot(resolvedOutput, resolvedSource) {
+			return fmt.Errorf("output path %q overlaps section source %q", outputPath, relPath)
+		}
+	}
+	for _, relPath := range scan.MarkdownFiles {
+		sourcePath := filepath.Join(vaultRoot, filepath.FromSlash(relPath))
+		resolvedSource, resolveErr := internalfsutil.ResolvePathAfterSymlinks(sourcePath)
+		if resolveErr != nil {
+			continue
+		}
+		if internalfsutil.PathWithinRoot(resolvedOutput, resolvedSource) {
+			return fmt.Errorf("output path %q must not contain Markdown source %q", outputPath, relPath)
+		}
+	}
+	return nil
 }
 
 func diagnosticsWithError(collector *diag.Collector, location diag.Location, kind diag.Kind, err error) []diag.Diagnostic {
@@ -620,13 +661,9 @@ func assignArticles(plan *model.SitePlan, sections map[string]*model.Section, ve
 			continue
 		}
 		if !section.EffectivePublish {
-			hiddenBy := section.HiddenBy
-			if hiddenBy == "" && !section.Publish {
-				hiddenBy = section.SourcePath
-			}
-			if hiddenBy != "" {
-				record(collector, diag.KindSection, article.RelPath, "published article %q is hidden by ancestor %q", article.RelPath, hiddenBy)
-			}
+			// A published article below an unpublished section remains a valid
+			// source, but its effective visibility is false. Only a section
+			// trying to override an unpublished ancestor is a structural error.
 			continue
 		}
 		explicit := (*string)(nil)

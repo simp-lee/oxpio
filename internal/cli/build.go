@@ -14,7 +14,7 @@ func newBuildCommand(deps commandDependencies) *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "build",
-		Short: "Build a static site from an Obsidian vault",
+		Short: "Build a static site from an OXPIO Vault",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			boundary, err := resolveVaultOutputPaths(vaultPath, outputPath)
@@ -31,7 +31,7 @@ func newBuildCommand(deps commandDependencies) *cobra.Command {
 	}
 
 	flags := cmd.Flags()
-	flags.StringVar(&vaultPath, "vault", "", "Path to the Obsidian vault")
+	flags.StringVar(&vaultPath, "vault", "", "Path to the OXPIO Vault")
 	flags.StringVar(&outputPath, "output", "", "Path to write the generated site")
 	flags.BoolVar(&strict, "strict", false, "Fail before publication when validation finds a warning or error")
 

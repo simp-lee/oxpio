@@ -85,7 +85,7 @@ func TestResolveVaultOutputBoundary(t *testing.T) {
 	}
 }
 
-func TestResolveVaultOutputResolvesExistingParentSymlink(t *testing.T) {
+func TestResolveVaultOutputRejectsParentSymlink(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires elevated privileges on some Windows hosts")
@@ -104,20 +104,12 @@ func TestResolveVaultOutputResolvesExistingParentSymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := ResolveVaultOutput(vault, filepath.Join(alias, "nested", "site"))
-	if err != nil {
-		t.Fatalf("ResolveVaultOutput() error = %v", err)
-	}
-	want := filepath.Join(external, "nested", "site")
-	if got.OutputPath != want {
-		t.Fatalf("OutputPath = %q, want %q", got.OutputPath, want)
-	}
-	if PathWithinRoot(got.VaultPath, got.OutputPath) {
-		t.Fatal("resolved output is inside vault, want external output")
+	if _, err := ResolveVaultOutput(vault, filepath.Join(alias, "nested", "site")); !errors.Is(err, ErrSymlinkPath) {
+		t.Fatalf("ResolveVaultOutput() error = %v, want parent symlink rejection", err)
 	}
 }
 
-func TestResolveVaultOutputRebasesVaultSymlinkAlias(t *testing.T) {
+func TestResolveVaultOutputRejectsVaultSymlinkAlias(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires elevated privileges on some Windows hosts")
@@ -133,16 +125,8 @@ func TestResolveVaultOutputRebasesVaultSymlinkAlias(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := ResolveVaultOutput(vault, filepath.Join(alias, "public"))
-	if err != nil {
-		t.Fatalf("ResolveVaultOutput() error = %v", err)
-	}
-	want := filepath.Join(vault, "public")
-	if got.OutputPath != want {
-		t.Fatalf("OutputPath = %q, want %q", got.OutputPath, want)
-	}
-	if !PathWithinRoot(got.VaultPath, got.OutputPath) {
-		t.Fatal("rebased output is outside vault, want descendant")
+	if _, err := ResolveVaultOutput(vault, filepath.Join(alias, "public")); !errors.Is(err, ErrSymlinkPath) {
+		t.Fatalf("ResolveVaultOutput() error = %v, want symlink alias rejection", err)
 	}
 }
 
@@ -166,7 +150,7 @@ func TestResolveVaultOutputRejectsFinalSymlink(t *testing.T) {
 	}
 
 	_, err := ResolveVaultOutput(vault, output)
-	if err == nil || !strings.Contains(err.Error(), "must not be a symbolic link") {
+	if err == nil || !errors.Is(err, ErrSymlinkPath) {
 		t.Fatalf("ResolveVaultOutput() error = %v, want final symlink rejection", err)
 	}
 }

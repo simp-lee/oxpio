@@ -69,6 +69,9 @@ func ResolveVaultOutput(vaultPath string, outputPath string) (VaultOutputBoundar
 		return VaultOutputBoundary{}, fmt.Errorf("resolve output path %q: %w", trimmedOutput, err)
 	}
 	absoluteOutput = filepath.Clean(absoluteOutput)
+	if err := rejectSymlinkComponents(absoluteOutput); err != nil {
+		return VaultOutputBoundary{}, fmt.Errorf("output path %q: %w", absoluteOutput, err)
+	}
 
 	if info, lstatErr := os.Lstat(absoluteOutput); lstatErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 {
@@ -256,6 +259,25 @@ func rebasePhysicalDescendant(root string, candidate string) (string, bool) {
 			return candidate, false
 		}
 		suffix = append(suffix, filepath.Base(current))
+		current = parent
+	}
+}
+
+func rejectSymlinkComponents(candidate string) error {
+	current := filepath.Clean(candidate)
+	for {
+		info, err := os.Lstat(current)
+		if err == nil {
+			if info.Mode()&os.ModeSymlink != 0 {
+				return ErrSymlinkPath
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("stat path %q: %w", current, err)
+		}
+		parent := filepath.Dir(current)
+		if parent == current {
+			return nil
+		}
 		current = parent
 	}
 }

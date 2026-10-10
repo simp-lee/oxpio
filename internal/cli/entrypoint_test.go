@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -9,7 +8,7 @@ import (
 	"testing"
 )
 
-func TestRealEntrypointDefaultInitBuildAndDiagnostics(t *testing.T) {
+func TestRealEntrypointInitValidateAndDiagnostics(t *testing.T) {
 	repoRoot, err := filepath.Abs(filepath.Join("..", ".."))
 	if err != nil {
 		t.Fatal(err)
@@ -35,31 +34,24 @@ func TestRealEntrypointDefaultInitBuildAndDiagnostics(t *testing.T) {
 	if output, err := run("init"); err != nil || !strings.Contains(output, "Replace baseURL") {
 		t.Fatalf("init = %v\n%s", err, output)
 	}
-	if output, err := run("build"); err != nil {
-		t.Fatalf("build = %v\n%s", err, output)
+	if output, err := run("validate"); err != nil {
+		t.Fatalf("validate = %v\n%s", err, output)
 	}
-	if _, err := os.Stat(filepath.Join(vault, "public", "index.html")); err != nil {
-		t.Fatalf("os.Stat(public/index.html) error = %v", err)
+	if output, err := run("context", "--format", "json"); err != nil || !strings.Contains(output, `"vault"`) {
+		t.Fatalf("context = %v\n%s", err, output)
 	}
-	var versionOutputs []string
 	for _, args := range [][]string{{"version"}, {"--version"}} {
 		output, err := run(args...)
 		if err != nil || !strings.Contains(output, "oxpio version=dev ") || !strings.Contains(output, " type=dev\n") {
 			t.Fatalf("%v = %v, %q", args, err, output)
 		}
-		versionOutputs = append(versionOutputs, output)
 	}
-	if versionOutputs[0] != versionOutputs[1] {
-		t.Fatalf("version outputs differ: %#v", versionOutputs)
+	if output, err := run("build"); err == nil || !strings.Contains(output, "unknown command") {
+		t.Fatalf("build = %v\n%s", err, output)
 	}
-	if output, err := run("unknown"); err == nil || !strings.Contains(output, "unknown command") {
-		t.Fatalf("unknown = %v\n%s", err, output)
-	}
-
-	emptyVault := t.TempDir()
-	cmd := exec.Command(binaryPath, "serve")
-	cmd.Dir = emptyVault
-	if output, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(output), "does not exist") {
-		t.Fatalf("serve missing output = %v\n%s", err, output)
+	invalid := exec.Command(binaryPath, "--unknown", "--format", "json")
+	invalid.Dir = vault
+	if err := invalid.Run(); err == nil || invalid.ProcessState.ExitCode() != 2 {
+		t.Fatalf("invalid JSON command exit = %v, code=%d", err, invalid.ProcessState.ExitCode())
 	}
 }

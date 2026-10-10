@@ -3,9 +3,12 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 )
 
@@ -18,7 +21,7 @@ func TestExecuteShowsRootHelp(t *testing.T) {
 		t.Fatalf("stderr = %q, want empty stderr", stderr)
 	}
 
-	for _, want := range []string{"build", "serve", "init", "version"} {
+	for _, want := range []string{"publish", "serve", "init", "version", "find"} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("stdout missing %q\n%s", want, stdout)
 		}
@@ -62,6 +65,49 @@ func TestExecuteRejectsUnknownCommand(t *testing.T) {
 	}
 }
 
+func TestJSONFailureContainsSanitizedDiagnosticsOnly(t *testing.T) {
+	vault := t.TempDir()
+	if err := os.WriteFile(filepath.Join(vault, defaultConfigFilename), []byte("title: Site\nbaseURL: https://example.test/\nnavigation: []\nunknown: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", vault, "--format", "json"})
+	if err == nil {
+		t.Fatal("JSON validate succeeded")
+	}
+	if stderr != "" || strings.Contains(stdout, vault) || !strings.Contains(stdout, `"diagnostics"`) || !strings.Contains(stdout, `"ok":false`) {
+		t.Fatalf("JSON failure = stdout %q, stderr %q", stdout, stderr)
+	}
+}
+
+func TestJSONDiagnosticsRedactHiddenTargets(t *testing.T) {
+	vault := t.TempDir()
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeValidateFile(t, vault, "public.md", "---\ntitle: Public\npublish: true\ntype: doc\n---\n[[private/article]]\n")
+	writeValidateFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n")
+	writeValidateFile(t, vault, "private/article.md", "---\ntitle: Private article\npublish: true\ntype: doc\n---\nSecret\n")
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", vault, "--format", "json"})
+	if err == nil || stderr != "" || strings.Contains(stdout, "private/article.md") || strings.Contains(stdout, "Private article") {
+		t.Fatalf("hidden JSON failure = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
+func TestJSONDiagnosticsRedactResolvedSymlinkVaultPath(t *testing.T) {
+	realVault := t.TempDir()
+	linkRoot := t.TempDir()
+	linkedVault := filepath.Join(linkRoot, "vault")
+	if err := os.Symlink(realVault, linkedVault); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(realVault, defaultConfigFilename), []byte("title: Site\nbaseURL: https://example.test/\nnavigation: []\nunknown: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", linkedVault, "--format", "json"})
+	if err == nil || stderr != "" || strings.Contains(stdout, realVault) || strings.Contains(stdout, linkedVault) {
+		t.Fatalf("symlink JSON failure = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
 func TestExecuteRejectsUnknownRootFlagAndExtraArgs(t *testing.T) {
 	for _, args := range [][]string{{"--unknown"}, {"extra", "arg"}} {
 		_, _, err := executeForTest(t, testCommandDependencies(), args)
@@ -81,8 +127,16 @@ func executeForTest(t *testing.T, deps commandDependencies, args []string) (stdo
 	return stdoutBuf.String(), stderrBuf.String(), err
 }
 
+func setTestBuildDependency(deps *commandDependencies, build func(string, string, internalbuild.Options) (*internalbuild.BuildResult, error)) {
+	deps.buildSiteWithOptions = build
+	deps.publishSite = func(vaultPath string, outputPath string, options internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
+		result, err := deps.buildSiteWithOptions(vaultPath, outputPath, internalbuild.Options{Strict: true, DiagnosticsWriter: options.DiagnosticsWriter, TrackOutputTransactionPath: options.TrackOutputTransactionPath})
+		return &internalapplication.PublishResult{OutputPath: outputPath, Published: err == nil, Build: result}, err
+	}
+}
+
 func testCommandDependencies() commandDependencies {
-	return commandDependencies{
+	deps := commandDependencies{
 		buildSiteWithOptions: func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
 			return nil, fmt.Errorf("unexpected buildSiteWithOptions call")
 		},
@@ -93,4 +147,5 @@ func testCommandDependencies() commandDependencies {
 			return nil, fmt.Errorf("unexpected newFileWatcher call")
 		},
 	}
+	return deps
 }

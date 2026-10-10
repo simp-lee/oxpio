@@ -23,7 +23,7 @@ func TestMediaUploadUsesSelectedExistingFolderAndOneFileCAS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\neditor:\n  username: admin\n  passwordHash: "+hash+"\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "docs/_index.md", "---\ntitle: Docs\npublish: true\n---\nDocs\n")
 	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})

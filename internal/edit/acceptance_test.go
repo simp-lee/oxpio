@@ -26,7 +26,7 @@ func TestEditHTTPAcceptanceMatrix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\neditor:\n  username: admin\n  passwordHash: "+hash+"\n")
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "guide/_index.md", "---\ntitle: Guide\npublish: true\n---\nGuide\n")
 	original := "---\n# keep this comment\ntitle: \"Article\"\npublish: true\ntype: doc\n---\n\nOriginal\n"

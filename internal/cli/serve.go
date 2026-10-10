@@ -11,8 +11,8 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalasset "github.com/simp-lee/oxpio/internal/asset"
-	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
@@ -94,7 +94,7 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 
 	flags := cmd.Flags()
 	flags.StringVar(&outputPath, "output", "", "Path to the generated site output (default <vault>/public)")
-	flags.StringVar(&vaultPath, "vault", "", "Path to the Obsidian vault (default current directory)")
+	flags.StringVar(&vaultPath, "vault", "", "Path to the OXPIO Vault (default current directory)")
 	flags.IntVar(&port, "port", 0, fmt.Sprintf("Port for the local preview server (default %d)", internalserver.DefaultPort))
 	flags.BoolVar(&watch, "watch", false, "Rebuild on vault/config changes and live-reload connected browsers")
 
@@ -112,7 +112,7 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 	}
 
 	build := func() error {
-		if _, err := deps.buildSiteWithOptions(normalizedVaultPath, resolvedOutputPath, internalbuild.Options{
+		if _, err := publishWithDependencies(deps, normalizedVaultPath, resolvedOutputPath, internalapplication.PublishOptions{
 			DiagnosticsWriter:          cmd.ErrOrStderr(),
 			TrackOutputTransactionPath: trackOutputTransactionPath,
 		}); err != nil {
@@ -638,12 +638,6 @@ func (loop *serveWatchLoop) shouldTrigger(path string, op fsnotify.Op, wasWatche
 	if relPath == "." {
 		return false
 	}
-	if relPath == filepath.Join(".obsidian", "app.json") {
-		return true
-	}
-	if relPath == ".obsidian" && obsidianAppInputMayHaveChanged(loop.vaultPath, op, wasWatchedDir) {
-		return true
-	}
 	if !isWatchableVaultPath(relPath) {
 		return false
 	}
@@ -726,15 +720,6 @@ func isWatchableDirectoryEvent(path string, op fsnotify.Op, wasWatchedDir bool) 
 
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
-}
-
-func obsidianAppInputMayHaveChanged(vaultPath string, op fsnotify.Op, wasWatchedDir bool) bool {
-	if op&(fsnotify.Create|fsnotify.Rename) != 0 {
-		if _, err := os.Lstat(filepath.Join(vaultPath, ".obsidian", "app.json")); err == nil {
-			return true
-		}
-	}
-	return wasWatchedDir && op&(fsnotify.Remove|fsnotify.Rename) != 0
 }
 
 func isWatchableVaultPath(relPath string) bool {
@@ -885,7 +870,6 @@ func plannedWatchFiles(vaultPath, outputPath string) map[string]struct{} {
 		files[filepath.Clean(filepath.Join(vaultPath, filepath.FromSlash(value)))] = struct{}{}
 	}
 	add(defaultConfigFilename)
-	add(filepath.Join(".obsidian", "app.json"))
 	// Failed analyses can still carry a partial plan whose asset references
 	// must remain watchable so repairing those assets can trigger a retry.
 	result, _ := internalanalyze.AnalyzeWithOutput(vaultPath, outputPath)

@@ -76,7 +76,7 @@ func TestServeCommandWatchRoutesBuildDiagnosticsAndWatchErrorsToInjectedStderr(t
 	listenStarted := make(chan struct{}, 1)
 	listenBlock := make(chan struct{})
 	server := &fakePreviewServer{listenStarted: listenStarted, listenBlock: listenBlock}
-	deps.buildSiteWithOptions = func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
+	setTestBuildDependency(&deps, func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
 		if options.DiagnosticsWriter == nil {
 			t.Fatal("build options DiagnosticsWriter = nil, want injected stderr writer")
 		}
@@ -84,7 +84,7 @@ func TestServeCommandWatchRoutesBuildDiagnosticsAndWatchErrorsToInjectedStderr(t
 			t.Fatalf("DiagnosticsWriter.Write() error = %v", err)
 		}
 		return &internalbuild.BuildResult{}, nil
-	}
+	})
 	deps.newPreviewServer = func(outputPath string, port int) (previewServer, error) {
 		return server, nil
 	}
@@ -227,13 +227,13 @@ func TestServeCommandWatchDefaultsToCurrentVaultAndPublicOutput(t *testing.T) {
 	writeCLIConfig(t, vaultPath)
 	deps := testCommandDependencies()
 	var builtVault, builtOutput, servedOutput string
-	deps.buildSiteWithOptions = func(vault string, output string, _ internalbuild.Options) (*internalbuild.BuildResult, error) {
+	setTestBuildDependency(&deps, func(vault string, output string, _ internalbuild.Options) (*internalbuild.BuildResult, error) {
 		builtVault, builtOutput = vault, output
 		if err := os.MkdirAll(output, 0o755); err != nil {
 			return nil, err
 		}
 		return &internalbuild.BuildResult{}, nil
-	}
+	})
 	server := &fakePreviewServer{}
 	deps.newPreviewServer = func(output string, _ int) (previewServer, error) {
 		servedOutput = output
@@ -262,7 +262,7 @@ func TestServeCommandWatchBuildsBeforeServing(t *testing.T) {
 	watcher := newFakeFileWatcher()
 	var gotVaultPath string
 	var gotOutputPath string
-	deps.buildSiteWithOptions = func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
+	setTestBuildDependency(&deps, func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
 		gotVaultPath = vaultPath
 		gotOutputPath = outputPath
 		if options.DiagnosticsWriter == nil {
@@ -275,7 +275,7 @@ func TestServeCommandWatchBuildsBeforeServing(t *testing.T) {
 			return nil, err
 		}
 		return &internalbuild.BuildResult{}, nil
-	}
+	})
 	deps.newPreviewServer = func(outputPath string, port int) (previewServer, error) {
 		return server, nil
 	}
@@ -321,13 +321,13 @@ func TestServeCommandWatchReloadsFixedVaultConfig(t *testing.T) {
 	listenBlock := make(chan struct{})
 	server := &fakePreviewServer{listenStarted: listenStarted, listenBlock: listenBlock}
 	buildSignal := make(chan struct{}, 4)
-	deps.buildSiteWithOptions = func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
+	setTestBuildDependency(&deps, func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
 		if err := os.MkdirAll(outputPath, 0o755); err != nil {
 			return nil, err
 		}
 		buildSignal <- struct{}{}
 		return &internalbuild.BuildResult{}, nil
-	}
+	})
 	deps.newPreviewServer = func(outputPath string, port int) (previewServer, error) {
 		return server, nil
 	}
@@ -662,7 +662,7 @@ func TestStartServeWatchLoopRefreshesPartialPlanInputsAfterFailedRebuild(t *test
 
 func TestSyncFixedWatchInputsReaddsInvalidatedDirectory(t *testing.T) {
 	vaultPath := t.TempDir()
-	themeDir := filepath.Join(vaultPath, ".oxpio", "theme")
+	themeDir := filepath.Join(vaultPath, ".oxpio", "themes", "selected")
 	iconsDir := filepath.Join(themeDir, "assets", "icons")
 	if err := os.MkdirAll(iconsDir, 0o755); err != nil {
 		t.Fatal(err)

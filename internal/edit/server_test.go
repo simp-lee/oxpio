@@ -65,7 +65,7 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/docs/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/docs/\nnavigation: []\neditor:\n  username: admin\n  passwordHash: "+hash+"\n")
 	writeEditFile(t, output, "index.html", `<!doctype html><body data-oxpio-base-path="/docs/">public</body></html>`)
 	server, err := New(vault, output, 0)
 	if err != nil {
@@ -93,7 +93,7 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\neditor:\n  username: admin\n  passwordHash: "+hash+"\n")
 	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("<!doctype html><body>public</body></html>"), 0o644); err != nil {
 		t.Fatal(err)
 	}

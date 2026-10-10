@@ -13,7 +13,7 @@ import (
 func TestFSNotifyWatchLoopRebuildsFixedInputsAndExcludesOutput(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(vault, "public")
-	themeDir := filepath.Join(vault, ".oxpio", "theme")
+	themeDir := filepath.Join(vault, ".oxpio", "themes", "selected")
 	for _, dir := range []string{filepath.Join(vault, "notes"), filepath.Join(vault, ".obsidian"), themeDir, filepath.Join(vault, "node_modules"), filepath.Join(vault, ".hidden"), output} {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			t.Fatal(err)
@@ -93,11 +93,10 @@ func TestFSNotifyWatchLoopRebuildsFixedInputsAndExcludesOutput(t *testing.T) {
 		}
 	})
 	for filePath, content := range map[string]string{
-		filepath.Join(vault, "image.png"):             "asset",
-		filepath.Join(vault, defaultConfigFilename):   "title: Changed\nbaseURL: https://example.com/\n",
-		filepath.Join(vault, "custom.css"):            "body{color:red}",
-		filepath.Join(themeDir, "theme.css"):          ":root{color:red}",
-		filepath.Join(vault, ".obsidian", "app.json"): `{"attachmentFolderPath":"assets"}`,
+		filepath.Join(vault, "image.png"):           "asset",
+		filepath.Join(vault, defaultConfigFilename): "title: Changed\nbaseURL: https://example.com/\n",
+		filepath.Join(vault, "custom.css"):          "body{color:red}",
+		filepath.Join(themeDir, "theme.css"):        ":root{color:red}",
 	} {
 		path, data := filePath, content
 		expectRebuild(func() { writeNativeWatchFile(t, path, data) })
@@ -115,23 +114,6 @@ func TestFSNotifyWatchLoopRebuildsFixedInputsAndExcludesOutput(t *testing.T) {
 	writeNativeWatchFile(t, filepath.Join(incomingThemeDir, "theme.css"), ":root{color:purple}")
 	expectRebuild(func() {
 		if err := os.Rename(incomingThemeDir, themeDir); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	obsidianDir := filepath.Join(vault, ".obsidian")
-	expectRebuild(func() {
-		if err := os.RemoveAll(obsidianDir); err != nil {
-			t.Fatal(err)
-		}
-	})
-	incomingObsidianDir := filepath.Join(filepath.Dir(vault), filepath.Base(vault)+"-incoming-obsidian")
-	if err := os.MkdirAll(incomingObsidianDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	writeNativeWatchFile(t, filepath.Join(incomingObsidianDir, "app.json"), `{"attachmentFolderPath":"one-shot"}`)
-	expectRebuild(func() {
-		if err := os.Rename(incomingObsidianDir, obsidianDir); err != nil {
 			t.Fatal(err)
 		}
 	})

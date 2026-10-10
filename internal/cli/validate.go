@@ -23,14 +23,19 @@ func newValidateCommand() *cobra.Command {
 			if writeErr := internalanalyze.WriteDiagnostics(cmd.ErrOrStderr(), result.Diagnostics); writeErr != nil {
 				return fmt.Errorf("write diagnostics: %w", writeErr)
 			}
+			diagnostics := redactHiddenDiagnostics(diagnosticsFromBuild(result.Diagnostics), result.Plan)
 			if analyzeErr != nil {
-				return analyzeErr
+				return diagnosticError{err: analyzeErr, diagnostics: diagnostics}
 			}
-			return internalanalyze.Failure(result.Diagnostics)
+			failure := internalanalyze.Failure(result.Diagnostics)
+			if failure == nil {
+				return nil
+			}
+			return diagnosticError{err: failure, diagnostics: diagnostics}
 		},
 	}
 	flags := cmd.Flags()
-	flags.StringVar(&vaultPath, "vault", "", "Path to the Obsidian vault")
+	flags.StringVar(&vaultPath, "vault", "", "Path to the OXPIO Vault")
 	flags.StringVar(&outputPath, "output", "", "Formal site output boundary (default <vault>/public)")
 	return cmd
 }
