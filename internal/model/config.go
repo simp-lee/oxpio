@@ -76,6 +76,7 @@ type SourceCatalogEntry struct {
 	EffectivePublish bool
 	SectionPath      string
 	VersionID        string
+	RawSource        []byte `json:"-"`
 }
 
 // VersionsConfig describes an explicitly configured set of document versions.

@@ -40,6 +40,28 @@ func TestCommandRegistryDocumentsGlobalAndBoundaryFlags(t *testing.T) {
 	}
 }
 
+func TestGrepRegistryDeclaresBoundsRepeatabilityAndAgentHelp(t *testing.T) {
+	spec, ok := FindCommand("grep")
+	if !ok {
+		t.Fatal("grep is not registered")
+	}
+	seenDefault := false
+	for _, flag := range spec.Flags {
+		if flag.Name == "max-results" && flag.Default == "1000" && flag.Value == "1..10000" {
+			seenDefault = true
+		}
+		if flag.Name == "path" && !flag.Repeatable {
+			t.Fatal("path is not repeatable")
+		}
+	}
+	if !seenDefault {
+		t.Fatalf("grep flags = %#v", spec.Flags)
+	}
+	if help := HelpText("", true); !strings.Contains(help, "grep QUERY") || !strings.Contains(help, "max-scan-bytes") {
+		t.Fatalf("agent help = %s", help)
+	}
+}
+
 func TestHelpJSONIsStableAndDocumentsAgentWorkflow(t *testing.T) {
 	first, err := HelpJSON(true)
 	if err != nil {

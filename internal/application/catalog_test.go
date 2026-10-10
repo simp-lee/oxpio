@@ -47,6 +47,17 @@ func TestSnapshotSharesNormalizedCatalogAndHiddenReadBoundary(t *testing.T) {
 	if err != nil || allContext.Sources != 3 || allContext.Sections != 2 {
 		t.Fatalf("unpublished context = %#v, %v", allContext, err)
 	}
+	original, err := os.ReadFile(filepath.Join(vault, "hidden/draft.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(vault, "hidden/draft.md"), []byte("external change"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, snapshotData, err := snapshot.ReadSource("hidden/draft.md", true)
+	if err != nil || string(snapshotData) != string(original) {
+		t.Fatalf("snapshot source = %q, %v", snapshotData, err)
+	}
 }
 
 func TestOpenSnapshotDoesNotExposeMalformedSourcePath(t *testing.T) {

@@ -15,7 +15,10 @@ import (
 	"github.com/simp-lee/oxpio/internal/model"
 )
 
-var ErrHiddenSource = errors.New("source is not available in the selected read scope")
+var (
+	ErrHiddenSource  = errors.New("source is not available in the selected read scope")
+	ErrInvalidSource = errors.New("source is not valid UTF-8 Markdown")
+)
 
 // Snapshot is the immutable normalized source handoff shared by read-only
 // Agent queries. It contains no filesystem handles and never writes output.
@@ -43,7 +46,11 @@ func OpenSnapshot(vaultPath, outputPath string) (Snapshot, error) {
 	if err != nil {
 		// Query failures are intentionally generic here: a malformed or hidden
 		// source must not disclose its Vault-relative identity before scope
-		// filtering can be applied.
+		// filtering can be applied. Invalid byte diagnostics are safe to expose
+		// without a path and let the grep adapter return a stable source error.
+		if invalidSourceAnalysis(err) {
+			return Snapshot{}, ErrInvalidSource
+		}
 		return Snapshot{}, errors.New("normalized analysis failed")
 	}
 	if analysis.Plan == nil {
@@ -54,6 +61,19 @@ func OpenSnapshot(vaultPath, outputPath string) (Snapshot, error) {
 		return Snapshot{}, errors.New("normalized source catalog is unavailable")
 	}
 	return Snapshot{VaultPath: boundary.VaultPath, OutputPath: boundary.OutputPath, Analysis: analysis, Catalog: catalog}, nil
+}
+
+func invalidSourceAnalysis(err error) bool {
+	message := strings.ToLower(err.Error())
+	if strings.Contains(message, "oxpio.yaml\"") {
+		return false
+	}
+	for _, marker := range []string{"utf-8", "utf8", "nul byte", "control character"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 // Entries returns stable catalog entries visible to the requested scope.
@@ -96,15 +116,10 @@ func (snapshot Snapshot) ReadSource(relPath string, includeUnpublished bool) (mo
 	if err != nil {
 		return model.SourceCatalogEntry{}, nil, err
 	}
-	candidate := filepath.Join(snapshot.VaultPath, filepath.FromSlash(entry.RelPath))
-	if internalfsutil.PathWithinRootAfterSymlinks(snapshot.OutputPath, candidate) {
-		return model.SourceCatalogEntry{}, nil, errors.New("source is inside the output boundary")
+	if len(entry.RawSource) == 0 {
+		return model.SourceCatalogEntry{}, nil, errors.New("source snapshot is unavailable")
 	}
-	_, data, _, err := internalfsutil.ReadContainedRegularFile(snapshot.VaultPath, entry.RelPath)
-	if err != nil {
-		return model.SourceCatalogEntry{}, nil, err
-	}
-	return entry, data, nil
+	return entry, append([]byte(nil), entry.RawSource...), nil
 }
 
 // NormalizeSourcePath validates the public Vault-relative POSIX source path.
@@ -205,6 +220,14 @@ func (snapshot Snapshot) DirectoryVisibleForQuery(relPath string) bool {
 }
 
 func (snapshot Snapshot) directoryAllowed(relPath string) bool {
+	if relPath == "." || relPath == "" {
+		for _, entry := range snapshot.Catalog.Entries {
+			if entry.Kind == "section" && entry.SectionPath == "." {
+				return entry.EffectivePublish
+			}
+		}
+		return true
+	}
 	for current := relPath; current != "." && current != ""; current = path.Dir(current) {
 		if !snapshot.directoryVisible(current) {
 			return false
@@ -216,14 +239,19 @@ func (snapshot Snapshot) directoryAllowed(relPath string) bool {
 func (snapshot Snapshot) directoryVisible(relPath string) bool {
 	prefix := relPath + "/"
 	seenHidden := false
+	seenVisible := false
 	for _, entry := range snapshot.Catalog.Entries {
 		if entry.RelPath != relPath && !strings.HasPrefix(entry.RelPath, prefix) {
 			continue
 		}
 		if entry.EffectivePublish {
-			return true
+			seenVisible = true
+		} else {
+			seenHidden = true
 		}
-		seenHidden = true
+	}
+	if !seenVisible && !seenHidden {
+		return true
 	}
 	return !seenHidden
 }

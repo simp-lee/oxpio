@@ -127,6 +127,9 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 			if len(diagnostics) == 0 {
 				diagnostics = parseCLIErrorDiagnostics(commandErrors.String(), args)
 			}
+			if len(diagnostics) == 0 && isCLIParameterError(err) {
+				diagnostics = []internalagent.Diagnostic{{Code: "INVALID_ARGUMENT", Severity: "error", Category: "parameter", Message: sanitizeCLIError(err, args)}}
+			}
 			if len(diagnostics) == 0 {
 				envelope = internalagent.Failure(command, "COMMAND_ERROR", "command", sanitizeCLIError(err, args))
 			} else {
@@ -284,6 +287,8 @@ func commandForSpec(spec internalapplication.CommandSpec, deps commandDependenci
 		return newLSCommand()
 	case "tags":
 		return newTagsCommand()
+	case "grep":
+		return newGrepCommand()
 	default:
 		return newRegistryPlaceholder(spec)
 	}
@@ -366,6 +371,10 @@ func classifyCLIError(err error) int {
 	if err == nil {
 		return 0
 	}
+	var coded interface{ ExitCode() int }
+	if errors.As(err, &coded) && coded.ExitCode() != 0 {
+		return coded.ExitCode()
+	}
 	message := strings.ToLower(err.Error())
 	if strings.Contains(message, "permission") || strings.Contains(message, "not available in the selected read scope") {
 		return 4
@@ -373,20 +382,36 @@ func classifyCLIError(err error) int {
 	if strings.Contains(message, "conflict") || strings.Contains(message, "hash mismatch") {
 		return 3
 	}
-	if strings.Contains(message, "unknown command") || strings.Contains(message, "unknown flag") || strings.Contains(message, "accepts no") || strings.Contains(message, "accepts at most") || strings.Contains(message, "must be true or false") || strings.Contains(message, "--format must") {
+	if strings.Contains(message, "unknown command") || strings.Contains(message, "unknown flag") || strings.Contains(message, "accepts no") || strings.Contains(message, "accepts at most") || strings.Contains(message, "must be true or false") || strings.Contains(message, "--format must") || isCLIParameterError(err) {
 		return 2
 	}
 	return 1
+}
+
+func isCLIParameterError(err error) bool {
+	message := strings.ToLower(err.Error())
+	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "parsing error"} {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func structuredErrorDiagnostics(err error) []internalagent.Diagnostic {
 	var structured interface {
 		Diagnostics() []internalagent.Diagnostic
 	}
-	if !errors.As(err, &structured) {
-		return nil
+	if errors.As(err, &structured) {
+		return structured.Diagnostics()
 	}
-	return structured.Diagnostics()
+	var single interface {
+		Diagnostic() internalagent.Diagnostic
+	}
+	if errors.As(err, &single) {
+		return []internalagent.Diagnostic{single.Diagnostic()}
+	}
+	return nil
 }
 
 func sanitizeDiagnostics(diagnostics []internalagent.Diagnostic, args []string) []internalagent.Diagnostic {

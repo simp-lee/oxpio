@@ -119,7 +119,7 @@ func sourceCatalog(planned *siteplan.Result) *model.SourceCatalog {
 	for _, source := range planned.Sources.Sources {
 		if source.Section != nil {
 			entry := model.SourceCatalogEntry{
-				RelPath: source.RelPath, Title: source.Section.Frontmatter.Title, Kind: "section",
+				RelPath: source.RelPath, Title: source.Section.Frontmatter.Title, Kind: "section", RawSource: append([]byte(nil), planned.Sources.RawSources[source.RelPath]...),
 				Publish: source.Publish, SectionPath: source.Section.SectionPath,
 			}
 			if section := sections[source.RelPath]; section != nil {
@@ -132,7 +132,7 @@ func sourceCatalog(planned *siteplan.Result) *model.SourceCatalog {
 			continue
 		}
 		entry := model.SourceCatalogEntry{
-			RelPath: source.RelPath, Title: source.Article.Frontmatter.Title, Kind: "article",
+			RelPath: source.RelPath, Title: source.Article.Frontmatter.Title, Kind: "article", RawSource: append([]byte(nil), planned.Sources.RawSources[source.RelPath]...),
 			Type: source.Article.Frontmatter.Type, Publish: source.Publish,
 			SectionPath: path.Dir(source.RelPath),
 		}

@@ -9,10 +9,12 @@ import (
 
 // FlagSpec documents a command flag in the discoverable command registry.
 type FlagSpec struct {
-	Name     string `json:"name"`
-	Required bool   `json:"required"`
-	Value    string `json:"value,omitempty"`
-	Summary  string `json:"summary"`
+	Name       string `json:"name"`
+	Required   bool   `json:"required"`
+	Repeatable bool   `json:"repeatable,omitempty"`
+	Value      string `json:"value,omitempty"`
+	Default    string `json:"default,omitempty"`
+	Summary    string `json:"summary"`
 }
 
 // CommandSpec is the stable, public description of one command.
@@ -51,7 +53,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "find", Summary: "Find normalized Markdown sources", Flags: []FlagSpec{{Name: "path", Value: "PATH", Summary: "Vault-relative prefix"}, {Name: "kind", Value: "section|article|all", Summary: "Source kind"}, {Name: "section", Value: "PATH", Summary: "Section prefix"}, {Name: "publish", Value: "true|false", Summary: "Publication state"}, {Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "Vault Markdown", WriteScope: "none", OutputFields: []string{"items"}},
 	{Name: "ls", Summary: "List Vault files and directories", Arguments: "PATH", Flags: []FlagSpec{{Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "Vault boundary", WriteScope: "none", OutputFields: []string{"items"}},
 	{Name: "tags", Summary: "List normalized published tags", Flags: []FlagSpec{{Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "Vault Markdown", WriteScope: "none", OutputFields: []string{"items"}},
-	{Name: "grep", Summary: "Search Markdown source with literal or RE2 matching", Arguments: "QUERY", Flags: []FlagSpec{{Name: "regex", Summary: "Use RE2 matching"}, {Name: "case-sensitive", Summary: "Disable Unicode folding"}, {Name: "scope", Value: "source|body|title|path|metadata|all"}, {Name: "context", Value: "N"}, {Name: "before", Value: "N"}, {Name: "after", Value: "N"}, {Name: "max-results", Value: "N"}, {Name: "max-line-length", Value: "BYTES"}, {Name: "max-scan-bytes", Value: "BYTES"}, {Name: "path", Value: "PATH"}, {Name: "file", Value: "NAME"}, {Name: "tag", Value: "TAG"}, {Name: "section", Value: "PATH"}, {Name: "type", Value: "doc|post|page"}, {Name: "status", Value: "stable|experimental|deprecated"}, {Name: "publish", Value: "true|false"}, {Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "Vault Markdown", WriteScope: "none", OutputFields: []string{"query", "matches", "contexts", "truncated"}},
+	{Name: "grep", Summary: "Search Markdown source with literal or RE2 matching", Arguments: "QUERY", Flags: []FlagSpec{{Name: "regex", Summary: "Use Go RE2; reject nullable/zero-width patterns"}, {Name: "case-sensitive", Summary: "Disable default Unicode simple folding"}, {Name: "scope", Value: "source|body|title|path|metadata|all", Default: "source", Summary: "Search one normalized source/field scope"}, {Name: "context", Value: "0..20", Default: "0", Summary: "Merged lines before and after; conflicts with before/after"}, {Name: "before", Value: "0..20", Default: "0", Summary: "Context lines before each match"}, {Name: "after", Value: "0..20", Default: "0", Summary: "Context lines after each match"}, {Name: "max-results", Value: "1..10000", Default: "1000", Summary: "Result limit; repeated filters are OR"}, {Name: "max-line-length", Value: "1..8388608", Default: "1048576", Summary: "UTF-8 bytes excluding line terminator"}, {Name: "max-scan-bytes", Value: "1..10737418240", Default: "1073741824", Summary: "Candidate source byte budget"}, {Name: "path", Value: "PATH", Repeatable: true, Summary: "Vault-relative prefix; repeated values are OR"}, {Name: "file", Value: "NAME", Repeatable: true, Summary: "Exact basename; repeated values are OR"}, {Name: "tag", Value: "TAG", Repeatable: true, Summary: "Normalized exact tag; repeated values are OR"}, {Name: "section", Value: "PATH", Repeatable: true, Summary: "Section prefix; repeated values are OR"}, {Name: "type", Value: "doc|post|page", Repeatable: true, Summary: "Normalized type filter"}, {Name: "status", Value: "stable|experimental|deprecated", Repeatable: true, Summary: "Normalized status filter"}, {Name: "publish", Value: "true|false", Repeatable: true, Summary: "Effective publication filter; false requires include-unpublished"}, {Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "Vault Markdown", WriteScope: "none", OutputFields: []string{"query", "options", "matches", "contexts", "truncated"}},
 	{Name: "related", Summary: "Return production related-article recommendations", Arguments: "PATH", SideEffects: "read-only", ReadScope: "Published article source", WriteScope: "none", OutputFields: []string{"source", "partition", "candidates"}},
 	{Name: "theme context", Summary: "Describe the theme View Model contract", SideEffects: "read-only", ReadScope: "selected theme", WriteScope: "none", OutputFields: []string{"apiVersion", "theme", "pages"}},
 	{Name: "theme validate", Summary: "Validate a local or embedded theme", Flags: []FlagSpec{{Name: "theme", Value: "ID", Summary: "Temporarily select a theme"}}, SideEffects: "read-only", ReadScope: "selected theme", WriteScope: "none", OutputFields: []string{"errors", "warnings"}},
@@ -140,7 +142,35 @@ func HelpJSON(agentOnly bool) ([]byte, error) {
 func HelpText(command string, agentOnly bool) string {
 	if command != "" {
 		if spec, ok := FindCommand(command); ok {
-			return spec.Name + " - " + spec.Summary + "\nArguments: " + valueOrNone(spec.Arguments) + "\nSide effects: " + spec.SideEffects + "\nReads: " + spec.ReadScope + "\nWrites: " + spec.WriteScope + "\n"
+			var b strings.Builder
+			b.WriteString(spec.Name + " - " + spec.Summary + "\nArguments: " + valueOrNone(spec.Arguments) + "\nSide effects: " + spec.SideEffects + "\nReads: " + spec.ReadScope + "\nWrites: " + spec.WriteScope + "\n")
+			if len(spec.Flags) != 0 {
+				b.WriteString("Flags:\n")
+				for _, flag := range spec.Flags {
+					b.WriteString("  --" + flag.Name)
+					if flag.Value != "" {
+						b.WriteString(" ")
+						b.WriteString(flag.Value)
+					}
+					if flag.Required {
+						b.WriteString(" (required)")
+					}
+					if flag.Repeatable {
+						b.WriteString(" (repeatable)")
+					}
+					if flag.Default != "" {
+						b.WriteString(" [default=")
+						b.WriteString(flag.Default)
+						b.WriteString("]")
+					}
+					if flag.Summary != "" {
+						b.WriteString(" - ")
+						b.WriteString(flag.Summary)
+					}
+					b.WriteByte('\n')
+				}
+			}
+			return b.String()
 		}
 		return "unknown command " + command + "\n"
 	}
@@ -158,6 +188,9 @@ func HelpText(command string, agentOnly bool) string {
 	}
 	if agentOnly {
 		b.WriteString("Workflow: find/ls/read -> write/edit -> validate -> publish --dry-run -> publish\n")
+		if _, ok := FindCommand("grep"); ok {
+			b.WriteString("grep QUERY: literal Unicode-folded source search by default; --regex uses RE2 and rejects zero-width patterns; --scope source|body|title|path|metadata|all; --context/--before/--after 0..20 (context is exclusive); --max-results 1..10000 (default 1000); --max-line-length 1..8388608 (default 1048576); --max-scan-bytes 1..10737418240 (default 1073741824); repeated path/file/tag/section/type/status/publish filters OR within a flag and AND across flags; --include-unpublished is required for hidden sources.\n")
+		}
 	}
 	return b.String()
 }

@@ -26,6 +26,10 @@ func TestParseStrictFrontmatterSeparatesSectionsAndRequiresExplicitArticleFields
 	if note.Tags[0] != "go" || note.Aliases[0] != "Guide" || note.Frontmatter.Author != "Alice" || note.Frontmatter.Status != "deprecated" {
 		t.Fatalf("note = %#v", note)
 	}
+	wantRaw := "---\ntitle: Article\npublish: true\ntype: post\ndate: 2026-04-05\ntags: [go, docs]\naliases: [Guide]\nauthor: Alice\nstatus: deprecated\n---\nbody\n"
+	if string(result.RawSources["article.md"]) != wantRaw {
+		t.Fatalf("raw source = %q", result.RawSources["article.md"])
+	}
 }
 
 func TestParseStrictFrontmatterRejectsUnknownDuplicateNullAndInvalidMetadata(t *testing.T) {

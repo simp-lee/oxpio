@@ -54,6 +54,7 @@ func frontmatterSourceError(err error) error {
 // unknown fields.
 type StrictFrontmatterResult struct {
 	Sources     []model.PlannedSource
+	RawSources  map[string][]byte
 	Sections    []*model.SectionSource
 	Articles    []*model.Note
 	AllArticles []*model.Note
@@ -65,6 +66,7 @@ type StrictFrontmatterResult struct {
 func ParseStrictFrontmatter(scanResult ScanResult) (StrictFrontmatterResult, error) {
 	result := StrictFrontmatterResult{
 		Sources:     make([]model.PlannedSource, 0, len(scanResult.MarkdownFiles)),
+		RawSources:  make(map[string][]byte, len(scanResult.MarkdownFiles)),
 		Sections:    make([]*model.SectionSource, 0),
 		Articles:    make([]*model.Note, 0),
 		AllArticles: make([]*model.Note, 0),
@@ -76,6 +78,7 @@ func ParseStrictFrontmatter(scanResult ScanResult) (StrictFrontmatterResult, err
 		if err != nil {
 			return StrictFrontmatterResult{}, fmt.Errorf("read %q: %w", relPath, err)
 		}
+		result.RawSources[relPath] = append([]byte(nil), content...)
 		frontmatterData, body, bodyStartLine, present, err := splitFrontmatter(content)
 		if err != nil {
 			return StrictFrontmatterResult{}, fmt.Errorf("parse frontmatter %q: %w", relPath, err)
