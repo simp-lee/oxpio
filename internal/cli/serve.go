@@ -865,7 +865,7 @@ func normalizeServeWatchInputs(inputs []string) []string {
 }
 
 func fixedServeWatchInputs(vaultPath string) []string {
-	themeDir := filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeDirRelPath))
+	themeDir := filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath))
 	return []string{themeDir}
 }
 

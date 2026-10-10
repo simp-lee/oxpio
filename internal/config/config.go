@@ -9,6 +9,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
@@ -20,9 +21,10 @@ import (
 const (
 	// Filename is the only supported site configuration filename.
 	Filename = "oxpio.yaml"
-	// CustomCSSFilename and ThemeDirRelPath are the fixed optional vault inputs.
+	// CustomCSSFilename and ThemeRootRelPath are fixed vault inputs.
 	CustomCSSFilename = "custom.css"
-	ThemeDirRelPath   = ".oxpio/theme"
+	ThemeRootRelPath  = ".oxpio/themes"
+	ThemeBaseID       = "base"
 
 	defaultLanguage           = "en"
 	defaultPaginationPageSize = 20
@@ -31,22 +33,24 @@ const (
 )
 
 type fileConfig struct {
-	Title       string               `yaml:"title"`
-	BaseURL     string               `yaml:"baseURL"`
-	Author      string               `yaml:"author"`
-	Description string               `yaml:"description"`
-	Language    string               `yaml:"language"`
-	DefaultImg  string               `yaml:"defaultImg"`
-	Navigation  []navigationFileItem `yaml:"navigation"`
-	Source      sourceFileConfig     `yaml:"source"`
-	Versions    *versionsFileConfig  `yaml:"versions"`
-	Pagination  paginationFileConfig `yaml:"pagination"`
-	Sidebar     enabledFileConfig    `yaml:"sidebar"`
-	Popover     enabledFileConfig    `yaml:"popover"`
-	Related     relatedFileConfig    `yaml:"related"`
-	RSS         enabledFileConfig    `yaml:"rss"`
-	Timeline    timelineFileConfig   `yaml:"timeline"`
-	Edit        *editFileConfig      `yaml:"edit"`
+	Title       string                 `yaml:"title"`
+	BaseURL     string                 `yaml:"baseURL"`
+	Author      string                 `yaml:"author"`
+	Description string                 `yaml:"description"`
+	Language    string                 `yaml:"language"`
+	DefaultImg  string                 `yaml:"defaultImg"`
+	Navigation  []navigationFileItem   `yaml:"navigation"`
+	Source      sourceFileConfig       `yaml:"source"`
+	Versions    *versionsFileConfig    `yaml:"versions"`
+	Pagination  paginationFileConfig   `yaml:"pagination"`
+	Sidebar     enabledFileConfig      `yaml:"sidebar"`
+	Popover     enabledFileConfig      `yaml:"popover"`
+	Related     relatedFileConfig      `yaml:"related"`
+	RSS         enabledFileConfig      `yaml:"rss"`
+	Timeline    timelineFileConfig     `yaml:"timeline"`
+	Theme       string                 `yaml:"theme"`
+	Attachments *attachmentsFileConfig `yaml:"attachments"`
+	Editor      *editFileConfig        `yaml:"editor"`
 }
 
 type navigationFileItem struct {
@@ -90,6 +94,10 @@ type timelineFileConfig struct {
 	Path    string `yaml:"path"`
 }
 
+type attachmentsFileConfig struct {
+	Directory string `yaml:"directory"`
+}
+
 type editFileConfig struct {
 	Username     string `yaml:"username"`
 	PasswordHash string `yaml:"passwordHash"`
@@ -99,6 +107,7 @@ type editFileConfig struct {
 func Defaults() model.SiteConfig {
 	return model.SiteConfig{
 		Language: defaultLanguage,
+		Theme:    ThemeBaseID,
 		Pagination: model.PaginationConfig{
 			PageSize: defaultPaginationPageSize,
 		},
@@ -178,12 +187,28 @@ func loadForBuild(resolvedVault, resolvedOutput string) (model.SiteConfig, error
 			return model.SiteConfig{}, err
 		}
 	}
-	themePath := filepath.Join(vaultRoot, filepath.FromSlash(ThemeDirRelPath))
-	if !insideOutputBoundary(resolvedOutput, themePath) {
-		cfg.ThemeDir, err = discoverOptionalDirectory(vaultRoot, ThemeDirRelPath, "theme directory")
+	if cfg.AttachmentDirectory != "" {
+		if insideOutputBoundary(resolvedOutput, filepath.Join(vaultRoot, filepath.FromSlash(cfg.AttachmentDirectory))) {
+			return model.SiteConfig{}, fmt.Errorf("attachments.directory %q must not contain the generated output", cfg.AttachmentDirectory)
+		}
+		if _, err := discoverRequiredDirectory(vaultRoot, cfg.AttachmentDirectory, "attachments directory"); err != nil {
+			return model.SiteConfig{}, err
+		}
+	}
+	if cfg.Theme != ThemeBaseID {
+		themeRelPath := path.Join(ThemeRootRelPath, cfg.Theme)
+		themePath := filepath.Join(vaultRoot, filepath.FromSlash(themeRelPath))
+		if insideOutputBoundary(resolvedOutput, themePath) {
+			return model.SiteConfig{}, fmt.Errorf("theme %q must not be inside the generated output", cfg.Theme)
+		}
+		cfg.ThemeDir, err = discoverRequiredDirectory(vaultRoot, themeRelPath, "selected theme")
 		if err != nil {
 			return model.SiteConfig{}, err
 		}
+	}
+	cfg.UnknownManagementPaths, err = discoverUnknownManagementPaths(vaultRoot)
+	if err != nil {
+		return model.SiteConfig{}, err
 	}
 	return cfg, nil
 }
@@ -329,8 +354,11 @@ func validateParsedFileConfig(parsed fileConfig) error {
 	if parsed.Related.Count != nil && (*parsed.Related.Count < 1 || *parsed.Related.Count > 20) {
 		return fmt.Errorf("related.count must be between 1 and 20")
 	}
-	if parsed.Edit != nil {
-		if err := validateEditConfig(parsed.Edit.Username, parsed.Edit.PasswordHash); err != nil {
+	if parsed.Attachments != nil && strings.TrimSpace(parsed.Attachments.Directory) == "" {
+		return fmt.Errorf("attachments.directory is required")
+	}
+	if parsed.Editor != nil {
+		if err := validateEditorConfig(parsed.Editor.Username, parsed.Editor.PasswordHash); err != nil {
 			return err
 		}
 	}
@@ -397,10 +425,16 @@ func applyFileConfig(cfg model.SiteConfig, parsed fileConfig) model.SiteConfig {
 	if value := strings.TrimSpace(parsed.Timeline.Path); value != "" {
 		cfg.Timeline.Path = value
 	}
-	if parsed.Edit != nil {
-		cfg.Edit = &model.EditConfig{Username: strings.TrimSpace(parsed.Edit.Username), PasswordHash: strings.TrimSpace(parsed.Edit.PasswordHash)}
+	cfg.Theme = strings.TrimSpace(parsed.Theme)
+	if parsed.Attachments != nil {
+		cfg.AttachmentDirectory = strings.TrimSpace(parsed.Attachments.Directory)
 	} else {
-		cfg.Edit = nil
+		cfg.AttachmentDirectory = ""
+	}
+	if parsed.Editor != nil {
+		cfg.Editor = &model.EditorConfig{Username: strings.TrimSpace(parsed.Editor.Username), PasswordHash: strings.TrimSpace(parsed.Editor.PasswordHash)}
+	} else {
+		cfg.Editor = nil
 	}
 	return cfg
 }
@@ -488,7 +522,11 @@ func configDocumentSchema() *configYAMLSchema {
 		"timeline": {kind: yaml.MappingNode, typeName: "mapping", fields: map[string]*configYAMLSchema{
 			"enabled": boolValue, "path": stringValue,
 		}},
-		"edit": {kind: yaml.MappingNode, typeName: "mapping", fields: map[string]*configYAMLSchema{
+		"theme": stringValue,
+		"attachments": {kind: yaml.MappingNode, typeName: "mapping", fields: map[string]*configYAMLSchema{
+			"directory": stringValue,
+		}},
+		"editor": {kind: yaml.MappingNode, typeName: "mapping", fields: map[string]*configYAMLSchema{
 			"username": stringValue, "passwordHash": stringValue,
 		}},
 	}}
@@ -613,6 +651,15 @@ func normalizeAndValidate(cfg model.SiteConfig) (model.SiteConfig, error) {
 	if err != nil {
 		return model.SiteConfig{}, err
 	}
+	if err := normalizeThemeID(&cfg.Theme); err != nil {
+		return model.SiteConfig{}, err
+	}
+	if cfg.AttachmentDirectory != "" {
+		cfg.AttachmentDirectory, err = normalizeAttachmentDirectory(cfg.AttachmentDirectory)
+		if err != nil {
+			return model.SiteConfig{}, err
+		}
+	}
 	cfg.ThemeDir = strings.TrimSpace(cfg.ThemeDir)
 	cfg.ThemeCSS = strings.TrimSpace(cfg.ThemeCSS)
 	cfg.CustomCSS = strings.TrimSpace(cfg.CustomCSS)
@@ -627,12 +674,12 @@ func normalizeAndValidate(cfg model.SiteConfig) (model.SiteConfig, error) {
 		return model.SiteConfig{}, err
 	}
 	cfg.Timeline.Path = timelinePath
-	if cfg.Edit != nil {
-		if err := validateEditConfig(cfg.Edit.Username, cfg.Edit.PasswordHash); err != nil {
+	if cfg.Editor != nil {
+		if err := validateEditorConfig(cfg.Editor.Username, cfg.Editor.PasswordHash); err != nil {
 			return model.SiteConfig{}, err
 		}
-		cfg.Edit.Username = strings.TrimSpace(cfg.Edit.Username)
-		cfg.Edit.PasswordHash = strings.TrimSpace(cfg.Edit.PasswordHash)
+		cfg.Editor.Username = strings.TrimSpace(cfg.Editor.Username)
+		cfg.Editor.PasswordHash = strings.TrimSpace(cfg.Editor.PasswordHash)
 	}
 	cfg.Versions, err = NormalizeVersionsConfig(cfg.Versions)
 	if err != nil {
@@ -701,6 +748,36 @@ func validConfigRelativeDir(value string) bool {
 	}
 	cleaned := path.Clean(value)
 	return cleaned == value && cleaned != "." && cleaned != ".." && !strings.HasPrefix(cleaned, "../") && internalfsutil.IsPortableSitePath(cleaned)
+}
+
+func normalizeThemeID(value *string) error {
+	if value == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*value)
+	if trimmed == "" {
+		trimmed = ThemeBaseID
+	}
+	if trimmed == "." || trimmed == ".." || strings.ContainsAny(trimmed, `/\\`) || !internalfsutil.IsPortableSitePath(trimmed) {
+		return fmt.Errorf("theme must be a safe single path segment")
+	}
+	*value = trimmed
+	return nil
+}
+
+func normalizeAttachmentDirectory(value string) (string, error) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || strings.ContainsAny(trimmed, `\\?#`) || strings.HasPrefix(trimmed, "/") || hasWindowsDrivePrefix(trimmed) || strings.Contains(trimmed, "//") {
+		return "", fmt.Errorf("attachments.directory must be a normalized vault-relative directory")
+	}
+	cleaned := path.Clean(trimmed)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || cleaned != trimmed || !internalfsutil.IsPortableSitePath(cleaned) {
+		return "", fmt.Errorf("attachments.directory must be a normalized vault-relative directory")
+	}
+	if cleaned == ".oxpio" || strings.HasPrefix(cleaned, ".oxpio/") || cleaned == ".obsidian" || strings.HasPrefix(cleaned, ".obsidian/") {
+		return "", fmt.Errorf("attachments.directory must not be .oxpio or .obsidian")
+	}
+	return cleaned, nil
 }
 
 func validVersionID(value string) bool {
@@ -924,6 +1001,57 @@ func discoverOptionalDirectory(vaultRoot string, relPath string, label string) (
 		return "", fmt.Errorf("%s %q must be a non-symlink directory inside the vault", label, candidate)
 	}
 	return "", fmt.Errorf("inspect %s %q: %w", label, candidate, err)
+}
+
+func discoverRequiredDirectory(vaultRoot, relPath, label string) (string, error) {
+	resolved, err := discoverOptionalDirectory(vaultRoot, relPath, label)
+	if err != nil {
+		return "", err
+	}
+	if resolved == "" {
+		return "", fmt.Errorf("%s %q does not exist", label, relPath)
+	}
+	return resolved, nil
+}
+
+// discoverUnknownManagementPaths inspects only directory entries under
+// .oxpio. It deliberately never opens an unrecognized file; the resulting
+// paths are warnings attached to the normalized plan by the planner.
+func discoverUnknownManagementPaths(vaultRoot string) ([]string, error) {
+	root := filepath.Join(vaultRoot, ".oxpio")
+	if _, _, err := internalfsutil.InspectContainedDirectory(vaultRoot, root); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("inspect OXPIO management directory: %w", err)
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		return nil, fmt.Errorf("read OXPIO management directory: %w", err)
+	}
+	known := map[string]bool{"themes": true, "cache": true, "staging": true, "transactions": true, "lock": true}
+	unknown := make([]string, 0)
+	for _, entry := range entries {
+		name := entry.Name()
+		if !known[name] {
+			unknown = append(unknown, filepath.ToSlash(filepath.Join(".oxpio", name)))
+			continue
+		}
+		if name != "themes" || !entry.IsDir() {
+			continue
+		}
+		themes, readErr := os.ReadDir(filepath.Join(root, name))
+		if readErr != nil {
+			return nil, fmt.Errorf("inspect OXPIO theme directory: %w", readErr)
+		}
+		for _, theme := range themes {
+			if !theme.IsDir() {
+				unknown = append(unknown, filepath.ToSlash(filepath.Join(".oxpio", "themes", theme.Name())))
+			}
+		}
+	}
+	sort.Strings(unknown)
+	return unknown, nil
 }
 
 func normalizeDefaultImg(raw string) (string, bool, error) {

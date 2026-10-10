@@ -14,6 +14,7 @@ func TestLoadForBuildRequiresStrictNavigationAndRejectsLegacyFields(t *testing.T
 		"missing navigation": "title: Site\nbaseURL: https://example.test/\n",
 		"legacy default":     "title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultPublish: true\n",
 		"unknown field":      "title: Site\nbaseURL: https://example.test/\nnavigation: []\nsearch: {}\n",
+		"legacy edit field":  "title: Site\nbaseURL: https://example.test/\nnavigation: []\nedit: {}\n",
 		"null navigation":    "title: Site\nbaseURL: https://example.test/\nnavigation: null\n",
 		"duplicate key":      "title: Site\nbaseURL: https://example.test/\nnavigation: []\ntitle: Other\n",
 	} {
@@ -125,7 +126,7 @@ related:
 	if err != nil {
 		t.Fatalf("LoadForBuild() error = %v", err)
 	}
-	if cfg.Title != "Site" || cfg.BaseURL != "https://example.test/base/" || cfg.Language != "fr" || !cfg.DefaultImgExternal {
+	if cfg.Title != "Site" || cfg.BaseURL != "https://example.test/base/" || cfg.Language != "fr" || !cfg.DefaultImgExternal || cfg.Theme != ThemeBaseID {
 		t.Fatalf("normalized metadata = %#v", cfg)
 	}
 	if len(cfg.Navigation) != 2 || cfg.Navigation[0].Section != "." || cfg.Source.ViewURL == "" {
@@ -133,6 +134,47 @@ related:
 	}
 	if cfg.Versions == nil || cfg.Versions.Entries[0].ID != "v1" || !cfg.Sidebar.Enabled || cfg.Related.Count != 7 {
 		t.Fatalf("normalized features = %#v", cfg)
+	}
+}
+
+func TestLoadForBuildUsesExplicitThemeAttachmentsAndEditorConfig(t *testing.T) {
+	vault := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(vault, ".oxpio", "themes", "minimal"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(vault, "files"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	content := `title: Site
+baseURL: https://example.test/
+navigation: []
+theme: minimal
+attachments:
+  directory: files
+editor:
+  username: admin
+  passwordHash: $argon2id$v=19$m=8192,t=1,p=1$YWJjZGVmZ2g$YWJjZGVmZ2hpamtsbW5vcA
+`
+	writeConfigTestFile(t, vault, Filename, strings.TrimSpace(content)+"\n")
+	cfg, err := LoadForBuild(vault)
+	if err != nil {
+		t.Fatalf("LoadForBuild() error = %v", err)
+	}
+	if cfg.Theme != "minimal" || cfg.AttachmentDirectory != "files" || cfg.Editor == nil || cfg.Editor.Username != "admin" {
+		t.Fatalf("normalized config = %#v", cfg)
+	}
+}
+
+func TestNormalizeSiteConfigRejectsUnsafeThemeAndAttachmentPaths(t *testing.T) {
+	for _, value := range []string{"../minimal", "themes/minimal", `themes\\minimal`, "CON"} {
+		if _, err := NormalizeSiteConfig(model.SiteConfig{Title: "Site", BaseURL: "https://example.test/", Theme: value}); err == nil {
+			t.Fatalf("theme %q was accepted", value)
+		}
+	}
+	for _, value := range []string{".oxpio", ".obsidian/assets", "../assets", `assets\\images`, "assets//images"} {
+		if _, err := NormalizeSiteConfig(model.SiteConfig{Title: "Site", BaseURL: "https://example.test/", AttachmentDirectory: value}); err == nil {
+			t.Fatalf("attachments.directory %q was accepted", value)
+		}
 	}
 }
 

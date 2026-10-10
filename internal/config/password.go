@@ -110,21 +110,21 @@ func formatArgon2idHash(salt, key []byte) string {
 		base64.RawStdEncoding.EncodeToString(salt), base64.RawStdEncoding.EncodeToString(key))
 }
 
-func validateEditConfig(username, passwordHash string) error {
+func validateEditorConfig(username, passwordHash string) error {
 	username = strings.TrimSpace(username)
 	if username == "" {
-		return fmt.Errorf("edit.username must be non-empty")
+		return fmt.Errorf("editor.username must be non-empty")
 	}
 	for _, r := range username {
 		if unicode.IsControl(r) || r == '\n' || r == '\r' {
-			return fmt.Errorf("edit.username must not contain control characters or newlines")
+			return fmt.Errorf("editor.username must not contain control characters or newlines")
 		}
 	}
 	if strings.TrimSpace(passwordHash) == "" {
-		return fmt.Errorf("edit.passwordHash must be non-empty")
+		return fmt.Errorf("editor.passwordHash must be non-empty")
 	}
 	if err := ValidateArgon2idPasswordHash(passwordHash); err != nil {
-		return fmt.Errorf("edit.passwordHash: %w", err)
+		return fmt.Errorf("editor.passwordHash: %w", err)
 	}
 	return nil
 }

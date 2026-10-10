@@ -45,29 +45,18 @@ func TestAnalyzeDoesNotInferOutputBoundaryFromDirectoryNameOrMarker(t *testing.T
 	}
 }
 
-func TestAnalyzeWithOutputExcludesFixedInputsWithinBoundary(t *testing.T) {
-	tests := []struct {
-		name       string
-		outputPath string
-		badInput   string
-		content    string
-	}{
-		{name: "theme", outputPath: ".oxpio", badInput: ".oxpio/theme/unsupported.txt", content: "stale output"},
-		{name: "nested theme asset", outputPath: ".oxpio/theme/assets/generated", badInput: ".oxpio/theme/assets/generated/bad.css", content: "body { background: url(missing.png); }"},
-		{name: "Obsidian metadata", outputPath: ".obsidian", badInput: ".obsidian/app.json", content: "not JSON"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			vault := t.TempDir()
-			writeAnalyzeFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
-			writeAnalyzeFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
-			writeAnalyzeFile(t, vault, test.badInput, test.content)
+func TestAnalyzeReportsUnknownOXPIOManagementPathsWithoutReadingThem(t *testing.T) {
+	vault := t.TempDir()
+	writeAnalyzeFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeAnalyzeFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeAnalyzeFile(t, vault, ".oxpio/old-state.json", "not an input")
 
-			result, err := AnalyzeWithOutput(vault, filepath.Join(vault, test.outputPath))
-			if err != nil || len(result.Diagnostics) != 0 {
-				t.Fatalf("AnalyzeWithOutput() error = %v; diagnostics = %#v", err, result.Diagnostics)
-			}
-		})
+	result, err := Analyze(vault)
+	if err != nil {
+		t.Fatalf("Analyze() should preserve the plan with a warning: %v", err)
+	}
+	if len(result.Diagnostics) != 1 || result.Diagnostics[0].Severity != "warning" || !strings.Contains(result.Diagnostics[0].Message, "unknown OXPIO management path") {
+		t.Fatalf("diagnostics = %#v", result.Diagnostics)
 	}
 }
 

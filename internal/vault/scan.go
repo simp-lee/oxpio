@@ -1,11 +1,9 @@
 package vault
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"path"
 	"path/filepath"
 	"sort"
@@ -16,16 +14,13 @@ import (
 	"github.com/simp-lee/oxpio/internal/publishpath"
 )
 
-const (
-	obsidianConfigDir = ".obsidian"
-	obsidianAppJSON   = ".obsidian/app.json"
-)
-
-// ScanResult is the Step 11 handoff for later frontmatter parsing and index building.
-// It captures the candidate Markdown files, candidate resources, and the normalized
-// Obsidian attachment folder setting when present.
+// ScanResult is the handoff for frontmatter parsing and index building. It
+// captures candidate Markdown/resources and the explicitly configured
+// attachments.directory value without consulting any host-application metadata.
 type ScanResult struct {
-	VaultPath            string
+	VaultPath string
+	// AttachmentDirectory is supplied by the strict oxpio.yaml parser.
+	AttachmentDirectory  string
 	AttachmentFolderPath string
 	MarkdownFiles        []string
 	ResourceFiles        []string
@@ -42,9 +37,10 @@ type ScanResult struct {
 
 // ScanOptions carries the already-resolved output exclusion shared with build and watch.
 type ScanOptions struct {
-	OutputPath      string
-	OverlayMarkdown map[string][]byte
-	OverlayDeleted  map[string]bool
+	OutputPath          string
+	AttachmentDirectory string
+	OverlayMarkdown     map[string][]byte
+	OverlayDeleted      map[string]bool
 }
 
 // Scan walks a vault once without an output exclusion.
@@ -54,11 +50,10 @@ func Scan(vaultPath string) (ScanResult, error) {
 
 // ScanWithOptions walks a vault once and returns the Markdown and resource
 // candidates needed by later phases. Hidden entries, node_modules, the resolved
-// output, all .obsidian content except the separately-read app.json, symlinks,
-// and non-regular files are excluded. Overlay keys are normalized before
-// merging; malformed keys fail the scan and reserved/output paths are ignored.
-// attachmentFolderPath is preserved as normalized metadata only and does not
-// relax scan boundaries.
+// output, .obsidian, .oxpio, symlinks, and non-regular files are excluded.
+// Overlay keys are normalized before merging; malformed keys fail the scan and
+// reserved/output paths are ignored. AttachmentDirectory is never inferred
+// from a host application's metadata directory.
 func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) {
 	absVaultPath, err := normalizeVaultPath(vaultPath)
 	if err != nil {
@@ -79,14 +74,10 @@ func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) 
 		return ScanResult{}, err
 	}
 
-	attachmentFolderPath, err := readAttachmentFolderPath(absVaultPath, excludedOutput)
-	if err != nil {
-		return ScanResult{}, err
-	}
-
 	result := ScanResult{
 		VaultPath:            absVaultPath,
-		AttachmentFolderPath: attachmentFolderPath,
+		AttachmentDirectory:  options.AttachmentDirectory,
+		AttachmentFolderPath: options.AttachmentDirectory,
 		OverlayMarkdown:      overlayMarkdown,
 		OverlayDeleted:       overlayDeleted,
 		markdownSet:          make(map[string]struct{}),
@@ -334,92 +325,6 @@ func shouldExcludeOverlayPath(vaultPath, outputPath, relPath string) bool {
 
 func normalizeVaultPath(vaultPath string) (string, error) {
 	return internalfsutil.ResolveVaultPath(vaultPath)
-}
-
-func readAttachmentFolderPath(vaultPath, outputPath string) (string, error) {
-	appConfigPath := filepath.Join(vaultPath, filepath.FromSlash(obsidianAppJSON))
-	if outputPath != "" && internalfsutil.PathWithinRoot(outputPath, appConfigPath) {
-		return "", nil
-	}
-
-	configDirPath := filepath.Join(vaultPath, obsidianConfigDir)
-	if _, _, err := internalfsutil.InspectContainedDirectory(vaultPath, configDirPath); err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		if errors.Is(err, internalfsutil.ErrSymlinkPath) {
-			return "", fmt.Errorf("obsidian config path %q must not be a symbolic link", configDirPath)
-		}
-		if errors.Is(err, internalfsutil.ErrUnsupportedRegularFileSource) {
-			return "", nil
-		}
-		return "", err
-	}
-
-	_, data, _, err := internalfsutil.ReadContainedRegularFile(vaultPath, appConfigPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		if errors.Is(err, internalfsutil.ErrSymlinkPath) {
-			return "", fmt.Errorf("obsidian config path %q must not be a symbolic link", appConfigPath)
-		}
-		if errors.Is(err, internalfsutil.ErrUnsupportedRegularFileSource) {
-			return "", fmt.Errorf("obsidian config path %q must be a regular file", appConfigPath)
-		}
-		return "", fmt.Errorf("read %q: %w", appConfigPath, err)
-	}
-
-	var config struct {
-		AttachmentFolderPath string `json:"attachmentFolderPath"`
-	}
-	if err := json.Unmarshal(data, &config); err != nil {
-		return "", fmt.Errorf("parse %q: %w", appConfigPath, err)
-	}
-
-	normalizedPath, err := normalizeAttachmentFolderPath(config.AttachmentFolderPath)
-	if err != nil {
-		return "", fmt.Errorf("normalize attachmentFolderPath from %q: %w", appConfigPath, err)
-	}
-	return normalizedPath, nil
-}
-
-func normalizeAttachmentFolderPath(raw string) (string, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return "", nil
-	}
-
-	normalized := strings.ReplaceAll(raw, `\`, "/")
-	if hasWindowsDriveAbsolutePath(normalized) || hasDoubleSlashAbsolutePath(normalized) {
-		return "", fmt.Errorf("attachmentFolderPath must stay inside the vault: %q", raw)
-	}
-
-	cleaned := path.Clean(normalized)
-	if cleaned == "." {
-		return ".", nil
-	}
-
-	cleaned = strings.TrimPrefix(cleaned, "/")
-	if cleaned == ".." || strings.HasPrefix(cleaned, "../") {
-		return "", fmt.Errorf("attachmentFolderPath must stay inside the vault: %q", raw)
-	}
-
-	return cleaned, nil
-}
-
-func hasWindowsDriveAbsolutePath(cleaned string) bool {
-	if len(cleaned) < 2 {
-		return false
-	}
-	if !isASCIILetter(cleaned[0]) || cleaned[1] != ':' {
-		return false
-	}
-	return len(cleaned) == 2 || cleaned[2] == '/'
-}
-
-func hasDoubleSlashAbsolutePath(cleaned string) bool {
-	return strings.HasPrefix(cleaned, "//")
 }
 
 func isASCIILetter(value byte) bool {

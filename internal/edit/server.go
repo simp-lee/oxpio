@@ -78,8 +78,8 @@ func New(vaultPath, outputPath string, port int, catalogs ...*model.SourceCatalo
 	if err != nil {
 		return nil, err
 	}
-	if cfg.Edit == nil {
-		return nil, fmt.Errorf("edit.username and edit.passwordHash must be configured before edit can listen")
+	if cfg.Editor == nil {
+		return nil, fmt.Errorf("editor.username and editor.passwordHash must be configured before editor can listen")
 	}
 	boundary, err := internalfsutil.ResolveVaultOutput(resolvedVault, outputPath)
 	if err != nil {
@@ -104,8 +104,8 @@ func New(vaultPath, outputPath string, port int, catalogs ...*model.SourceCatalo
 		output:       boundary.OutputPath,
 		catalog:      catalog,
 		coordinator:  coordinator,
-		username:     cfg.Edit.Username,
-		hash:         cfg.Edit.PasswordHash,
+		username:     cfg.Editor.Username,
+		hash:         cfg.Editor.PasswordHash,
 		sessions:     make(map[string]session),
 		previews:     make(map[string]*editorPreview),
 		previewRoots: make(map[string]*internalserver.Server),
@@ -842,7 +842,7 @@ func newToken() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(data), nil
 }
 
-// Setup interactively adds the one edit account to an already valid config.
+// Setup interactively adds the one editor account to an already valid config.
 // It refuses non-terminal input so credentials are never silently generated or
 // accepted from a redirected command stream.
 func Setup(vaultPath string, input io.Reader, output io.Writer) error {
@@ -852,12 +852,12 @@ func Setup(vaultPath string, input io.Reader, output io.Writer) error {
 	if err != nil {
 		return err
 	}
-	if cfg.Edit != nil {
-		return fmt.Errorf("edit account is already configured")
+	if cfg.Editor != nil {
+		return fmt.Errorf("editor account is already configured")
 	}
 	file, ok := input.(*os.File)
 	if !ok || !term.IsTerminal(int(file.Fd())) {
-		return fmt.Errorf("edit setup requires an interactive terminal")
+		return fmt.Errorf("editor setup requires an interactive terminal")
 	}
 	if output == nil {
 		output = io.Discard
@@ -897,14 +897,14 @@ func Setup(vaultPath string, input io.Reader, output io.Writer) error {
 	if err := internalconfig.ValidateArgon2idPasswordHash(hash); err != nil {
 		return err
 	}
-	updated := appendEditConfig(original, username, hash)
+	updated := appendEditorConfig(original, username, hash)
 	if _, err := internalconfig.ValidateConfigBytes(updated); err != nil {
-		return fmt.Errorf("validate generated edit config: %w", err)
+		return fmt.Errorf("validate generated editor config: %w", err)
 	}
 	if err := atomicReplaceConfig(resolvedVault, configPath, original, updated); err != nil {
 		return err
 	}
-	_, _ = io.WriteString(output, "Edit account configured.\n")
+	_, _ = io.WriteString(output, "Editor account configured.\n")
 	return nil
 }
 
@@ -927,12 +927,12 @@ func readTerminalLine(file *os.File) (string, error) {
 	}
 }
 
-func appendEditConfig(original []byte, username, hash string) []byte {
+func appendEditorConfig(original []byte, username, hash string) []byte {
 	updated := append([]byte(nil), original...)
 	if len(updated) != 0 && updated[len(updated)-1] != '\n' {
 		updated = append(updated, '\n')
 	}
-	updated = append(updated, []byte("edit:\n  username: "+fmt.Sprintf("%q", username)+"\n  passwordHash: "+hash+"\n")...)
+	updated = append(updated, []byte("editor:\n  username: "+fmt.Sprintf("%q", username)+"\n  passwordHash: "+hash+"\n")...)
 	return updated
 }
 

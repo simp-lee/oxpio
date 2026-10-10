@@ -1164,7 +1164,7 @@ func writeStrictCacheManifest(outputRoot string, plan *model.SitePlan, index *mo
 		cacheConfig := plan.Config
 		cacheConfig.CustomCSS = strictCacheRelativePath(plan.VaultPath, cacheConfig.CustomCSS)
 		cacheConfig.ThemeDir = strictCacheRelativePath(plan.VaultPath, cacheConfig.ThemeDir)
-		cacheConfig.Edit = nil
+		cacheConfig.Editor = nil
 		// These fields are assigned from planned assets during the build and
 		// therefore belong to output state, not the canonical config input.
 		cacheConfig.ThemeCSS = ""

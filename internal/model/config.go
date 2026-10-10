@@ -11,20 +11,25 @@ type SiteConfig struct {
 	DefaultImg         string
 	DefaultImgExternal bool
 	DefaultImgURL      string
-	ThemeDir           string
-	ThemeCSS           string
-	ThemeSlots         string
-	CustomCSS          string
-	Navigation         []NavigationItem
-	Source             SourceConfig
-	Versions           *VersionsConfig
-	Pagination         PaginationConfig
-	Sidebar            SidebarConfig
-	Popover            PopoverConfig
-	Related            RelatedConfig
-	RSS                RSSConfig
-	Timeline           TimelineConfig
-	Edit               *EditConfig
+	// Theme is the selected theme ID. The empty YAML value is normalized to
+	// the embedded base theme; local themes are addressed only by this ID.
+	Theme                  string
+	ThemeDir               string
+	ThemeCSS               string
+	ThemeSlots             string
+	CustomCSS              string
+	AttachmentDirectory    string
+	UnknownManagementPaths []string
+	Navigation             []NavigationItem
+	Source                 SourceConfig
+	Versions               *VersionsConfig
+	Pagination             PaginationConfig
+	Sidebar                SidebarConfig
+	Popover                PopoverConfig
+	Related                RelatedConfig
+	RSS                    RSSConfig
+	Timeline               TimelineConfig
+	Editor                 *EditorConfig
 
 	RuntimeJSURL string
 	// FieldLines preserves YAML source locations for semantic diagnostics.
@@ -45,9 +50,9 @@ type SourceConfig struct {
 	ViewURL string
 }
 
-// EditConfig is the optional single-account editor credential configuration.
+// EditorConfig is the optional single-account editor credential configuration.
 // PasswordHash contains only a PHC Argon2id password hash.
-type EditConfig struct {
+type EditorConfig struct {
 	Username     string
 	PasswordHash string
 }
