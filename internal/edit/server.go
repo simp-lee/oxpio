@@ -43,6 +43,7 @@ const (
 type Server struct {
 	static      *internalserver.Server
 	port        int
+	listenHost  string
 	vault       string
 	output      string
 	catalog     *model.SourceCatalog
@@ -70,6 +71,14 @@ type session struct {
 // New validates the configured account and generated output before returning a
 // server. It does not listen or modify the vault.
 func New(vaultPath, outputPath string, port int, catalogs ...*model.SourceCatalog) (*Server, error) {
+	return NewWithListen(vaultPath, outputPath, port, "127.0.0.1", catalogs...)
+}
+
+// NewWithListen validates the configured account and selected bind host.
+func NewWithListen(vaultPath, outputPath string, port int, listenHost string, catalogs ...*model.SourceCatalog) (*Server, error) {
+	if listenHost != "127.0.0.1" && listenHost != "0.0.0.0" {
+		return nil, fmt.Errorf("editor listen host must be 127.0.0.1 or 0.0.0.0")
+	}
 	resolvedVault, err := internalfsutil.ResolveVaultPath(vaultPath)
 	if err != nil {
 		return nil, err
@@ -100,6 +109,7 @@ func New(vaultPath, outputPath string, port int, catalogs ...*model.SourceCatalo
 	return &Server{
 		static:       static,
 		port:         port,
+		listenHost:   listenHost,
 		vault:        resolvedVault,
 		output:       boundary.OutputPath,
 		catalog:      catalog,
@@ -163,7 +173,7 @@ func (s *Server) ListenAndServeWithReady(ready func() error) error {
 	if s == nil || s.static == nil {
 		return fmt.Errorf("edit server is nil")
 	}
-	return s.static.ListenAndServeWithReadyHandler(s, ready)
+	return s.static.ListenAndServeWithReadyHandlerOn(s.listenHost, s, ready)
 }
 
 // EnableLiveReload enables the existing static-server reload channel.

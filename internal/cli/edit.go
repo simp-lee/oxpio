@@ -39,8 +39,8 @@ func newEditorCommand(deps commandDependencies) *cobra.Command {
 				}
 				return internaledit.Setup(resolvedVault, cmd.InOrStdin(), cmd.OutOrStdout())
 			}
-			if listen != "" && listen != "127.0.0.1" {
-				return fmt.Errorf("editor listen address %q is not available", listen)
+			if listen != "" && listen != "127.0.0.1" && listen != "0.0.0.0" {
+				return fmt.Errorf("editor listen address must be 127.0.0.1 or 0.0.0.0")
 			}
 			if err := validateCommandPort(port, cmd.Flags().Changed("port")); err != nil {
 				return err
@@ -60,7 +60,7 @@ func newEditorCommand(deps commandDependencies) *cobra.Command {
 			if deps.newEditServer == nil {
 				return fmt.Errorf("editor server is unavailable")
 			}
-			srv, err := deps.newEditServer(boundary.VaultPath, boundary.OutputPath, port, buildResult.Catalog)
+			srv, err := deps.newEditServer(boundary.VaultPath, boundary.OutputPath, port, listen, buildResult.Catalog)
 			if err != nil {
 				return errors.Join(fmt.Errorf("create edit server: %w", err), closePreviewServer(srv))
 			}

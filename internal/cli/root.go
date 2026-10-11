@@ -53,7 +53,7 @@ type commandDependencies struct {
 	buildSiteWithOptions func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error)
 	publishSite          func(vaultPath string, outputPath string, options internalapplication.PublishOptions) (*internalapplication.PublishResult, error)
 	newPreviewServer     func(outputPath string, port int) (previewServer, error)
-	newEditServer        func(vaultPath string, outputPath string, port int, catalog *model.SourceCatalog) (previewServer, error)
+	newEditServer        func(vaultPath string, outputPath string, port int, listenHost string, catalog *model.SourceCatalog) (previewServer, error)
 	newFileWatcher       func() (fileWatcher, error)
 }
 
@@ -282,8 +282,8 @@ func defaultCommandDependencies() commandDependencies {
 		newPreviewServer: func(outputPath string, port int) (previewServer, error) {
 			return internalserver.New(outputPath, port)
 		},
-		newEditServer: func(vaultPath string, outputPath string, port int, catalog *model.SourceCatalog) (previewServer, error) {
-			return internaledit.New(vaultPath, outputPath, port, catalog)
+		newEditServer: func(vaultPath string, outputPath string, port int, listenHost string, catalog *model.SourceCatalog) (previewServer, error) {
+			return internaledit.NewWithListen(vaultPath, outputPath, port, listenHost, catalog)
 		},
 		newFileWatcher: newFSNotifyWatcher,
 	}
@@ -596,13 +596,13 @@ func versionRequestCanDispatch(args []string) bool {
 		flagSeen[name] = true
 		if flag.Value != "" {
 			if !hasValue {
-				if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
+				if index+1 >= len(args) || (strings.HasPrefix(args[index+1], "-") && args[index+1] != "-") {
 					return false
 				}
 				index++
 				value, hasValue = args[index], true
 			}
-			if !validVersionFlagValue(name, value) {
+			if strings.TrimSpace(value) == "" || !validVersionFlagValue(name, value) {
 				return false
 			}
 			flagValues[name] = append(flagValues[name], value)

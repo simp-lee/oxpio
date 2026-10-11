@@ -152,10 +152,19 @@ func (s *Server) ListenAndServeWithReady(ready func() error) error {
 
 // ListenAndServeWithReadyHandler shares this server's validated listener with another handler.
 func (s *Server) ListenAndServeWithReadyHandler(handler http.Handler, ready func() error) error {
+	return s.ListenAndServeWithReadyHandlerOn("", handler, ready)
+}
+
+// ListenAndServeWithReadyHandlerOn binds the requested host before readiness.
+func (s *Server) ListenAndServeWithReadyHandlerOn(host string, handler http.Handler, ready func() error) error {
 	if s == nil {
 		return fmt.Errorf("server is nil")
 	}
-	listener, err := net.Listen("tcp", s.Addr())
+	address := s.Addr()
+	if host != "" {
+		address = net.JoinHostPort(host, strconv.Itoa(s.port))
+	}
+	listener, err := net.Listen("tcp", address)
 	if err != nil {
 		return err
 	}
