@@ -42,7 +42,7 @@ func TestExecuteVersionFormsMatch(t *testing.T) {
 	if outputs[0] != outputs[1] || outputs[0] != "oxpio version=dev commit=unknown date=unknown type=dev\n" {
 		t.Fatalf("version outputs = %#v", outputs)
 	}
-	for _, args := range [][]string{{"version", "extra"}, {"--version", "extra"}, {"--version", "--unknown"}, {"--version", "--format", "bad"}, {"context", "--version", "--unknown"}} {
+	for _, args := range [][]string{{"version", "extra"}, {"--version", "extra"}, {"--version", "--unknown"}, {"--version", "--format", "bad"}, {"context", "--version", "--unknown"}, {"context", "--version", "--include-unpublished"}, {"read", "article.md", "--version", "--limit", "0"}, {"read", "article.md", "--version", "--limit", "nope"}, {"read", "article.md", "--version", "extra"}} {
 		_, _, err := executeForTest(t, testCommandDependencies(), args)
 		if err == nil {
 			t.Fatalf("executeForTest(%v) error = nil", args)
@@ -104,6 +104,21 @@ func TestRegistryHelpDrivesCobraHelp(t *testing.T) {
 	}
 	if decodeErr := json.Unmarshal([]byte(stdout), &helpEnvelope); decodeErr != nil || helpEnvelope.Data.Command.Name != "read" {
 		t.Fatalf("read JSON help envelope = %q, err=%v", stdout, decodeErr)
+	}
+
+	stdout, stderr, err = executeForTest(t, testCommandDependencies(), []string{"config", "--help", "--format", "json"})
+	if err != nil || stderr != "" {
+		t.Fatalf("config JSON help = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+	var parentHelpEnvelope struct {
+		Data struct {
+			Commands []struct {
+				Name string `json:"name"`
+			} `json:"commands"`
+		} `json:"data"`
+	}
+	if decodeErr := json.Unmarshal([]byte(stdout), &parentHelpEnvelope); decodeErr != nil || len(parentHelpEnvelope.Data.Commands) == 0 {
+		t.Fatalf("config JSON help envelope = %q, err=%v", stdout, decodeErr)
 	}
 
 	stdout, stderr, err = executeForTest(t, testCommandDependencies(), []string{"--help"})

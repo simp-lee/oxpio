@@ -10,6 +10,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	internalagent "github.com/simp-lee/oxpio/internal/agent"
@@ -346,6 +347,15 @@ func registryHelpJSON(name string) ([]byte, error) {
 
 func registryParentHelpFunc(name string) func(*cobra.Command, []string) {
 	return func(cmd *cobra.Command, _ []string) {
+		if formatOf(cmd) == "json" {
+			data, err := registryHelpJSON(name)
+			if err != nil {
+				_, _ = io.WriteString(cmd.OutOrStdout(), err.Error()+"\n")
+				return
+			}
+			_, _ = cmd.OutOrStdout().Write(append(data, '\n'))
+			return
+		}
 		var builder strings.Builder
 		builder.WriteString(name + " commands:\n")
 		for _, spec := range internalapplication.CommandSpecs() {
@@ -448,91 +458,101 @@ func removeVersionFlags(args []string) []string {
 
 func versionRequestCanDispatch(args []string) bool {
 	commandName := registryCommandFromArgs(args)
-	allowed := map[string]bool{"--format": true}
+	var spec internalapplication.CommandSpec
 	if commandName != "" {
-		spec, ok := internalapplication.FindCommand(commandName)
+		var ok bool
+		spec, ok = internalapplication.FindCommand(commandName)
 		if !ok {
 			return false
 		}
-		for _, flag := range spec.Flags {
-			if flag.Name != "" && flag.Name != "version" {
-				allowed["--"+flag.Name] = true
-			}
+	}
+	flags := map[string]internalapplication.FlagSpec{
+		"--format": {Name: "format", Value: "FORMAT"},
+	}
+	for _, flag := range spec.Flags {
+		if flag.Name != "" && flag.Name != "version" {
+			flags["--"+flag.Name] = flag
 		}
 	}
+	positionals := make([]string, 0)
+	vaultProvided := false
+	includeUnpublished := false
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		if arg == "-h" || arg == "--help" {
 			continue
 		}
 		if !strings.HasPrefix(arg, "-") {
+			positionals = append(positionals, arg)
 			continue
 		}
-		name := arg
-		if equal := strings.IndexByte(name, '='); equal >= 0 {
-			name = name[:equal]
+		name, value, hasValue := arg, "", false
+		if equal := strings.IndexByte(arg, '='); equal >= 0 {
+			name, value, hasValue = arg[:equal], arg[equal+1:], true
 		}
-		if !allowed[name] {
+		flag, ok := flags[name]
+		if !ok {
 			return false
 		}
-		if name == "--format" {
-			value := ""
-			if equal := strings.IndexByte(arg, '='); equal >= 0 {
-				value = arg[equal+1:]
-			} else if index+1 < len(args) {
-				index++
-				value = args[index]
-			} else {
-				return false
-			}
-			if value != "text" && value != "json" {
-				return false
-			}
-			continue
-		}
-		for _, flag := range commandFlags(commandName) {
-			if "--"+flag.Name == name && flag.Value != "" && !strings.Contains(arg, "=") {
+		if flag.Value != "" {
+			if !hasValue {
 				if index+1 >= len(args) {
 					return false
 				}
 				index++
-				break
+				value, hasValue = args[index], true
 			}
-		}
-	}
-	return commandName != "" || len(args) == 0 || onlyFormatFlags(args)
-}
-
-func commandFlags(commandName string) []internalapplication.FlagSpec {
-	if commandName == "" {
-		return nil
-	}
-	spec, ok := internalapplication.FindCommand(commandName)
-	if !ok {
-		return nil
-	}
-	return spec.Flags
-}
-
-func onlyFormatFlags(args []string) bool {
-	for index := 0; index < len(args); index++ {
-		if args[index] == "--format" {
-			if index+1 >= len(args) || (args[index+1] != "text" && args[index+1] != "json") {
+			if name == "--format" && value != "text" && value != "json" {
 				return false
 			}
-			index++
-			continue
-		}
-		if strings.HasPrefix(args[index], "--format=") {
-			value := strings.TrimPrefix(args[index], "--format=")
-			if value != "text" && value != "json" {
-				return false
+			if commandName == "read" {
+				switch name {
+				case "--offset":
+					number, err := strconv.Atoi(value)
+					if err != nil || number < 0 {
+						return false
+					}
+				case "--limit":
+					number, err := strconv.Atoi(value)
+					if err != nil || number < 1 || number > 10000 {
+						return false
+					}
+				}
 			}
-			continue
-		}
-		if args[index] != "-h" && args[index] != "--help" {
+		} else if hasValue {
 			return false
 		}
+		if name == "--vault" {
+			vaultProvided = true
+		}
+		if name == "--include-unpublished" {
+			includeUnpublished = true
+		}
+	}
+	if commandName == "" {
+		return len(positionals) == 0
+	}
+	commandWords := strings.Fields(commandName)
+	if len(positionals) < len(commandWords) {
+		return false
+	}
+	for index, word := range commandWords {
+		if positionals[index] != word {
+			return false
+		}
+	}
+	positionals = positionals[len(commandWords):]
+	argumentWords := strings.Fields(spec.Arguments)
+	switch {
+	case len(argumentWords) == 0 && len(positionals) != 0:
+		return false
+	case len(argumentWords) == 1 && strings.HasPrefix(argumentWords[0], "[") && len(positionals) > 1:
+		return false
+	case len(argumentWords) > 0 && !strings.HasPrefix(argumentWords[0], "[") && len(positionals) != len(argumentWords):
+		return false
+	}
+	if includeUnpublished && (commandName == "help" || commandName == "context") && !vaultProvided {
+		return false
 	}
 	return true
 }
