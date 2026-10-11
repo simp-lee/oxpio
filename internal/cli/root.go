@@ -177,13 +177,40 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 		root.SetOut(stdout)
 	}
 	if stderr != nil {
-		root.SetErr(stderr)
+		root.SetErr(&sanitizingWriter{output: stderr, args: args})
 	}
 	root.SetArgs(effectiveArgs)
 	if helpFlagRequested(args) && !formatArgumentsValid(args) {
 		return fmt.Errorf("--format must be text or json")
 	}
 	return root.Execute()
+}
+
+type sanitizingWriter struct {
+	output io.Writer
+	args   []string
+}
+
+func (w *sanitizingWriter) Write(p []byte) (int, error) {
+	parts := strings.SplitAfter(string(p), "\n")
+	var sanitized strings.Builder
+	for _, part := range parts {
+		if part == "" {
+			continue
+		}
+		newline := strings.HasSuffix(part, "\n")
+		if newline {
+			part = strings.TrimSuffix(part, "\n")
+		}
+		sanitized.WriteString(sanitizeCLIText(part, w.args))
+		if newline {
+			sanitized.WriteByte('\n')
+		}
+	}
+	if _, err := io.WriteString(w.output, sanitized.String()); err != nil {
+		return 0, err
+	}
+	return len(p), nil
 }
 
 type streamingServiceJSONWriter struct {
@@ -226,7 +253,7 @@ func executeStreamingServiceJSON(effectiveArgs, originalArgs []string, root *cob
 	}
 	writer := &streamingServiceJSONWriter{output: stdout, command: registryCommandFromArgs(effectiveArgs)}
 	root.SetOut(writer)
-	root.SetErr(stderr)
+	root.SetErr(&sanitizingWriter{output: stderr, args: originalArgs})
 	root.SetArgs(effectiveArgs)
 	err := root.Execute()
 	if writer.sent {
@@ -547,6 +574,7 @@ func versionRequestCanDispatch(args []string) bool {
 	vaultProvided := false
 	includeUnpublished := false
 	boolFlags := make(map[string]bool)
+	flagSeen := make(map[string]bool)
 	flagValues := make(map[string][]string)
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
@@ -565,6 +593,7 @@ func versionRequestCanDispatch(args []string) bool {
 		if !ok {
 			return false
 		}
+		flagSeen[name] = true
 		if flag.Value != "" {
 			if !hasValue {
 				if index+1 >= len(args) {
@@ -590,14 +619,19 @@ func versionRequestCanDispatch(args []string) bool {
 			includeUnpublished = true
 		}
 	}
-	if boolFlags["--setup"] && boolFlags["--reset-password"] {
+	for _, flag := range spec.Flags {
+		if flag.Required && !flagSeen["--"+flag.Name] {
+			return false
+		}
+	}
+	if (boolFlags["--publish"] && boolFlags["--unpublish"]) || (boolFlags["--setup"] && boolFlags["--reset-password"]) {
 		return false
 	}
 	if commandName == "editor" && (boolFlags["--setup"] || boolFlags["--reset-password"]) && (len(flagValues["--output"]) != 0 || len(flagValues["--port"]) != 0 || len(flagValues["--listen"]) != 0) {
 		return false
 	}
-	if commandName == "grep" {
-		if len(flagValues["--context"]) != 0 && (len(flagValues["--before"]) != 0 || len(flagValues["--after"]) != 0) {
+	if commandName == "grep" || commandName == "find" {
+		if commandName == "grep" && len(flagValues["--context"]) != 0 && (len(flagValues["--before"]) != 0 || len(flagValues["--after"]) != 0) {
 			return false
 		}
 		for _, value := range flagValues["--publish"] {
@@ -788,15 +822,15 @@ func classifyCLIError(err error) int {
 		return coded.ExitCode()
 	}
 	message := strings.ToLower(err.Error())
+	var networkError *net.OpError
+	if errors.As(err, &networkError) {
+		return 5
+	}
 	if errors.Is(err, os.ErrPermission) || strings.Contains(message, "permission") || strings.Contains(message, "not available in the selected read scope") {
 		return 4
 	}
 	if strings.Contains(message, "conflict") || strings.Contains(message, "hash mismatch") {
 		return 3
-	}
-	var networkError *net.OpError
-	if errors.As(err, &networkError) {
-		return 5
 	}
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrInvalid) || errors.Is(err, os.ErrClosed) || errors.Is(err, internalapplication.ErrSourceNotFound) {
 		return 5
