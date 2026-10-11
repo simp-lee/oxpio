@@ -80,7 +80,11 @@ func newHelpCommand() *cobra.Command {
 			}
 			text := internalapplication.HelpText(requestedCommand, agentWorkflow)
 			if dynamicSet {
-				text += fmt.Sprintf("Selected theme: %s\nSources: %d\n", dynamic.Theme, dynamic.Sources)
+				themeIDs := make([]string, 0, len(dynamic.AvailableThemes))
+				for _, theme := range dynamic.AvailableThemes {
+					themeIDs = append(themeIDs, fmt.Sprintf("%s(apiVersion=%d)", theme.ID, theme.APIVersion))
+				}
+				text += fmt.Sprintf("Selected theme: %s\nContent kinds: %s\nPage kinds: %s\nSections: %d\nSection paths: %s\nVersions: %s\nAvailable themes: %s\nWritable domains: %s\nPublish policy: %s\nCapabilities: %s\nSources: %d\n", dynamic.Theme, strings.Join(dynamic.ContentKinds, ", "), strings.Join(dynamic.PageKinds, ", "), dynamic.Sections, strings.Join(dynamic.SectionPaths, ", "), strings.Join(dynamic.Versions, ", "), strings.Join(themeIDs, ", "), strings.Join(dynamic.WritableDomains, ", "), dynamic.PublishPolicy, strings.Join(dynamic.Capabilities, ", "), dynamic.Sources)
 			}
 			_, err := io.WriteString(cmd.OutOrStdout(), text)
 			return err

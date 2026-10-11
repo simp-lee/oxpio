@@ -112,6 +112,9 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 			}
 		}
 	}
+	if jsonRequested(args) && isStreamingServiceCommand(effectiveArgs) && formatArgumentsValid(args) {
+		return executeStreamingServiceJSON(effectiveArgs, args, root, stdout, stderr)
+	}
 	if jsonRequested(args) {
 		var commandOutput bytes.Buffer
 		var commandErrors bytes.Buffer
@@ -180,6 +183,66 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 		return fmt.Errorf("--format must be text or json")
 	}
 	return root.Execute()
+}
+
+type streamingServiceJSONWriter struct {
+	output  io.Writer
+	command string
+	buffer  bytes.Buffer
+	sent    bool
+}
+
+func (w *streamingServiceJSONWriter) Write(p []byte) (int, error) {
+	if w.sent {
+		return 0, fmt.Errorf("service emitted more than one startup result")
+	}
+	_, _ = w.buffer.Write(p)
+	if !bytes.Contains(w.buffer.Bytes(), []byte{'\n'}) {
+		return len(p), nil
+	}
+	trimmed := bytes.TrimSpace(w.buffer.Bytes())
+	if !json.Valid(trimmed) {
+		return 0, fmt.Errorf("service startup result is not JSON")
+	}
+	if err := internalagent.Write(w.output, internalagent.Success(w.command, trimmed)); err != nil {
+		return 0, err
+	}
+	w.sent = true
+	return len(p), nil
+}
+
+func isStreamingServiceCommand(args []string) bool {
+	command := registryCommandFromArgs(args)
+	return command == "serve" || command == "editor"
+}
+
+func executeStreamingServiceJSON(effectiveArgs, originalArgs []string, root *cobra.Command, stdout, stderr io.Writer) error {
+	if stdout == nil {
+		stdout = io.Discard
+	}
+	if stderr == nil {
+		stderr = io.Discard
+	}
+	writer := &streamingServiceJSONWriter{output: stdout, command: registryCommandFromArgs(effectiveArgs)}
+	root.SetOut(writer)
+	root.SetErr(stderr)
+	root.SetArgs(effectiveArgs)
+	err := root.Execute()
+	if writer.sent {
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, sanitizeCLIError(err, originalArgs))
+			return silentError{err: err, exitCode: classifyCLIError(err)}
+		}
+		return nil
+	}
+	if err == nil {
+		err = fmt.Errorf("service did not announce startup")
+	}
+	diagnostic := fallbackCLIDiagnostic(err, originalArgs)
+	if writeErr := internalagent.Write(stdout, internalagent.FailureWithDiagnostics(writer.command, []internalagent.Diagnostic{diagnostic})); writeErr != nil {
+		return writeErr
+	}
+	return silentError{err: err, exitCode: classifyCLIError(err)}
 }
 
 func defaultCommandDependencies() commandDependencies {
@@ -483,6 +546,7 @@ func versionRequestCanDispatch(args []string) bool {
 	vaultProvided := false
 	includeUnpublished := false
 	boolFlags := make(map[string]bool)
+	flagValues := make(map[string][]string)
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		if arg == "-h" || arg == "--help" {
@@ -511,6 +575,7 @@ func versionRequestCanDispatch(args []string) bool {
 			if !validVersionFlagValue(name, value) {
 				return false
 			}
+			flagValues[name] = append(flagValues[name], value)
 		} else {
 			if hasValue {
 				return false
@@ -526,6 +591,19 @@ func versionRequestCanDispatch(args []string) bool {
 	}
 	if boolFlags["--setup"] && boolFlags["--reset-password"] {
 		return false
+	}
+	if commandName == "editor" && (boolFlags["--setup"] || boolFlags["--reset-password"]) && (len(flagValues["--output"]) != 0 || len(flagValues["--port"]) != 0 || len(flagValues["--listen"]) != 0) {
+		return false
+	}
+	if commandName == "grep" {
+		if len(flagValues["--context"]) != 0 && (len(flagValues["--before"]) != 0 || len(flagValues["--after"]) != 0) {
+			return false
+		}
+		for _, value := range flagValues["--publish"] {
+			if value == "false" && !includeUnpublished {
+				return false
+			}
+		}
 	}
 	if commandName == "" {
 		return len(positionals) == 0
@@ -545,7 +623,8 @@ func versionRequestCanDispatch(args []string) bool {
 			return false
 		}
 		if len(positionals) != 0 {
-			if _, ok := internalapplication.FindCommand(strings.Join(positionals, " ")); !ok {
+			target := strings.Join(positionals, " ")
+			if _, ok := internalapplication.FindCommand(target); !ok && len(internalapplication.CommandGroup(target)) == 0 {
 				return false
 			}
 		}
@@ -558,6 +637,11 @@ func versionRequestCanDispatch(args []string) bool {
 			return false
 		case len(argumentWords) > 0 && !strings.HasPrefix(argumentWords[0], "[") && len(positionals) != len(argumentWords):
 			return false
+		}
+		if commandName == "read" {
+			if _, err := internalapplication.NormalizeSourcePath(positionals[0]); err != nil {
+				return false
+			}
 		}
 	}
 	if includeUnpublished && (commandName == "help" || commandName == "context") && !vaultProvided {

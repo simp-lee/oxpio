@@ -21,6 +21,9 @@ func newReadCommand() *cobra.Command {
 		Short: "Read an original Markdown source",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if _, err := internalapplication.NormalizeSourcePath(args[0]); err != nil {
+				return err
+			}
 			if cmd.Flags().Changed("limit") && (limit < 1 || limit > 10000) {
 				return fmt.Errorf("limit must be between 1 and 10000 when provided")
 			}
