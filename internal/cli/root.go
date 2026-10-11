@@ -143,11 +143,8 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 			if len(diagnostics) == 0 {
 				diagnostics = parseCLIErrorDiagnostics(commandErrors.String(), args)
 			}
-			if len(diagnostics) == 0 && classifyCLIError(err) == 4 {
-				diagnostics = []internalagent.Diagnostic{{Code: "PERMISSION_DENIED", Severity: "error", Category: "permission", Message: sanitizeCLIError(err, args)}}
-			}
-			if len(diagnostics) == 0 && isCLIParameterError(err) {
-				diagnostics = []internalagent.Diagnostic{{Code: "INVALID_ARGUMENT", Severity: "error", Category: "parameter", Message: sanitizeCLIError(err, args)}}
+			if len(diagnostics) == 0 {
+				diagnostics = []internalagent.Diagnostic{fallbackCLIDiagnostic(err, args)}
 			}
 			failureData := json.RawMessage(nil)
 			if command == "validate" || command == "theme validate" {
@@ -682,6 +679,21 @@ func registryCommandFromArgs(args []string) string {
 	return ""
 }
 
+func fallbackCLIDiagnostic(err error, args []string) internalagent.Diagnostic {
+	code, category := "COMMAND_ERROR", "command"
+	switch classifyCLIError(err) {
+	case 2:
+		code, category = "INVALID_ARGUMENT", "parameter"
+	case 3:
+		code, category = "CONFLICT", "conflict"
+	case 4:
+		code, category = "PERMISSION_DENIED", "permission"
+	case 5:
+		code, category = "IO_ERROR", "io"
+	}
+	return internalagent.Diagnostic{Code: code, Severity: "error", Category: category, Message: sanitizeCLIError(err, args)}
+}
+
 func classifyCLIError(err error) int {
 	if err == nil {
 		return 0
@@ -697,7 +709,7 @@ func classifyCLIError(err error) int {
 	if strings.Contains(message, "conflict") || strings.Contains(message, "hash mismatch") {
 		return 3
 	}
-	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrInvalid) || errors.Is(err, os.ErrClosed) {
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrInvalid) || errors.Is(err, os.ErrClosed) || errors.Is(err, internalapplication.ErrSourceNotFound) {
 		return 5
 	}
 	if strings.Contains(message, "unknown command") || strings.Contains(message, "unknown flag") || strings.Contains(message, "accepts no") || strings.Contains(message, "accepts at most") || strings.Contains(message, "must be true or false") || strings.Contains(message, "--format must") || isCLIParameterError(err) {
@@ -708,7 +720,7 @@ func classifyCLIError(err error) int {
 
 func isCLIParameterError(err error) bool {
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "mutually exclusive", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between"} {
+	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "mutually exclusive", "output path", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between"} {
 		if strings.Contains(message, marker) {
 			return true
 		}

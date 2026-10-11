@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"image"
 	"image/png"
@@ -33,6 +34,26 @@ func TestServeCommandDefaultsToCurrentVaultPublicOutput(t *testing.T) {
 	}
 	if gotOutput != filepath.Join(vaultPath, "public") {
 		t.Fatalf("output = %q", gotOutput)
+	}
+}
+
+func TestServeCommandJSONAnnouncesAddress(t *testing.T) {
+	deps := testCommandDependencies()
+	deps.newPreviewServer = func(string, int) (previewServer, error) {
+		return &fakePreviewServer{}, nil
+	}
+	stdout, stderr, err := executeForTest(t, deps, []string{"serve", "--output", filepath.Join(t.TempDir(), "site"), "--port", "9090", "--format", "json"})
+	if err != nil || stderr != "" {
+		t.Fatalf("serve JSON = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+	var envelope struct {
+		OK   bool `json:"ok"`
+		Data struct {
+			Address string `json:"address"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal([]byte(stdout), &envelope); err != nil || !envelope.OK || envelope.Data.Address != "http://127.0.0.1:9090" {
+		t.Fatalf("serve JSON envelope = %q, err=%v", stdout, err)
 	}
 }
 
@@ -114,8 +135,8 @@ func TestServeCommandWatchRoutesBuildDiagnosticsAndWatchErrorsToInjectedStderr(t
 	if err != nil {
 		t.Fatalf("executeWithDeps() error = %v", err)
 	}
-	if got := stdoutBuf.String(); got != "" {
-		t.Fatalf("stdout = %q, want empty stdout", got)
+	if got := stdoutBuf.String(); got != "http://127.0.0.1:8080\n" {
+		t.Fatalf("stdout = %q, want service address", got)
 	}
 	stderr := stderrBuf.String()
 	if !strings.Contains(stderr, "synthetic build warning") {
@@ -151,8 +172,8 @@ func TestServeCommandPassesExplicitPortToPreviewServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("executeForTest() error = %v", err)
 	}
-	if stdout != "" {
-		t.Fatalf("stdout = %q, want empty stdout", stdout)
+	if stdout != "http://127.0.0.1:9090\n" {
+		t.Fatalf("stdout = %q, want service address", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty stderr", stderr)
@@ -287,8 +308,8 @@ func TestServeCommandWatchBuildsBeforeServing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("executeForTest() error = %v", err)
 	}
-	if stdout != "" {
-		t.Fatalf("stdout = %q, want empty stdout", stdout)
+	if stdout != "http://127.0.0.1:8080\n" {
+		t.Fatalf("stdout = %q, want service address", stdout)
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty stderr", stderr)
@@ -357,8 +378,8 @@ func TestServeCommandWatchReloadsFixedVaultConfig(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Fatalf("executeWithDeps() error = %v", err)
 	}
-	if got := stdoutBuf.String(); got != "" {
-		t.Fatalf("stdout = %q, want empty stdout", got)
+	if got := stdoutBuf.String(); got != "http://127.0.0.1:8080\n" {
+		t.Fatalf("stdout = %q, want service address", got)
 	}
 	if got := stderrBuf.String(); got != "" {
 		t.Fatalf("stderr = %q, want empty stderr", got)
@@ -433,8 +454,8 @@ func TestServeWatchCommandUsesRealBuildFailureTransaction(t *testing.T) {
 	if err := <-errCh; err != nil {
 		t.Fatalf("serve --watch error = %v", err)
 	}
-	if got := stdout.String(); got != "" {
-		t.Fatalf("serve --watch stdout = %q, want empty", got)
+	if got := stdout.String(); got != "http://127.0.0.1:8080\n" {
+		t.Fatalf("serve --watch stdout = %q, want service address", got)
 	}
 }
 

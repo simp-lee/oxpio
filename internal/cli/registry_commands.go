@@ -29,7 +29,7 @@ func newHelpCommand() *cobra.Command {
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if requestedCommand != "" {
-				if _, ok := internalapplication.FindCommand(requestedCommand); !ok {
+				if _, ok := internalapplication.FindCommand(requestedCommand); !ok && len(internalapplication.CommandGroup(requestedCommand)) == 0 {
 					return fmt.Errorf("unknown command %q", requestedCommand)
 				}
 			}
@@ -53,6 +53,11 @@ func newHelpCommand() *cobra.Command {
 							Schema  string                          `json:"schema"`
 							Command internalapplication.CommandSpec `json:"command"`
 						}{Schema: "oxpio.agent/help/v1", Command: spec})
+					} else if group := internalapplication.CommandGroup(requestedCommand); len(group) != 0 {
+						data, err = json.Marshal(struct {
+							Schema   string                            `json:"schema"`
+							Commands []internalapplication.CommandSpec `json:"commands"`
+						}{Schema: "oxpio.agent/help/v1", Commands: group})
 					} else {
 						return fmt.Errorf("unknown command %q", requestedCommand)
 					}

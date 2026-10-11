@@ -141,6 +141,22 @@ func FindCommand(name string) (CommandSpec, bool) {
 	return CommandSpec{}, false
 }
 
+// CommandGroup returns the discoverable subcommands under a registry parent.
+func CommandGroup(name string) []CommandSpec {
+	name = strings.Join(strings.Fields(name), " ")
+	if name == "" {
+		return nil
+	}
+	prefix := name + " "
+	result := make([]CommandSpec, 0)
+	for _, raw := range commandSpecs {
+		if strings.HasPrefix(raw.Name, prefix) {
+			result = append(result, enrichCommandSpec(raw))
+		}
+	}
+	return result
+}
+
 // HelpJSON returns the stable machine-readable registry document.
 func HelpJSON(agentOnly bool) ([]byte, error) {
 	specs := CommandSpecs()
@@ -204,6 +220,14 @@ func HelpText(command string, agentOnly bool) string {
 					b.WriteString(example)
 					b.WriteByte('\n')
 				}
+			}
+			return b.String()
+		}
+		if group := CommandGroup(command); len(group) != 0 {
+			var b strings.Builder
+			b.WriteString(command + " commands:\n")
+			for _, spec := range group {
+				b.WriteString("  " + spec.Name + " - " + spec.Summary + "\n")
 			}
 			return b.String()
 		}

@@ -16,8 +16,9 @@ import (
 )
 
 var (
-	ErrHiddenSource  = errors.New("source is not available in the selected read scope")
-	ErrInvalidSource = errors.New("source is not valid UTF-8 Markdown")
+	ErrHiddenSource   = errors.New("source is not available in the selected read scope")
+	ErrInvalidSource  = errors.New("source is not valid UTF-8 Markdown")
+	ErrSourceNotFound = errors.New("source was not found")
 )
 
 // Snapshot is the immutable normalized source handoff shared by read-only
@@ -107,7 +108,7 @@ func (snapshot Snapshot) Entry(relPath string, includeUnpublished bool) (model.S
 		}
 		return entry, nil
 	}
-	return model.SourceCatalogEntry{}, fmt.Errorf("source %q was not found", normalized)
+	return model.SourceCatalogEntry{}, fmt.Errorf("%w: %q", ErrSourceNotFound, normalized)
 }
 
 // ReadSource reads the original Markdown bytes for an authorized catalog entry.

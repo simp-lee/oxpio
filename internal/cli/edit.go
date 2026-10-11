@@ -64,6 +64,9 @@ func newEditorCommand(deps commandDependencies) *cobra.Command {
 			if err != nil {
 				return errors.Join(fmt.Errorf("create edit server: %w", err), closePreviewServer(srv))
 			}
+			if err := announceService(cmd, listen, port); err != nil {
+				return errors.Join(err, closePreviewServer(srv))
+			}
 			srv.EnableLiveReload()
 			listenErr := srv.ListenAndServe()
 			closeErr := closePreviewServer(srv)

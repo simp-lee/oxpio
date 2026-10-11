@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -79,6 +80,9 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 			srv, err := deps.newPreviewServer(boundary.OutputPath, port)
 			if err != nil {
 				return errors.Join(fmt.Errorf("create preview server: %w", err), closePreviewServer(srv))
+			}
+			if err := announceService(cmd, "127.0.0.1", port); err != nil {
+				return errors.Join(err, closePreviewServer(srv))
 			}
 			listenErr := srv.ListenAndServe()
 			closeErr := closePreviewServer(srv)
@@ -172,11 +176,36 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 		runErr = errors.Join(runErr, watchErr, closePreviewServer(srv))
 	}()
 
+	if err := announceService(cmd, "127.0.0.1", port); err != nil {
+		return err
+	}
 	if err := srv.ListenAndServe(); err != nil {
 		return fmt.Errorf("listen and serve: %w", err)
 	}
 
 	return nil
+}
+
+func announceService(cmd *cobra.Command, host string, port int) error {
+	if strings.TrimSpace(host) == "" {
+		host = "127.0.0.1"
+	}
+	if port == 0 {
+		port = internalserver.DefaultPort
+	}
+	address := fmt.Sprintf("http://%s:%d", host, port)
+	if formatOf(cmd) == "json" {
+		data, err := json.Marshal(struct {
+			Address string `json:"address"`
+		}{Address: address})
+		if err != nil {
+			return err
+		}
+		_, err = cmd.OutOrStdout().Write(append(data, '\n'))
+		return err
+	}
+	_, err := fmt.Fprintln(cmd.OutOrStdout(), address)
+	return err
 }
 
 func newFSNotifyWatcher() (fileWatcher, error) {
