@@ -118,7 +118,12 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 		root.SetOut(&commandOutput)
 		root.SetErr(&commandErrors)
 		root.SetArgs(effectiveArgs)
-		err := root.Execute()
+		var err error
+		if helpFlagRequested(args) && !formatArgumentsValid(args) {
+			err = fmt.Errorf("--format must be text or json")
+		} else {
+			err = root.Execute()
+		}
 		command := registryCommandFromArgs(effectiveArgs)
 		var data json.RawMessage
 		if commandOutput.Len() != 0 {
@@ -174,6 +179,9 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 		root.SetErr(stderr)
 	}
 	root.SetArgs(effectiveArgs)
+	if helpFlagRequested(args) && !formatArgumentsValid(args) {
+		return fmt.Errorf("--format must be text or json")
+	}
 	return root.Execute()
 }
 
@@ -477,6 +485,7 @@ func versionRequestCanDispatch(args []string) bool {
 	positionals := make([]string, 0)
 	vaultProvided := false
 	includeUnpublished := false
+	boolFlags := make(map[string]bool)
 	for index := 0; index < len(args); index++ {
 		arg := args[index]
 		if arg == "-h" || arg == "--help" {
@@ -502,25 +511,14 @@ func versionRequestCanDispatch(args []string) bool {
 				index++
 				value, hasValue = args[index], true
 			}
-			if name == "--format" && value != "text" && value != "json" {
+			if !validVersionFlagValue(name, value) {
 				return false
 			}
-			if commandName == "read" {
-				switch name {
-				case "--offset":
-					number, err := strconv.Atoi(value)
-					if err != nil || number < 0 {
-						return false
-					}
-				case "--limit":
-					number, err := strconv.Atoi(value)
-					if err != nil || number < 1 || number > 10000 {
-						return false
-					}
-				}
+		} else {
+			if hasValue {
+				return false
 			}
-		} else if hasValue {
-			return false
+			boolFlags[name] = true
 		}
 		if name == "--vault" {
 			vaultProvided = true
@@ -528,6 +526,9 @@ func versionRequestCanDispatch(args []string) bool {
 		if name == "--include-unpublished" {
 			includeUnpublished = true
 		}
+	}
+	if boolFlags["--setup"] && boolFlags["--reset-password"] {
+		return false
 	}
 	if commandName == "" {
 		return len(positionals) == 0
@@ -542,17 +543,104 @@ func versionRequestCanDispatch(args []string) bool {
 		}
 	}
 	positionals = positionals[len(commandWords):]
-	argumentWords := strings.Fields(spec.Arguments)
-	switch {
-	case len(argumentWords) == 0 && len(positionals) != 0:
-		return false
-	case len(argumentWords) == 1 && strings.HasPrefix(argumentWords[0], "[") && len(positionals) > 1:
-		return false
-	case len(argumentWords) > 0 && !strings.HasPrefix(argumentWords[0], "[") && len(positionals) != len(argumentWords):
-		return false
+	if commandName == "help" {
+		if len(positionals) > 2 {
+			return false
+		}
+		if len(positionals) != 0 {
+			if _, ok := internalapplication.FindCommand(strings.Join(positionals, " ")); !ok {
+				return false
+			}
+		}
+	} else {
+		argumentWords := strings.Fields(spec.Arguments)
+		switch {
+		case len(argumentWords) == 0 && len(positionals) != 0:
+			return false
+		case len(argumentWords) == 1 && strings.HasPrefix(argumentWords[0], "[") && len(positionals) > 1:
+			return false
+		case len(argumentWords) > 0 && !strings.HasPrefix(argumentWords[0], "[") && len(positionals) != len(argumentWords):
+			return false
+		}
 	}
 	if includeUnpublished && (commandName == "help" || commandName == "context") && !vaultProvided {
 		return false
+	}
+	return true
+}
+
+func validVersionFlagValue(name, value string) bool {
+	if name == "--format" {
+		return value == "text" || value == "json"
+	}
+	if name == "--port" {
+		number, err := strconv.Atoi(value)
+		return err == nil && number >= 1 && number <= 65535
+	}
+	bounds := map[string][2]int64{
+		"--offset":          {0, int64(^uint(0) >> 1)},
+		"--limit":           {1, 10000},
+		"--context":         {0, 20},
+		"--before":          {0, 20},
+		"--after":           {0, 20},
+		"--max-results":     {1, 10000},
+		"--max-line-length": {1, 8388608},
+		"--max-scan-bytes":  {1, 10737418240},
+	}
+	if bound, ok := bounds[name]; ok {
+		number, err := strconv.ParseInt(value, 10, 64)
+		return err == nil && number >= int64(bound[0]) && number <= int64(bound[1])
+	}
+	switch name {
+	case "--scope":
+		return containsOption(value, "source", "body", "title", "path", "metadata", "all")
+	case "--kind":
+		return containsOption(value, "section", "article", "all")
+	case "--type":
+		return containsOption(value, "doc", "post", "page")
+	case "--status":
+		return containsOption(value, "stable", "experimental", "deprecated")
+	case "--publish":
+		return value == "true" || value == "false"
+	default:
+		return true
+	}
+}
+
+func containsOption(value string, options ...string) bool {
+	for _, option := range options {
+		if value == option {
+			return true
+		}
+	}
+	return false
+}
+
+func helpFlagRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func formatArgumentsValid(args []string) bool {
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "--format" {
+			if index+1 >= len(args) || (args[index+1] != "text" && args[index+1] != "json") {
+				return false
+			}
+			index++
+			continue
+		}
+		if strings.HasPrefix(arg, "--format=") {
+			value := strings.TrimPrefix(arg, "--format=")
+			if value != "text" && value != "json" {
+				return false
+			}
+		}
 	}
 	return true
 }
@@ -620,7 +708,7 @@ func classifyCLIError(err error) int {
 
 func isCLIParameterError(err error) bool {
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between"} {
+	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "mutually exclusive", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between"} {
 		if strings.Contains(message, marker) {
 			return true
 		}

@@ -42,7 +42,7 @@ func TestExecuteVersionFormsMatch(t *testing.T) {
 	if outputs[0] != outputs[1] || outputs[0] != "oxpio version=dev commit=unknown date=unknown type=dev\n" {
 		t.Fatalf("version outputs = %#v", outputs)
 	}
-	for _, args := range [][]string{{"version", "extra"}, {"--version", "extra"}, {"--version", "--unknown"}, {"--version", "--format", "bad"}, {"context", "--version", "--unknown"}, {"context", "--version", "--include-unpublished"}, {"read", "article.md", "--version", "--limit", "0"}, {"read", "article.md", "--version", "--limit", "nope"}, {"read", "article.md", "--version", "extra"}} {
+	for _, args := range [][]string{{"version", "extra"}, {"--version", "extra"}, {"--version", "--unknown"}, {"--version", "--format", "bad"}, {"context", "--version", "--unknown"}, {"context", "--version", "--include-unpublished"}, {"serve", "--version", "--port", "0"}, {"serve", "--version", "--port", "nope"}, {"editor", "--version", "--setup", "--reset-password"}, {"grep", "q", "--version", "--context", "21"}, {"read", "article.md", "--version", "--limit", "0"}, {"read", "article.md", "--version", "--limit", "nope"}, {"read", "article.md", "--version", "extra"}, {"help", "missing", "--version", "--format", "json"}} {
 		_, _, err := executeForTest(t, testCommandDependencies(), args)
 		if err == nil {
 			t.Fatalf("executeForTest(%v) error = nil", args)
@@ -63,6 +63,13 @@ func TestExecuteRejectsUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `unknown command "foo" for "oxpio"`) {
 		t.Fatalf("error = %q, want unknown command message", err.Error())
+	}
+}
+
+func TestHelpRejectsInvalidFormatEvenWithCobraHelp(t *testing.T) {
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"read", "--help", "--format", "bad"})
+	if err == nil || stdout != "" || stderr != "" || !strings.Contains(err.Error(), "--format must be text or json") {
+		t.Fatalf("invalid help format = stdout %q, stderr %q, err %v", stdout, stderr, err)
 	}
 }
 
