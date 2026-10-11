@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path"
 	"path/filepath"
@@ -97,7 +98,7 @@ func Execute(args []string) error {
 	if _, ok := err.(interface{ ExitCode() int }); ok {
 		return err
 	}
-	return codedError{err: err, exitCode: classifyCLIError(err)}
+	return codedError{err: errors.New(sanitizeCLIError(err, args)), exitCode: classifyCLIError(err)}
 }
 
 func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, stderr io.Writer) error {
@@ -792,6 +793,10 @@ func classifyCLIError(err error) int {
 	}
 	if strings.Contains(message, "conflict") || strings.Contains(message, "hash mismatch") {
 		return 3
+	}
+	var networkError *net.OpError
+	if errors.As(err, &networkError) {
+		return 5
 	}
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrInvalid) || errors.Is(err, os.ErrClosed) || errors.Is(err, internalapplication.ErrSourceNotFound) {
 		return 5

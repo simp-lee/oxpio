@@ -164,7 +164,8 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 			srv.NotifyReload()
 		},
 		onError: func(err error) {
-			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "watch: %v\n", err)
+			safeArgs := []string{"--vault", normalizedVaultPath, "--output", resolvedOutputPath}
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "watch: %s\n", sanitizeCLIError(err, safeArgs))
 		},
 	}); err != nil {
 		cancel()
