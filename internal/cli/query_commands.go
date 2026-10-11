@@ -21,6 +21,12 @@ func newReadCommand() *cobra.Command {
 		Short: "Read an original Markdown source",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if cmd.Flags().Changed("limit") && (limit < 1 || limit > 10000) {
+				return fmt.Errorf("limit must be between 1 and 10000 when provided")
+			}
+			if offset < 0 {
+				return fmt.Errorf("offset must be >= 0")
+			}
 			snapshot, err := internalapplication.OpenSnapshot(vaultPath, outputPath)
 			if err != nil {
 				return err

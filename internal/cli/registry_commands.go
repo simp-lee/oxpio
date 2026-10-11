@@ -28,6 +28,14 @@ func newHelpCommand() *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if requestedCommand != "" {
+				if _, ok := internalapplication.FindCommand(requestedCommand); !ok {
+					return fmt.Errorf("unknown command %q", requestedCommand)
+				}
+			}
+			if includeUnpublished && strings.TrimSpace(vaultPath) == "" {
+				return fmt.Errorf("--include-unpublished requires --vault")
+			}
 			var dynamic internalapplication.Context
 			var dynamicSet bool
 			if strings.TrimSpace(vaultPath) != "" {
@@ -88,6 +96,9 @@ func newContextCommand() *cobra.Command {
 		Short: "Show Agent capabilities and Vault context",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			if includeUnpublished && strings.TrimSpace(vaultPath) == "" {
+				return fmt.Errorf("--include-unpublished requires --vault")
+			}
 			context := internalapplication.StaticContext()
 			if strings.TrimSpace(vaultPath) != "" {
 				loaded, err := internalapplication.LoadContext(vaultPath, outputPath, includeUnpublished)

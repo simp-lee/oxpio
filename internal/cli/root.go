@@ -104,7 +104,7 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 	effectiveArgs := args
 	if versionFlagRequested(args) {
 		withoutVersion := removeVersionFlags(args)
-		if !hasPositionalArgument(withoutVersion) || registryCommandFromArgs(withoutVersion) != "" {
+		if versionRequestCanDispatch(withoutVersion) {
 			effectiveArgs = []string{"version"}
 			if jsonRequested(args) {
 				effectiveArgs = append(effectiveArgs, "--format", "json")
@@ -233,6 +233,7 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 			return err
 		},
 	}
+	cmd.CompletionOptions.DisableDefaultCmd = true
 	cmd.PersistentFlags().BoolVar(&showVersion, "version", false, "Print the OXPIO version")
 	cmd.PersistentFlags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
@@ -246,7 +247,7 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 	parents := make(map[string]*cobra.Command)
 	for _, spec := range internalapplication.CommandSpecs() {
 		parts := strings.Split(spec.Name, " ")
-		command := commandForSpec(spec, deps)
+		command := configureRegistryCommand(commandForSpec(spec, deps), spec)
 		if len(parts) == 1 {
 			registered[spec.Name] = command
 			continue
@@ -263,6 +264,7 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 					return fmt.Errorf("%s requires a subcommand", name)
 				},
 			}
+			parent.SetHelpFunc(registryParentHelpFunc(name))
 			parents[parentName] = parent
 		}
 		parent.AddCommand(command)
@@ -292,10 +294,67 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 		addedParents[parts[0]] = struct{}{}
 	}
 	cmd.AddCommand(rootCommands...)
+	cmd.SetHelpFunc(registryHelpFunc(""))
 	if helpCommand := registered["help"]; helpCommand != nil {
 		cmd.SetHelpCommand(helpCommand)
 	}
 	return cmd
+}
+
+func configureRegistryCommand(cmd *cobra.Command, spec internalapplication.CommandSpec) *cobra.Command {
+	cmd.Short = spec.Summary
+	cmd.SetHelpFunc(registryHelpFunc(spec.Name))
+	return cmd
+}
+
+func registryHelpFunc(name string) func(*cobra.Command, []string) {
+	return func(cmd *cobra.Command, _ []string) {
+		if formatOf(cmd) == "json" {
+			data, err := registryHelpJSON(name)
+			if err != nil {
+				_, _ = io.WriteString(cmd.OutOrStdout(), err.Error()+"\n")
+				return
+			}
+			_, _ = cmd.OutOrStdout().Write(append(data, '\n'))
+			return
+		}
+		_, _ = io.WriteString(cmd.OutOrStdout(), internalapplication.HelpText(name, false))
+	}
+}
+
+func registryHelpJSON(name string) ([]byte, error) {
+	if name == "" {
+		return internalapplication.HelpJSON(false)
+	}
+	if spec, ok := internalapplication.FindCommand(name); ok {
+		return json.Marshal(struct {
+			Schema  string                          `json:"schema"`
+			Command internalapplication.CommandSpec `json:"command"`
+		}{Schema: "oxpio.agent/help/v1", Command: spec})
+	}
+	commands := make([]internalapplication.CommandSpec, 0)
+	for _, spec := range internalapplication.CommandSpecs() {
+		if strings.HasPrefix(spec.Name, name+" ") {
+			commands = append(commands, spec)
+		}
+	}
+	return json.Marshal(struct {
+		Schema   string                            `json:"schema"`
+		Commands []internalapplication.CommandSpec `json:"commands"`
+	}{Schema: "oxpio.agent/help/v1", Commands: commands})
+}
+
+func registryParentHelpFunc(name string) func(*cobra.Command, []string) {
+	return func(cmd *cobra.Command, _ []string) {
+		var builder strings.Builder
+		builder.WriteString(name + " commands:\n")
+		for _, spec := range internalapplication.CommandSpecs() {
+			if strings.HasPrefix(spec.Name, name+" ") {
+				builder.WriteString("  " + spec.Name + " - " + spec.Summary + "\n")
+			}
+		}
+		_, _ = io.WriteString(cmd.OutOrStdout(), builder.String())
+	}
 }
 
 func commandForSpec(spec internalapplication.CommandSpec, deps commandDependencies) *cobra.Command {
@@ -387,21 +446,95 @@ func removeVersionFlags(args []string) []string {
 	return result
 }
 
-func hasPositionalArgument(args []string) bool {
-	valueFlags := map[string]bool{"--format": true, "--vault": true, "--output": true, "--port": true, "--listen": true}
-	for index, arg := range args {
-		if strings.HasPrefix(arg, "-") {
-			if valueFlags[arg] && index+1 < len(args) && !strings.Contains(arg, "=") {
-				continue
+func versionRequestCanDispatch(args []string) bool {
+	commandName := registryCommandFromArgs(args)
+	allowed := map[string]bool{"--format": true}
+	if commandName != "" {
+		spec, ok := internalapplication.FindCommand(commandName)
+		if !ok {
+			return false
+		}
+		for _, flag := range spec.Flags {
+			if flag.Name != "" && flag.Name != "version" {
+				allowed["--"+flag.Name] = true
+			}
+		}
+	}
+	for index := 0; index < len(args); index++ {
+		arg := args[index]
+		if arg == "-h" || arg == "--help" {
+			continue
+		}
+		if !strings.HasPrefix(arg, "-") {
+			continue
+		}
+		name := arg
+		if equal := strings.IndexByte(name, '='); equal >= 0 {
+			name = name[:equal]
+		}
+		if !allowed[name] {
+			return false
+		}
+		if name == "--format" {
+			value := ""
+			if equal := strings.IndexByte(arg, '='); equal >= 0 {
+				value = arg[equal+1:]
+			} else if index+1 < len(args) {
+				index++
+				value = args[index]
+			} else {
+				return false
+			}
+			if value != "text" && value != "json" {
+				return false
 			}
 			continue
 		}
-		if index > 0 && valueFlags[args[index-1]] {
+		for _, flag := range commandFlags(commandName) {
+			if "--"+flag.Name == name && flag.Value != "" && !strings.Contains(arg, "=") {
+				if index+1 >= len(args) {
+					return false
+				}
+				index++
+				break
+			}
+		}
+	}
+	return commandName != "" || len(args) == 0 || onlyFormatFlags(args)
+}
+
+func commandFlags(commandName string) []internalapplication.FlagSpec {
+	if commandName == "" {
+		return nil
+	}
+	spec, ok := internalapplication.FindCommand(commandName)
+	if !ok {
+		return nil
+	}
+	return spec.Flags
+}
+
+func onlyFormatFlags(args []string) bool {
+	for index := 0; index < len(args); index++ {
+		if args[index] == "--format" {
+			if index+1 >= len(args) || (args[index+1] != "text" && args[index+1] != "json") {
+				return false
+			}
+			index++
 			continue
 		}
-		return true
+		if strings.HasPrefix(args[index], "--format=") {
+			value := strings.TrimPrefix(args[index], "--format=")
+			if value != "text" && value != "json" {
+				return false
+			}
+			continue
+		}
+		if args[index] != "-h" && args[index] != "--help" {
+			return false
+		}
 	}
-	return false
+	return true
 }
 
 func jsonRequested(args []string) bool {
@@ -431,22 +564,12 @@ func registryCommandFromArgs(args []string) string {
 			break
 		}
 	}
-	hasVersion := false
-	for _, arg := range args {
-		if arg == "--version" || arg == "--version=true" {
-			hasVersion = true
-			break
-		}
-	}
 	for len(parts) > 0 {
 		candidate := strings.Join(parts, " ")
 		if _, ok := internalapplication.FindCommand(candidate); ok {
 			return candidate
 		}
 		parts = parts[:len(parts)-1]
-	}
-	if hasVersion {
-		return "version"
 	}
 	return ""
 }

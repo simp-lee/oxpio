@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -41,7 +42,7 @@ func TestExecuteVersionFormsMatch(t *testing.T) {
 	if outputs[0] != outputs[1] || outputs[0] != "oxpio version=dev commit=unknown date=unknown type=dev\n" {
 		t.Fatalf("version outputs = %#v", outputs)
 	}
-	for _, args := range [][]string{{"version", "extra"}, {"--version", "extra"}} {
+	for _, args := range [][]string{{"version", "extra"}, {"--version", "extra"}, {"--version", "--unknown"}, {"--version", "--format", "bad"}, {"context", "--version", "--unknown"}} {
 		_, _, err := executeForTest(t, testCommandDependencies(), args)
 		if err == nil {
 			t.Fatalf("executeForTest(%v) error = nil", args)
@@ -62,6 +63,78 @@ func TestExecuteRejectsUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), `unknown command "foo" for "oxpio"`) {
 		t.Fatalf("error = %q, want unknown command message", err.Error())
+	}
+}
+
+func TestHelpAndContextRejectStaticUnpublishedRequests(t *testing.T) {
+	for _, args := range [][]string{
+		{"help", "--include-unpublished"},
+		{"context", "--include-unpublished"},
+	} {
+		stdout, stderr, err := executeForTest(t, testCommandDependencies(), args)
+		if err == nil || stdout != "" || stderr != "" || !strings.Contains(err.Error(), "requires --vault") {
+			t.Fatalf("executeForTest(%v) = stdout %q, stderr %q, err %v", args, stdout, stderr, err)
+		}
+	}
+}
+
+func TestHelpRejectsUnknownCommandInTextMode(t *testing.T) {
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"help", "missing"})
+	if err == nil || stdout != "" || stderr != "" || !strings.Contains(err.Error(), `unknown command "missing"`) {
+		t.Fatalf("help missing = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+}
+
+func TestRegistryHelpDrivesCobraHelp(t *testing.T) {
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"read", "--help"})
+	if err != nil || stderr != "" || !strings.Contains(stdout, "Side effects: read-only") || !strings.Contains(stdout, "--include-unpublished") {
+		t.Fatalf("read help = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+
+	stdout, stderr, err = executeForTest(t, testCommandDependencies(), []string{"read", "--help", "--format", "json"})
+	if err != nil || stderr != "" {
+		t.Fatalf("read JSON help = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+	var helpEnvelope struct {
+		Data struct {
+			Command struct {
+				Name string `json:"name"`
+			} `json:"command"`
+		} `json:"data"`
+	}
+	if decodeErr := json.Unmarshal([]byte(stdout), &helpEnvelope); decodeErr != nil || helpEnvelope.Data.Command.Name != "read" {
+		t.Fatalf("read JSON help envelope = %q, err=%v", stdout, decodeErr)
+	}
+
+	stdout, stderr, err = executeForTest(t, testCommandDependencies(), []string{"--help"})
+	if err != nil || stderr != "" || strings.Contains(stdout, "completion") || !strings.Contains(stdout, "OXPIO commands:") {
+		t.Fatalf("root help = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+}
+
+func TestUnknownCommandVersionFailureKeepsEmptyIdentity(t *testing.T) {
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"missing", "--version", "--format", "json"})
+	if err == nil || stderr != "" {
+		t.Fatalf("unknown version = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+	var envelope struct {
+		Command string `json:"command"`
+		OK      bool   `json:"ok"`
+	}
+	if decodeErr := json.Unmarshal([]byte(stdout), &envelope); decodeErr != nil {
+		t.Fatalf("decode unknown version envelope: %v (%q)", decodeErr, stdout)
+	}
+	if envelope.OK || envelope.Command != "" {
+		t.Fatalf("unknown version envelope = %#v", envelope)
+	}
+}
+
+func TestReadRejectsExplicitZeroLimit(t *testing.T) {
+	for _, limit := range []string{"0", "10001"} {
+		stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"read", "article.md", "--limit", limit})
+		if err == nil || stdout != "" || stderr != "" || !strings.Contains(err.Error(), "limit must be between") {
+			t.Fatalf("read limit %s = stdout %q, stderr %q, err %v", limit, stdout, stderr, err)
+		}
 	}
 }
 
