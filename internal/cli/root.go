@@ -596,7 +596,7 @@ func versionRequestCanDispatch(args []string) bool {
 		flagSeen[name] = true
 		if flag.Value != "" {
 			if !hasValue {
-				if index+1 >= len(args) {
+				if index+1 >= len(args) || strings.HasPrefix(args[index+1], "-") {
 					return false
 				}
 				index++

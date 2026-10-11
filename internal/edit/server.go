@@ -158,6 +158,14 @@ func (s *Server) ListenAndServe() error {
 	return http.ListenAndServe(s.static.Addr(), s)
 }
 
+// ListenAndServeWithReady binds the editor listener before announcing readiness.
+func (s *Server) ListenAndServeWithReady(ready func() error) error {
+	if s == nil || s.static == nil {
+		return fmt.Errorf("edit server is nil")
+	}
+	return s.static.ListenAndServeWithReadyHandler(s, ready)
+}
+
 // EnableLiveReload enables the existing static-server reload channel.
 func (s *Server) EnableLiveReload() {
 	if s != nil && s.static != nil {

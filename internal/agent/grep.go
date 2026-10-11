@@ -346,7 +346,7 @@ func compileGrepMatcher(options GrepOptions) (*regexp.Regexp, error) {
 		if errors.Is(err, internalsearch.ErrZeroWidth) {
 			return nil, grepError("REGEX_ZERO_WIDTH", "parameter", err.Error(), 2)
 		}
-		return nil, grepError("INVALID_REGEX", "parameter", fmt.Sprintf("invalid RE2 pattern: %v", err), 2)
+		return nil, grepError("INVALID_REGEX", "parameter", "invalid RE2 pattern", 2)
 	}
 	return matcher, nil
 }

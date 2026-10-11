@@ -6,6 +6,7 @@ import (
 	"fmt"
 	stdhtml "html"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -142,6 +143,29 @@ func (s *Server) ListenAndServe() error {
 	}
 
 	return http.ListenAndServe(s.Addr(), s)
+}
+
+// ListenAndServeWithReady binds the listener before announcing readiness.
+func (s *Server) ListenAndServeWithReady(ready func() error) error {
+	return s.ListenAndServeWithReadyHandler(s, ready)
+}
+
+// ListenAndServeWithReadyHandler shares this server's validated listener with another handler.
+func (s *Server) ListenAndServeWithReadyHandler(handler http.Handler, ready func() error) error {
+	if s == nil {
+		return fmt.Errorf("server is nil")
+	}
+	listener, err := net.Listen("tcp", s.Addr())
+	if err != nil {
+		return err
+	}
+	if ready != nil {
+		if err := ready(); err != nil {
+			_ = listener.Close()
+			return err
+		}
+	}
+	return http.Serve(listener, handler)
 }
 
 // EnableLiveReload turns on the SSE endpoint and HTML script injection used by watch mode.

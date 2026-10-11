@@ -81,10 +81,7 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 			if err != nil {
 				return errors.Join(fmt.Errorf("create preview server: %w", err), closePreviewServer(srv))
 			}
-			if err := announceService(cmd, "127.0.0.1", port); err != nil {
-				return errors.Join(err, closePreviewServer(srv))
-			}
-			listenErr := srv.ListenAndServe()
+			listenErr := listenAndAnnounce(cmd, srv, "127.0.0.1", port)
 			closeErr := closePreviewServer(srv)
 			if listenErr != nil {
 				return errors.Join(fmt.Errorf("listen and serve: %w", listenErr), closeErr)
@@ -177,14 +174,23 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 		runErr = errors.Join(runErr, watchErr, closePreviewServer(srv))
 	}()
 
-	if err := announceService(cmd, "127.0.0.1", port); err != nil {
-		return err
-	}
-	if err := srv.ListenAndServe(); err != nil {
+	if err := listenAndAnnounce(cmd, srv, "127.0.0.1", port); err != nil {
 		return fmt.Errorf("listen and serve: %w", err)
 	}
 
 	return nil
+}
+
+func listenAndAnnounce(cmd *cobra.Command, srv previewServer, host string, port int) error {
+	if readyServer, ok := srv.(interface{ ListenAndServeWithReady(func() error) error }); ok {
+		return readyServer.ListenAndServeWithReady(func() error {
+			return announceService(cmd, host, port)
+		})
+	}
+	if err := announceService(cmd, host, port); err != nil {
+		return err
+	}
+	return srv.ListenAndServe()
 }
 
 func announceService(cmd *cobra.Command, host string, port int) error {
