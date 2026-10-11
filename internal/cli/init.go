@@ -1,12 +1,16 @@
 package cli
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
+	internalagent "github.com/simp-lee/oxpio/internal/agent"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/spf13/cobra"
@@ -35,7 +39,21 @@ func newInitCommand() *cobra.Command {
 				}
 				return err
 			}
-			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Created %s. Replace baseURL before publishing.\n", filepath.Join(resolvedVault, defaultConfigFilename))
+			if formatOf(cmd) == "json" {
+				data, marshalErr := json.Marshal(struct {
+					Created []string               `json:"created"`
+					Changes []internalagent.Change `json:"changes"`
+				}{
+					Created: []string{defaultConfigFilename, "_index.md"},
+					Changes: initChanges(),
+				})
+				if marshalErr != nil {
+					return marshalErr
+				}
+				_, err = cmd.OutOrStdout().Write(append(data, '\n'))
+				return err
+			}
+			_, err = fmt.Fprintf(cmd.OutOrStdout(), "Created %s and _index.md. Replace baseURL before publishing.\n", defaultConfigFilename)
 			return err
 		},
 	}
@@ -96,6 +114,20 @@ func prepareInitVault(rawPath string) (string, bool, error) {
 		return "", false, fmt.Errorf("create vault path %q: %w", createdPath, err)
 	}
 	return createdPath, true, nil
+}
+
+func initChanges() []internalagent.Change {
+	configHash := hashInitContents(initConfigTemplate)
+	rootHash := hashInitContents(initRootTemplate)
+	return []internalagent.Change{
+		{Kind: "create", Domain: "config", Path: defaultConfigFilename, AfterHash: &configHash},
+		{Kind: "create", Domain: "source", Path: "_index.md", AfterHash: &rootHash},
+	}
+}
+
+func hashInitContents(contents string) string {
+	sum := sha256.Sum256([]byte(contents))
+	return hex.EncodeToString(sum[:])
 }
 
 func writeInitFiles(vaultPath string) error {

@@ -38,10 +38,17 @@ type Envelope struct {
 }
 
 func Success(command string, data json.RawMessage) Envelope {
+	return SuccessWithChanges(command, data, nil)
+}
+
+func SuccessWithChanges(command string, data json.RawMessage, changes []Change) Envelope {
 	if len(data) == 0 {
 		data = json.RawMessage("null")
 	}
-	return Envelope{Schema: Schema, OK: true, Command: command, Data: data, Diagnostics: []Diagnostic{}, Changes: []Change{}}
+	if changes == nil {
+		changes = []Change{}
+	}
+	return Envelope{Schema: Schema, OK: true, Command: command, Data: data, Diagnostics: []Diagnostic{}, Changes: changes}
 }
 
 func Failure(command, code, category, message string) Envelope {
@@ -49,11 +56,20 @@ func Failure(command, code, category, message string) Envelope {
 }
 
 func FailureWithDiagnostics(command string, diagnostics []Diagnostic) Envelope {
+	return FailureWithDataAndDiagnostics(command, nil, diagnostics)
+}
+
+// FailureWithDataAndDiagnostics preserves an analysis summary while keeping a
+// failed command's envelope unsuccessful and free of uncommitted changes.
+func FailureWithDataAndDiagnostics(command string, data json.RawMessage, diagnostics []Diagnostic) Envelope {
 	if len(diagnostics) == 0 {
 		diagnostics = []Diagnostic{{Code: "COMMAND_ERROR", Severity: "error", Category: "command", Message: "command failed"}}
 	}
+	if len(data) == 0 {
+		data = json.RawMessage("null")
+	}
 	return Envelope{
-		Schema: Schema, OK: false, Command: command, Data: json.RawMessage("null"),
+		Schema: Schema, OK: false, Command: command, Data: data,
 		Diagnostics: diagnostics,
 		Changes:     []Change{},
 	}

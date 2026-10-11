@@ -101,14 +101,24 @@ func Execute(args []string) error {
 
 func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, stderr io.Writer) error {
 	root := newRootCommand(deps)
+	effectiveArgs := args
+	if versionFlagRequested(args) {
+		withoutVersion := removeVersionFlags(args)
+		if !hasPositionalArgument(withoutVersion) || registryCommandFromArgs(withoutVersion) != "" {
+			effectiveArgs = []string{"version"}
+			if jsonRequested(args) {
+				effectiveArgs = append(effectiveArgs, "--format", "json")
+			}
+		}
+	}
 	if jsonRequested(args) {
 		var commandOutput bytes.Buffer
 		var commandErrors bytes.Buffer
 		root.SetOut(&commandOutput)
 		root.SetErr(&commandErrors)
-		root.SetArgs(args)
+		root.SetArgs(effectiveArgs)
 		err := root.Execute()
-		command := registryCommandFromArgs(args)
+		command := registryCommandFromArgs(effectiveArgs)
 		var data json.RawMessage
 		if commandOutput.Len() != 0 {
 			trimmed := bytes.TrimSpace(commandOutput.Bytes())
@@ -127,16 +137,24 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 			if len(diagnostics) == 0 {
 				diagnostics = parseCLIErrorDiagnostics(commandErrors.String(), args)
 			}
+			if len(diagnostics) == 0 && classifyCLIError(err) == 4 {
+				diagnostics = []internalagent.Diagnostic{{Code: "PERMISSION_DENIED", Severity: "error", Category: "permission", Message: sanitizeCLIError(err, args)}}
+			}
 			if len(diagnostics) == 0 && isCLIParameterError(err) {
 				diagnostics = []internalagent.Diagnostic{{Code: "INVALID_ARGUMENT", Severity: "error", Category: "parameter", Message: sanitizeCLIError(err, args)}}
 			}
+			failureData := json.RawMessage(nil)
+			if command == "validate" || command == "theme validate" {
+				failureData = data
+			}
 			if len(diagnostics) == 0 {
-				envelope = internalagent.Failure(command, "COMMAND_ERROR", "command", sanitizeCLIError(err, args))
+				envelope = internalagent.FailureWithDataAndDiagnostics(command, failureData, []internalagent.Diagnostic{{Code: "COMMAND_ERROR", Severity: "error", Category: "command", Message: sanitizeCLIError(err, args)}})
 			} else {
-				envelope = internalagent.FailureWithDiagnostics(command, sanitizeDiagnostics(diagnostics, args))
+				envelope = internalagent.FailureWithDataAndDiagnostics(command, failureData, sanitizeDiagnostics(diagnostics, args))
 			}
 		} else {
-			envelope = internalagent.Success(command, data)
+			data, changes := splitChangesData(data)
+			envelope = internalagent.SuccessWithChanges(command, data, changes)
 		}
 		if stdout != nil {
 			if writeErr := internalagent.Write(stdout, envelope); writeErr != nil {
@@ -154,7 +172,7 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 	if stderr != nil {
 		root.SetErr(stderr)
 	}
-	root.SetArgs(args)
+	root.SetArgs(effectiveArgs)
 	return root.Execute()
 }
 
@@ -192,6 +210,14 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if showVersion {
+				if format == "json" {
+					data, err := json.Marshal(map[string]string{"version": formatVersion()})
+					if err != nil {
+						return err
+					}
+					_, err = cmd.OutOrStdout().Write(append(data, '\n'))
+					return err
+				}
 				_, err := fmt.Fprintln(cmd.OutOrStdout(), formatVersion())
 				return err
 			}
@@ -207,7 +233,7 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().BoolVar(&showVersion, "version", false, "Print the OXPIO version")
+	cmd.PersistentFlags().BoolVar(&showVersion, "version", false, "Print the OXPIO version")
 	cmd.PersistentFlags().StringVar(&format, "format", "text", "Output format: text or json")
 	cmd.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		if format != "text" && format != "json" {
@@ -228,7 +254,15 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 		parentName := parts[0]
 		parent := parents[parentName]
 		if parent == nil {
-			parent = &cobra.Command{Use: parentName, Short: parentName + " commands", Args: cobra.NoArgs}
+			name := parentName
+			parent = &cobra.Command{
+				Use:   name,
+				Short: name + " commands",
+				Args:  cobra.NoArgs,
+				RunE: func(*cobra.Command, []string) error {
+					return fmt.Errorf("%s requires a subcommand", name)
+				},
+			}
 			parents[parentName] = parent
 		}
 		parent.AddCommand(command)
@@ -258,6 +292,9 @@ func newRootCommand(deps commandDependencies) *cobra.Command {
 		addedParents[parts[0]] = struct{}{}
 	}
 	cmd.AddCommand(rootCommands...)
+	if helpCommand := registered["help"]; helpCommand != nil {
+		cmd.SetHelpCommand(helpCommand)
+	}
 	return cmd
 }
 
@@ -330,6 +367,43 @@ func resolveOptionalVaultFlag(value string) (string, error) {
 	return resolveVaultPath(value)
 }
 
+func versionFlagRequested(args []string) bool {
+	for _, arg := range args {
+		if arg == "--version" || arg == "--version=true" {
+			return true
+		}
+	}
+	return false
+}
+
+func removeVersionFlags(args []string) []string {
+	result := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--version" || arg == "--version=true" {
+			continue
+		}
+		result = append(result, arg)
+	}
+	return result
+}
+
+func hasPositionalArgument(args []string) bool {
+	valueFlags := map[string]bool{"--format": true, "--vault": true, "--output": true, "--port": true, "--listen": true}
+	for index, arg := range args {
+		if strings.HasPrefix(arg, "-") {
+			if valueFlags[arg] && index+1 < len(args) && !strings.Contains(arg, "=") {
+				continue
+			}
+			continue
+		}
+		if index > 0 && valueFlags[args[index-1]] {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 func jsonRequested(args []string) bool {
 	for index, arg := range args {
 		if arg == "--format=json" {
@@ -357,12 +431,22 @@ func registryCommandFromArgs(args []string) string {
 			break
 		}
 	}
+	hasVersion := false
+	for _, arg := range args {
+		if arg == "--version" || arg == "--version=true" {
+			hasVersion = true
+			break
+		}
+	}
 	for len(parts) > 0 {
 		candidate := strings.Join(parts, " ")
 		if _, ok := internalapplication.FindCommand(candidate); ok {
 			return candidate
 		}
 		parts = parts[:len(parts)-1]
+	}
+	if hasVersion {
+		return "version"
 	}
 	return ""
 }
@@ -376,11 +460,14 @@ func classifyCLIError(err error) int {
 		return coded.ExitCode()
 	}
 	message := strings.ToLower(err.Error())
-	if strings.Contains(message, "permission") || strings.Contains(message, "not available in the selected read scope") {
+	if errors.Is(err, os.ErrPermission) || strings.Contains(message, "permission") || strings.Contains(message, "not available in the selected read scope") {
 		return 4
 	}
 	if strings.Contains(message, "conflict") || strings.Contains(message, "hash mismatch") {
 		return 3
+	}
+	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrInvalid) || errors.Is(err, os.ErrClosed) {
+		return 5
 	}
 	if strings.Contains(message, "unknown command") || strings.Contains(message, "unknown flag") || strings.Contains(message, "accepts no") || strings.Contains(message, "accepts at most") || strings.Contains(message, "must be true or false") || strings.Contains(message, "--format must") || isCLIParameterError(err) {
 		return 2
@@ -390,12 +477,36 @@ func classifyCLIError(err error) int {
 
 func isCLIParameterError(err error) bool {
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "parsing error"} {
+	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between"} {
 		if strings.Contains(message, marker) {
 			return true
 		}
 	}
 	return false
+}
+
+func splitChangesData(data json.RawMessage) (json.RawMessage, []internalagent.Change) {
+	if len(data) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
+		return data, nil
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(data, &object); err != nil {
+		return data, nil
+	}
+	changesValue, ok := object["changes"]
+	if !ok {
+		return data, nil
+	}
+	var changes []internalagent.Change
+	if err := json.Unmarshal(changesValue, &changes); err != nil {
+		return data, nil
+	}
+	delete(object, "changes")
+	withoutChanges, err := json.Marshal(object)
+	if err != nil {
+		return data, nil
+	}
+	return withoutChanges, changes
 }
 
 func structuredErrorDiagnostics(err error) []internalagent.Diagnostic {
@@ -418,22 +529,58 @@ func sanitizeDiagnostics(diagnostics []internalagent.Diagnostic, args []string) 
 	result := make([]internalagent.Diagnostic, 0, len(diagnostics))
 	for _, diagnostic := range diagnostics {
 		diagnostic.Message = sanitizeCLIText(diagnostic.Message, args)
-		diagnostic.Path = sanitizeDiagnosticPath(diagnostic.Path)
-		diagnostic.Target = sanitizeDiagnosticPath(diagnostic.Target)
+		diagnostic.Path = sanitizeDiagnosticPath(diagnostic.Path, args)
+		diagnostic.Target = sanitizeDiagnosticPath(diagnostic.Target, args)
 		result = append(result, diagnostic)
 	}
 	return result
 }
 
-func sanitizeDiagnosticPath(value *string) *string {
+func sanitizeDiagnosticPath(value *string, args []string) *string {
 	if value == nil || strings.TrimSpace(*value) == "" {
 		return nil
 	}
 	candidate := filepath.ToSlash(strings.TrimSpace(*value))
-	if filepath.IsAbs(candidate) || candidate == "." || candidate == ".." || strings.HasPrefix(candidate, "../") || strings.Contains(candidate, "/../") || strings.Contains(candidate, "\\") {
+	if filepath.IsAbs(candidate) || isWindowsAbsolutePath(candidate) {
+		if relative, ok := relativeVaultPath(candidate, args); ok {
+			return &relative
+		}
+		return nil
+	}
+	if candidate == "." || candidate == ".." || strings.HasPrefix(candidate, "../") || strings.Contains(candidate, "/../") || strings.Contains(candidate, "\\") {
 		return nil
 	}
 	return &candidate
+}
+
+func relativeVaultPath(candidate string, args []string) (string, bool) {
+	vaultValue := flagArgument(args, "--vault")
+	if strings.TrimSpace(vaultValue) == "" {
+		vaultValue = "."
+	}
+	vault, err := filepath.Abs(vaultValue)
+	if err != nil {
+		return "", false
+	}
+	if resolved, resolveErr := filepath.EvalSymlinks(vault); resolveErr == nil {
+		vault = resolved
+	}
+	resolved := candidate
+	if absolute, absErr := filepath.Abs(candidate); absErr == nil {
+		resolved = absolute
+	}
+	if real, resolveErr := filepath.EvalSymlinks(resolved); resolveErr == nil {
+		resolved = real
+	}
+	relative, err := filepath.Rel(vault, resolved)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	relative = filepath.ToSlash(relative)
+	if relative == "" || strings.Contains(relative, "\\") {
+		return "", false
+	}
+	return relative, true
 }
 
 func redactHiddenDiagnostics(diagnostics []internalagent.Diagnostic, planned *internalsiteplan.Result) []internalagent.Diagnostic {

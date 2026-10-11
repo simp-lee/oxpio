@@ -27,10 +27,11 @@ type CommandSpec struct {
 	ReadScope    string     `json:"readScope"`
 	WriteScope   string     `json:"writeScope"`
 	OutputFields []string   `json:"outputFields,omitempty"`
+	Examples     []string   `json:"examples,omitempty"`
 }
 
 var commandSpecs = []CommandSpec{
-	{Name: "help", Summary: "Show command help and Agent workflow", Flags: []FlagSpec{{Name: "agent", Summary: "Show the concise Agent workflow"}}, SideEffects: "none", ReadScope: "none", WriteScope: "none", OutputFields: []string{"commands", "workflow"}},
+	{Name: "help", Summary: "Show command help and Agent workflow", Arguments: "[COMMAND]", Flags: []FlagSpec{{Name: "agent", Summary: "Show the concise Agent workflow"}, {Name: "include-unpublished", Summary: "Include unpublished capability details"}}, SideEffects: "none", ReadScope: "none", WriteScope: "none", OutputFields: []string{"commands", "workflow"}},
 	{Name: "context", Summary: "Show static or Vault-specific Agent capabilities", Flags: []FlagSpec{{Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "oxpio.yaml and Markdown sources", WriteScope: "none", OutputFields: []string{"apiVersion", "theme", "capabilities"}},
 	{Name: "init", Summary: "Create a minimal OXPIO Vault", SideEffects: "creates missing Vault files", ReadScope: "Vault boundary", WriteScope: "oxpio.yaml and _index.md", OutputFields: []string{"created"}},
 	{Name: "validate", Summary: "Analyze a Vault without publishing", Flags: []FlagSpec{{Name: "output", Value: "PATH", Summary: "Formal output boundary"}}, SideEffects: "read-only", ReadScope: "Vault and selected output boundary", WriteScope: "none", OutputFields: []string{"errors", "warnings"}},
@@ -41,13 +42,13 @@ var commandSpecs = []CommandSpec{
 	{Name: "config read", Summary: "Read a redacted configuration summary", SideEffects: "read-only", ReadScope: "oxpio.yaml", WriteScope: "none", OutputFields: []string{"configured", "hash", "config"}},
 	{Name: "config edit", Summary: "Patch configuration bytes with CAS", Flags: []FlagSpec{{Name: "if-hash", Value: "SHA256", Required: true}, {Name: "edits-file", Value: "FILE|-", Required: true}}, SideEffects: "source mutation", ReadScope: "oxpio.yaml", WriteScope: "oxpio.yaml", OutputFields: []string{"changes", "next"}},
 	{Name: "config write", Summary: "Replace configuration bytes with CAS", Flags: []FlagSpec{{Name: "if-hash", Value: "SHA256|absent", Required: true}, {Name: "content-file", Value: "FILE|-", Required: true}}, SideEffects: "source mutation", ReadScope: "oxpio.yaml", WriteScope: "oxpio.yaml", OutputFields: []string{"changes", "next"}},
-	{Name: "read", Summary: "Read an original Markdown source", Arguments: "PATH", Flags: []FlagSpec{{Name: "offset", Value: "LINE", Summary: "0-based starting line"}, {Name: "limit", Value: "LINES", Summary: "Maximum number of lines"}, {Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "Vault-relative Markdown", WriteScope: "none", OutputFields: []string{"path", "content", "hash", "offset", "limit", "totalLines", "eof"}},
+	{Name: "read", Summary: "Read an original Markdown source", Arguments: "PATH", Flags: []FlagSpec{{Name: "offset", Value: "LINE", Default: "0", Summary: "0-based starting line"}, {Name: "limit", Value: "LINES", Summary: "Maximum number of lines; omitted reads to EOF"}, {Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "Vault-relative Markdown", WriteScope: "none", OutputFields: []string{"path", "content", "hash", "offset", "limit", "totalLines", "eof"}},
 	{Name: "write", Summary: "Replace one Markdown source with CAS", Arguments: "PATH", Flags: []FlagSpec{{Name: "if-hash", Value: "SHA256|absent", Required: true}, {Name: "content-file", Value: "FILE|-", Required: true}, {Name: "include-unpublished", Summary: "Include unpublished source"}, {Name: "publish", Summary: "Explicitly publish source"}, {Name: "unpublish", Summary: "Explicitly unpublish source"}, {Name: "dry-run", Summary: "Do not write"}}, SideEffects: "source mutation", ReadScope: "Vault-relative Markdown", WriteScope: "Markdown source", OutputFields: []string{"changes", "publish"}},
 	{Name: "edit", Summary: "Apply exact source text patches with CAS", Arguments: "PATH", Flags: []FlagSpec{{Name: "if-hash", Value: "SHA256", Required: true}, {Name: "edits-file", Value: "FILE|-", Required: true}, {Name: "include-unpublished", Summary: "Include unpublished source"}, {Name: "publish", Summary: "Explicitly publish source"}, {Name: "unpublish", Summary: "Explicitly unpublish source"}, {Name: "dry-run", Summary: "Do not write"}}, SideEffects: "source mutation", ReadScope: "Vault-relative Markdown", WriteScope: "Markdown source", OutputFields: []string{"changes", "publish"}},
 	{Name: "move", Summary: "Move one Markdown article with CAS", Arguments: "SOURCE DEST", Flags: []FlagSpec{{Name: "if-hash", Value: "SHA256", Required: true}, {Name: "dest-if-hash", Value: "absent", Required: true}, {Name: "include-unpublished", Summary: "Include unpublished source"}, {Name: "dry-run", Summary: "Do not write"}}, SideEffects: "source mutation", ReadScope: "Vault-relative Markdown", WriteScope: "Markdown source", OutputFields: []string{"changes"}},
 	{Name: "delete", Summary: "Delete one Markdown article with CAS", Arguments: "PATH", Flags: []FlagSpec{{Name: "if-hash", Value: "SHA256", Required: true}, {Name: "include-unpublished", Summary: "Include unpublished source"}, {Name: "dry-run", Summary: "Do not write"}}, SideEffects: "source mutation", ReadScope: "Vault-relative Markdown", WriteScope: "Markdown source", OutputFields: []string{"changes"}},
-	{Name: "mkdir", Summary: "Create one Vault directory", Arguments: "PATH", SideEffects: "directory mutation", ReadScope: "Vault-relative directory", WriteScope: "Vault directory", OutputFields: []string{"changes"}},
-	{Name: "rename-dir", Summary: "Rename one empty Vault directory", Arguments: "SOURCE DEST", SideEffects: "directory mutation", ReadScope: "Vault-relative directory", WriteScope: "Vault directory", OutputFields: []string{"changes"}},
+	{Name: "mkdir", Summary: "Create one Vault directory", Arguments: "PATH", Flags: []FlagSpec{{Name: "dry-run", Summary: "Do not write"}}, SideEffects: "directory mutation", ReadScope: "Vault-relative directory", WriteScope: "Vault directory", OutputFields: []string{"changes"}},
+	{Name: "rename-dir", Summary: "Rename one empty Vault directory", Arguments: "SOURCE DEST", Flags: []FlagSpec{{Name: "dry-run", Summary: "Do not write"}}, SideEffects: "directory mutation", ReadScope: "Vault-relative directory", WriteScope: "Vault directory", OutputFields: []string{"changes"}},
 	{Name: "recover", Summary: "Inspect or recover a publish transaction", Flags: []FlagSpec{{Name: "dry-run", Summary: "Only report recovery"}}, SideEffects: "transaction recovery", ReadScope: ".oxpio/transactions", WriteScope: "transaction state", OutputFields: []string{"recovered"}},
 	{Name: "upload", Summary: "Create one Markdown or attachment file", Arguments: "DIR", Flags: []FlagSpec{{Name: "file", Value: "FILE|-", Required: true}, {Name: "name", Value: "NAME"}, {Name: "kind", Value: "article|section-index|attachment", Required: true}, {Name: "if-hash", Value: "absent", Required: true}, {Name: "include-unpublished", Summary: "Allow unpublished source"}, {Name: "dry-run", Summary: "Do not write"}}, SideEffects: "source mutation", ReadScope: "Vault-relative directory", WriteScope: "new source or attachment", OutputFields: []string{"changes"}},
 	{Name: "find", Summary: "Find normalized Markdown sources", Flags: []FlagSpec{{Name: "path", Value: "PATH", Summary: "Vault-relative prefix"}, {Name: "kind", Value: "section|article|all", Summary: "Source kind"}, {Name: "section", Value: "PATH", Summary: "Section prefix"}, {Name: "publish", Value: "true|false", Summary: "Publication state"}, {Name: "include-unpublished", Summary: "Include unpublished source"}}, SideEffects: "read-only", ReadScope: "Vault Markdown", WriteScope: "none", OutputFields: []string{"items"}},
@@ -58,7 +59,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "theme context", Summary: "Describe the theme View Model contract", SideEffects: "read-only", ReadScope: "selected theme", WriteScope: "none", OutputFields: []string{"apiVersion", "theme", "pages"}},
 	{Name: "theme validate", Summary: "Validate a local or embedded theme", Flags: []FlagSpec{{Name: "theme", Value: "ID", Summary: "Temporarily select a theme"}}, SideEffects: "read-only", ReadScope: "selected theme", WriteScope: "none", OutputFields: []string{"errors", "warnings"}},
 	{Name: "theme init", Summary: "Create an editable local theme scaffold", Arguments: "[NAME]", Flags: []FlagSpec{{Name: "dry-run", Summary: "Do not write"}}, SideEffects: "theme mutation", ReadScope: "theme boundary", WriteScope: ".oxpio/themes/<id>", OutputFields: []string{"changes", "theme"}},
-	{Name: "theme read", Summary: "Read a local theme file", Arguments: "PATH", SideEffects: "read-only", ReadScope: "theme boundary", WriteScope: "none", OutputFields: []string{"path", "content", "hash", "size"}},
+	{Name: "theme read", Summary: "Read a local theme file", Arguments: "PATH", Flags: []FlagSpec{{Name: "raw", Summary: "Write binary bytes in text mode"}}, SideEffects: "read-only", ReadScope: "theme boundary", WriteScope: "none", OutputFields: []string{"path", "content", "hash", "size"}},
 	{Name: "theme write", Summary: "Replace a local theme file with CAS", Arguments: "PATH", Flags: []FlagSpec{{Name: "if-hash", Value: "SHA256|absent", Required: true}, {Name: "content-file", Value: "FILE|-", Required: true}, {Name: "dry-run", Summary: "Do not write"}}, SideEffects: "theme mutation", ReadScope: "theme boundary", WriteScope: "theme file", OutputFields: []string{"changes"}},
 	{Name: "theme edit", Summary: "Patch a local theme text file with CAS", Arguments: "PATH", Flags: []FlagSpec{{Name: "if-hash", Value: "SHA256", Required: true}, {Name: "edits-file", Value: "FILE|-", Required: true}, {Name: "dry-run", Summary: "Do not write"}}, SideEffects: "theme mutation", ReadScope: "theme boundary", WriteScope: "theme file", OutputFields: []string{"changes"}},
 	{Name: "theme preview", Summary: "Run an isolated local theme preview", Flags: []FlagSpec{{Name: "theme", Value: "ID", Summary: "Temporarily select a theme"}, {Name: "output", Value: "PATH", Summary: "Validate formal boundary only"}}, SideEffects: "serves isolated preview", ReadScope: "Vault and selected theme", WriteScope: "none", OutputFields: []string{"address", "preview"}},
@@ -76,6 +77,7 @@ func CommandSpecs() []CommandSpec {
 func enrichCommandSpec(spec CommandSpec) CommandSpec {
 	spec.Flags = append([]FlagSpec(nil), spec.Flags...)
 	spec.OutputFields = append([]string(nil), spec.OutputFields...)
+	spec.Examples = append([]string(nil), spec.Examples...)
 	addFlag := func(name, value, summary string) {
 		for _, flag := range spec.Flags {
 			if flag.Name == name {
@@ -84,10 +86,19 @@ func enrichCommandSpec(spec CommandSpec) CommandSpec {
 		}
 		spec.Flags = append(spec.Flags, FlagSpec{Name: name, Value: value, Summary: summary})
 	}
+	setDefault := func(name, value string) {
+		for index := range spec.Flags {
+			if spec.Flags[index].Name == name {
+				spec.Flags[index].Default = value
+				return
+			}
+		}
+	}
 	if spec.Name != "version" {
 		addFlag("vault", "PATH", "Path to the Vault")
 	}
 	addFlag("format", "text|json", "Output format")
+	addFlag("version", "", "Print the OXPIO version")
 	if spec.Name == "context" || spec.Name == "find" || spec.Name == "ls" || spec.Name == "read" || spec.Name == "tags" || spec.Name == "grep" {
 		addFlag("output", "PATH", "Formal output boundary")
 	}
@@ -99,6 +110,22 @@ func enrichCommandSpec(spec CommandSpec) CommandSpec {
 	}
 	if spec.Name == "theme preview" {
 		addFlag("port", "NUM", "Listener port")
+	}
+	setDefault("format", "text")
+	if spec.Name != "version" && spec.Name != "help" && spec.Name != "context" {
+		setDefault("vault", ".")
+	}
+	if spec.Name == "validate" || spec.Name == "publish" || spec.Name == "serve" || spec.Name == "editor" || spec.Name == "theme preview" || spec.Name == "find" || spec.Name == "ls" || spec.Name == "read" || spec.Name == "tags" || spec.Name == "grep" {
+		setDefault("output", "<vault>/public")
+	}
+	if spec.Name == "serve" || spec.Name == "editor" || spec.Name == "theme preview" {
+		setDefault("port", "8080")
+	}
+	if spec.Name == "editor" {
+		setDefault("listen", "127.0.0.1")
+	}
+	if len(spec.Examples) == 0 {
+		spec.Examples = []string{"oxpio " + spec.Name}
 	}
 	return spec
 }
@@ -167,6 +194,14 @@ func HelpText(command string, agentOnly bool) string {
 						b.WriteString(" - ")
 						b.WriteString(flag.Summary)
 					}
+					b.WriteByte('\n')
+				}
+			}
+			if len(spec.Examples) != 0 {
+				b.WriteString("Examples:\n")
+				for _, example := range spec.Examples {
+					b.WriteString("  ")
+					b.WriteString(example)
 					b.WriteByte('\n')
 				}
 			}

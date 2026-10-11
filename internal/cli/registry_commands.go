@@ -123,19 +123,15 @@ func newRegistryPlaceholder(spec internalapplication.CommandSpec) *cobra.Command
 	cmd := &cobra.Command{
 		Use:   use,
 		Short: spec.Summary,
-		Args: func(cmd *cobra.Command, args []string) error {
-			if spec.Arguments == "" && len(args) != 0 {
-				return fmt.Errorf("%s accepts no positional arguments", spec.Name)
-			}
-			return nil
-		},
+		Args:  registryArgumentValidator(spec),
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return fmt.Errorf("%s is not available yet", spec.Name)
 		},
 	}
-	cmd.Flags().String("vault", "", "Path to the Vault")
 	for _, flag := range spec.Flags {
-		if flag.Name == "" || flag.Name == "vault" {
+		// --format is a root persistent flag and must not be shadowed by a
+		// placeholder's local flag; every other flag comes from the registry.
+		if flag.Name == "" || flag.Name == "format" || flag.Name == "version" {
 			continue
 		}
 		if flag.Value != "" {
@@ -150,4 +146,15 @@ func newRegistryPlaceholder(spec internalapplication.CommandSpec) *cobra.Command
 		}
 	}
 	return cmd
+}
+
+func registryArgumentValidator(spec internalapplication.CommandSpec) func(*cobra.Command, []string) error {
+	arguments := strings.Fields(spec.Arguments)
+	if len(arguments) == 0 {
+		return cobra.NoArgs
+	}
+	if len(arguments) == 1 && strings.HasPrefix(arguments[0], "[") && strings.HasSuffix(arguments[0], "]") {
+		return cobra.MaximumNArgs(1)
+	}
+	return cobra.ExactArgs(len(arguments))
 }

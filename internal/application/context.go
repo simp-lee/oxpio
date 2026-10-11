@@ -21,8 +21,11 @@ type Context struct {
 	Theme              string         `json:"theme"`
 	AvailableThemes    []ThemeSummary `json:"availableThemes"`
 	ContentKinds       []string       `json:"contentKinds"`
+	PageKinds          []string       `json:"pageKinds"`
 	Sections           int            `json:"sections"`
 	Sources            int            `json:"sources"`
+	SectionPaths       []string       `json:"sectionPaths"`
+	Versions           []string       `json:"versions"`
 	IncludeUnpublished bool           `json:"includeUnpublished"`
 	WritableDomains    []string       `json:"writableDomains"`
 	PublishPolicy      string         `json:"publishPolicy"`
@@ -44,9 +47,12 @@ func StaticContext() Context {
 		Theme:           internalconfig.ThemeBaseID,
 		AvailableThemes: []ThemeSummary{{ID: internalconfig.ThemeBaseID, APIVersion: 1, Selected: true}},
 		ContentKinds:    []string{"section", "article", "doc", "post", "page"},
+		PageKinds:       []string{"section", "article", "tag", "timeline", "404"},
+		SectionPaths:    []string{},
+		Versions:        []string{},
 		WritableDomains: []string{"Markdown source", "theme files", "attachments.directory"},
 		PublishPolicy:   "source mutations do not publish; publish is explicit",
-		Capabilities:    []string{"find", "ls", "read", "grep", "tags", "write", "edit", "validate", "publish", "theme"},
+		Capabilities:    contextCapabilities(),
 	}
 }
 
@@ -84,6 +90,8 @@ func LoadContext(vaultPath, outputPath string, includeUnpublished bool) (Context
 	}
 	sections := 0
 	sources := 0
+	sectionPaths := make(map[string]struct{})
+	versions := make(map[string]struct{})
 	for _, entry := range catalog.Entries {
 		if !includeUnpublished && !entry.EffectivePublish {
 			continue
@@ -91,8 +99,22 @@ func LoadContext(vaultPath, outputPath string, includeUnpublished bool) (Context
 		sources++
 		if entry.Kind == "section" {
 			sections++
+			sectionPaths[entry.SectionPath] = struct{}{}
+		}
+		if entry.VersionID != "" {
+			versions[entry.VersionID] = struct{}{}
 		}
 	}
+	sectionList := make([]string, 0, len(sectionPaths))
+	for sectionPath := range sectionPaths {
+		sectionList = append(sectionList, sectionPath)
+	}
+	sort.Strings(sectionList)
+	versionList := make([]string, 0, len(versions))
+	for versionID := range versions {
+		versionList = append(versionList, versionID)
+	}
+	sort.Strings(versionList)
 	vaultName := filepath.Base(resolvedVault)
 	if vaultName == string(filepath.Separator) || vaultName == "." || vaultName == "" {
 		vaultName = "<vault>"
@@ -104,13 +126,20 @@ func LoadContext(vaultPath, outputPath string, includeUnpublished bool) (Context
 		Theme:              cfg.Theme,
 		AvailableThemes:    themes,
 		ContentKinds:       []string{"section", "article", "doc", "post", "page"},
+		PageKinds:          []string{"section", "article", "tag", "timeline", "404"},
 		Sections:           sections,
 		Sources:            sources,
+		SectionPaths:       sectionList,
+		Versions:           versionList,
 		IncludeUnpublished: includeUnpublished,
 		WritableDomains:    []string{"Markdown source", "theme files", "attachments.directory"},
 		PublishPolicy:      "source mutations do not publish; publish is explicit",
-		Capabilities:       []string{"find", "ls", "read", "grep", "tags", "write", "edit", "validate", "publish", "theme"},
+		Capabilities:       contextCapabilities(),
 	}, nil
+}
+
+func contextCapabilities() []string {
+	return []string{"find", "ls", "read", "grep", "tags", "related", "write", "edit", "move", "delete", "mkdir", "rename-dir", "upload", "config", "recover", "validate", "publish", "theme"}
 }
 
 func discoverThemes(vaultPath, selected string) ([]ThemeSummary, error) {
