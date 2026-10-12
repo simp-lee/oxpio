@@ -210,8 +210,11 @@ Shared article body.
 	}
 
 	assetSources := []string{"images/shared-banner.png", "images/shared-cover.png", "images/shared-inline.png"}
-	if len(result.Assets) != len(assetSources) {
-		t.Fatalf("planned asset count = %d, want %d: %#v", len(result.Assets), len(assetSources), result.Assets)
+	if len(result.Assets) != len(assetSources)+1 {
+		t.Fatalf("planned asset count = %d, want %d: %#v", len(result.Assets), len(assetSources)+1, result.Assets)
+	}
+	if result.Assets["assets/style.css"] == nil {
+		t.Fatalf("embedded theme stylesheet was not planned: %#v", result.Assets)
 	}
 	for _, source := range assetSources {
 		asset := result.Assets[source]
@@ -266,7 +269,7 @@ Shared article body.
 	// The manifest excludes its own cache record, so the one extra physical
 	// file is the manifest itself. Every other generated file must have one
 	// owner record, preventing page-count growth from duplicating shared writers.
-	expectedManifestOutputs := 1 + 1 + expectedSections + expectedArticles*2 + len(assetSources) + 1 + len(runtimeAssets) + 3
+	expectedManifestOutputs := 1 + 1 + expectedSections + expectedArticles*2 + len(assetSources) + 2 + len(runtimeAssets) + 3
 	if len(manifest.Outputs) != expectedManifestOutputs {
 		t.Fatalf("manifest output count = %d, want %d", len(manifest.Outputs), expectedManifestOutputs)
 	}

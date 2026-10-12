@@ -11,6 +11,7 @@ import (
 
 	"github.com/simp-lee/oxpio/internal/diag"
 	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/vault"
 )
 
 func TestBuildWithConfigRejectsAmbiguousVersionSourceIdentity(t *testing.T) {
@@ -613,5 +614,48 @@ func writePlanFile(t *testing.T, root, rel, content string) {
 	}
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPlanVaultCSSRejectsExternalAndInvalidUTF8RootStyles(t *testing.T) {
+	root := t.TempDir()
+	custom := filepath.Join(root, "custom.css")
+	if err := os.WriteFile(custom, []byte(`@import url("https://example.test/theme.css");`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := &model.SitePlan{VaultPath: root, Config: model.SiteConfig{CustomCSS: custom}}
+	collector := diag.NewCollector()
+	planVaultCSS(plan, vault.ScanResult{}, nil, collector)
+	if !collector.HasErrors() {
+		t.Fatal("external custom CSS was accepted")
+	}
+	if err := os.WriteFile(custom, []byte{0xff}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	collector = diag.NewCollector()
+	planVaultCSS(plan, vault.ScanResult{}, nil, collector)
+	if !collector.HasErrors() {
+		t.Fatal("invalid UTF-8 custom CSS was accepted")
+	}
+}
+
+func TestPlanThemeSVGReferencesUseHashedAssetNames(t *testing.T) {
+	plan := &model.SitePlan{}
+	inputs := map[string][]byte{
+		"assets/icon.svg":  []byte(`<svg><image href="other.svg"/></svg>`),
+		"assets/other.svg": []byte(`<svg/>`),
+	}
+	assetSources := map[string]string{
+		"icon.svg":  "assets/icon.svg",
+		"other.svg": "assets/other.svg",
+	}
+	collector := diag.NewCollector()
+	planThemeAssets(plan, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+	if collector.HasErrors() {
+		t.Fatalf("theme asset diagnostics = %#v", collector.Diagnostics())
+	}
+	planned := plan.ThemeAssets["assets/icon.svg"]
+	if planned == nil || !bytes.Contains(planned.Data, []byte(`href="other.`)) {
+		t.Fatalf("rewritten SVG = %q", planned.Data)
 	}
 }

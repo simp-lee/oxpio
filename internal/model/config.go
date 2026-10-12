@@ -16,7 +16,6 @@ type SiteConfig struct {
 	Theme                  string
 	ThemeDir               string
 	ThemeCSS               string
-	ThemeSlots             string
 	CustomCSS              string
 	AttachmentDirectory    string
 	UnknownManagementPaths []string

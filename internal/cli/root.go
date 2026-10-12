@@ -241,7 +241,7 @@ func (w *streamingServiceJSONWriter) Write(p []byte) (int, error) {
 
 func isStreamingServiceCommand(args []string) bool {
 	command := registryCommandFromArgs(args)
-	return command == "serve" || command == "editor"
+	return command == "serve" || command == "editor" || command == "theme preview"
 }
 
 func executeStreamingServiceJSON(effectiveArgs, originalArgs []string, root *cobra.Command, stdout, stderr io.Writer) error {
@@ -491,6 +491,20 @@ func commandForSpec(spec internalapplication.CommandSpec, deps commandDependenci
 		return newTagsCommand()
 	case "grep":
 		return newGrepCommand()
+	case "theme init":
+		return newThemeInitCommand()
+	case "theme validate":
+		return newThemeValidateCommand()
+	case "theme context":
+		return newThemeContextCommand()
+	case "theme read":
+		return newThemeReadCommand()
+	case "theme write":
+		return newThemeWriteCommand()
+	case "theme edit":
+		return newThemeEditCommand()
+	case "theme preview":
+		return newThemePreviewCommand(deps)
 	default:
 		return newRegistryPlaceholder(spec)
 	}

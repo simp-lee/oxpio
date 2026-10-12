@@ -1,0 +1,43 @@
+{{define "base"}}<!doctype html>
+<html lang="{{.Site.Language}}" data-oxpio-kind="{{.Kind}}" data-oxpio-base-path="{{.BasePath}}"{{if .Sidebar}} data-oxpio-sidebar{{end}}{{if .VersionID}} data-oxpio-version="{{.VersionID}}"{{end}}{{if .Popover}} data-oxpio-popover{{end}}{{if .HasMath}} data-oxpio-math{{end}}{{if .HasMermaid}} data-oxpio-mermaid{{end}}>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  {{.HeadHTML}}
+</head>
+<body class="site-body kind-{{.Kind}}" data-site-body>
+<div class="site-frame">
+  <header class="site-masthead site-header">
+    <div class="masthead-band"><a class="site-mark site-title" href="{{siteURL "/"}}" aria-label="{{.Site.Title}}"><img class="site-logo" src="{{siteURL "/assets/oxpio/logo.svg"}}" alt="OXPIO"><span class="site-title-text">{{.Site.Title}}</span></a></div>
+    <nav aria-label="Global navigation">
+      {{range .Navigation}}<a href="{{.Href}}"{{if .Current}} aria-current="{{.Current}}"{{end}}>{{.Name}}</a>{{end}}
+    </nav>
+    <button type="button" data-theme-toggle hidden aria-pressed="false"><span data-theme-toggle-value>Theme</span><span data-theme-toggle-state class="sr-only"></span><span data-theme-toggle-source class="sr-only"></span></button>
+  </header>
+  <main class="site-main" data-oxpio-main>
+    {{if .Sidebar}}<button type="button" class="sidebar-launch" data-sidebar-toggle hidden aria-expanded="false">Open navigation</button><aside class="sidebar-shell" data-sidebar-shell><nav class="sidebar" aria-label="Sidebar" data-sidebar-root><ul class="sidebar-list sidebar-list-root">{{template "sidebar" .Sidebar}}</ul></nav></aside>{{end}}
+    <div class="site-content">
+      <nav class="breadcrumbs" aria-label="Breadcrumb"><ol>{{range .Breadcrumbs}}<li><a href="{{.Href}}">{{.Name}}</a></li>{{end}}</ol></nav>
+      {{if .NotFound}}
+        <section class="not-found-page"><h1>{{.Title}}</h1><p>{{.Content}}</p><a href="{{siteURL "/"}}">Home</a></section>
+      {{else if .Article}}
+        <article class="article-page article-sheet"><header><h1{{if .Article.TitleID}} id="{{.Article.TitleID}}"{{end}}>{{.Article.Title}}</h1>{{if .Article.Description}}<p class="article-description">{{.Article.Description}}</p>{{end}}{{if .Article.BannerURL}}<img class="page-banner" src="{{.Article.BannerURL}}" alt="{{.Article.BannerAlt}}">{{end}}</header>{{.Article.MetadataHTML}}{{.Article.TOCHTML}}<div class="entry-content article-content" data-page-content>{{.Content}}</div>{{if .Article.Tags}}<ul class="article-tags" aria-label="Tags">{{range .Article.Tags}}<li>{{.}}</li>{{end}}</ul>{{end}}{{if .Article.Deprecated}}<aside class="deprecated-notice" role="note">This page is deprecated.</aside>{{end}}{{if .Related}}<section class="related-articles"><h2>Related articles</h2><ul>{{range .Related}}{{template "listing" .}}{{end}}</ul></section>{{end}}{{if .Backlinks}}<section class="backlinks"><h2>Backlinks</h2><ul>{{range .Backlinks}}<li><a href="{{.Href}}">{{.Title}}</a></li>{{end}}</ul></section>{{end}}{{if .Article.Position}}<nav class="reading-flow" aria-label="Document navigation">{{if .Article.Previous}}<a class="previous" rel="prev" href="{{.Article.Previous.Href}}">← Previous</a>{{else}}<span class="reading-flow-spacer" aria-hidden="true"></span>{{end}}<span class="position">{{.Article.Position}} of {{.Article.Total}}</span>{{if .Article.Next}}<a class="next" rel="next" href="{{.Article.Next.Href}}">Next →</a>{{else}}<span class="reading-flow-spacer" aria-hidden="true"></span>{{end}}</nav>{{end}}</article>
+      {{else if .Section}}
+        <section class="section-landing"><header><h1{{if .Section.TitleID}} id="{{.Section.TitleID}}"{{end}}>{{.Section.Title}}</h1>{{if .Section.Description}}<p class="section-description">{{.Section.Description}}</p>{{end}}{{if .Section.BannerURL}}<img class="page-banner" src="{{.Section.BannerURL}}" alt="{{.Section.BannerAlt}}">{{end}}</header><div class="entry-content section-content" data-page-content>{{.Content}}</div>{{if .Section.Children}}<h2>Sections</h2><ul class="section-children">{{range .Section.Children}}<li><a href="{{.Href}}">{{.Title}}</a></li>{{end}}</ul>{{end}}{{if .Entries}}<h2>Articles</h2><ul class="section-articles">{{range .Entries}}{{template "listing" .}}{{end}}</ul>{{end}}</section>
+      {{else if .Tags}}
+        <section class="tag-page"><h1>{{.Title}}</h1><ul class="tag-articles">{{range .Entries}}{{template "listing" .}}{{end}}</ul></section>
+      {{else}}
+        <section class="timeline-page"><h1>{{.Title}}</h1><ul>{{range .Entries}}{{template "listing" .}}{{end}}</ul></section>
+      {{end}}
+      {{if .Pagination.Enabled}}<nav class="pagination-nav" aria-label="Pagination">{{if .Pagination.PreviousHref}}<a class="pagination-link pagination-link-prev" href="{{.Pagination.PreviousHref}}">Previous</a>{{end}}{{if .Pagination.NextHref}}<a class="pagination-link pagination-link-next" href="{{.Pagination.NextHref}}">Next</a>{{end}}</nav>{{end}}
+      {{if .Versions}}<nav class="version-selector" aria-label="Versions">{{range .Versions}}<a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Label}}</a>{{end}}</nav>{{end}}
+      {{if .Source}}<nav class="source-links" aria-label="Source">{{if .Source.EditURL}}<a href="{{.Source.EditURL}}">Edit this page</a>{{end}}{{if .Source.ViewURL}}<a href="{{.Source.ViewURL}}">View source</a>{{end}}</nav>{{end}}
+    </div>
+  </main>
+  <footer class="site-footer"><small>Generated by OXPIO</small></footer>
+  {{if .Popover}}<div id="oxpio-popover-card" class="popover-card" data-popover-card hidden aria-hidden="true"></div>{{end}}
+</div>
+</body>
+</html>{{end}}
+{{define "listing"}}<li><a class="listing-card" data-entry-path="{{.Path}}" data-entry-type="{{.Type}}" href="{{.Href}}"><span class="listing-title">{{.Title}}</span>{{if .Summary}}<span class="listing-summary">{{.Summary}}</span>{{end}}{{if .PublishedAt}}<time class="listing-date" datetime="{{.PublishedAt}}">{{formatDate .PublishedAt "Jan 2, 2006"}}</time>{{end}}</a></li>{{end}}
+{{define "sidebar"}}{{range .}}<li><a href="{{.Href}}"{{if .Current}} aria-current="page"{{end}}>{{.Name}}</a>{{if .Children}}<ul>{{template "sidebar" .Children}}</ul>{{end}}</li>{{end}}{{end}}

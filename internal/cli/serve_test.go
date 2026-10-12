@@ -939,10 +939,8 @@ func TestPlannedWatchFilesIncludesRawHTMLAndCustomCSSDependencies(t *testing.T) 
 	writeCLIConfig(t, vaultPath)
 	for relPath, content := range map[string]string{
 		"_index.md":         "---\ntitle: Home\npublish: true\n---\n<img src=\"images/raw.bin\">\n",
-		"custom.css":        "@import \"styles/nested.css\";\n",
-		"styles/nested.css": "body { background: url(../images/css.bin); }\n",
+		"custom.css":        "body { color: red; }\n",
 		"images/raw.bin":    "raw",
-		"images/css.bin":    "css",
 		"images/unused.bin": "unused",
 	} {
 		filePath := filepath.Join(vaultPath, filepath.FromSlash(relPath))
@@ -954,7 +952,7 @@ func TestPlannedWatchFilesIncludesRawHTMLAndCustomCSSDependencies(t *testing.T) 
 		}
 	}
 	files := plannedWatchFiles(vaultPath, filepath.Join(vaultPath, "public"))
-	for _, relPath := range []string{"images/raw.bin", "images/css.bin", "styles/nested.css"} {
+	for _, relPath := range []string{"images/raw.bin"} {
 		filePath := filepath.Join(vaultPath, filepath.FromSlash(relPath))
 		if _, ok := files[filePath]; !ok {
 			t.Fatalf("planned watch files omit dependency %q: %#v", relPath, files)
@@ -963,15 +961,6 @@ func TestPlannedWatchFilesIncludesRawHTMLAndCustomCSSDependencies(t *testing.T) 
 	unused := filepath.Join(vaultPath, "images", "unused.bin")
 	if _, ok := files[unused]; ok {
 		t.Fatalf("planned watch files include unrelated resource %q", unused)
-	}
-
-	nested := filepath.Join(vaultPath, "styles", "nested.css")
-	if err := os.WriteFile(nested, []byte("body { background: url(../images/missing.bin); }\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	failedFiles := plannedWatchFiles(vaultPath, filepath.Join(vaultPath, "public"))
-	if _, ok := failedFiles[nested]; !ok {
-		t.Fatalf("failed CSS analysis dropped discovered dependency %q: %#v", nested, failedFiles)
 	}
 }
 

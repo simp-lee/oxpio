@@ -27,8 +27,19 @@ type TimelinePagePlan struct {
 // NewTimelinePagePlan creates the complete plan for a timeline with total
 // posts. It always creates one page, including when there are no posts.
 func NewTimelinePagePlan(rawPath string, configuredPageSize, total int) *TimelinePagePlan {
+	baseRoute := "/" + slug.EncodePath(strings.Trim(rawPath, "/")) + "/"
+	return NewRoutePagePlan(baseRoute, configuredPageSize, total)
+}
+
+// NewRoutePagePlan creates the canonical pages for any public list route. The
+// first page keeps baseRoute; later pages use /page/N/ and never /page/1/.
+func NewRoutePagePlan(baseRoute string, configuredPageSize, total int) *TimelinePagePlan {
 	if total < 0 {
 		total = 0
+	}
+	baseRoute = "/" + strings.Trim(baseRoute, "/") + "/"
+	if baseRoute == "//" {
+		baseRoute = "/"
 	}
 	pageSize := configuredPageSize
 	if pageSize <= 0 || pageSize >= total {
@@ -42,7 +53,6 @@ func NewTimelinePagePlan(rawPath string, configuredPageSize, total int) *Timelin
 		pageCount = 1
 	}
 
-	baseRoute := "/" + slug.EncodePath(strings.Trim(rawPath, "/")) + "/"
 	pages := make([]TimelinePage, 0, pageCount)
 	for page := 1; page <= pageCount; page++ {
 		start := (page - 1) * pageSize

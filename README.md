@@ -184,9 +184,11 @@ productVersion?, series?, coverHash?, generator
 
 ## Assets, themes, and offline runtime
 
-All source assets pass through one contained asset planner. The planner owns Markdown images/embeds, raw HTML resources, recursive local CSS dependencies, banners, covers, local `defaultImg`, theme assets, and output collision checks. The generated output contains one shared content-addressed runtime, offline KaTeX/Mermaid resources, one optional Sidebar JSON, structural CSS, optional `.oxpio/theme/theme.css`, and optional vault-root `custom.css`. Themes can change variables and append-only slots but cannot replace the HTML shell or renderer. No runtime resource is downloaded and no public Go SDK is provided.
+All source assets pass through one contained asset planner. The planner owns Markdown images/embeds, raw HTML resources, recursive local CSS dependencies, banners, covers, local `defaultImg`, selected-theme assets, and output collision checks. The generated output contains one shared content-addressed runtime, offline KaTeX/Mermaid resources, one optional Sidebar JSON, structural CSS, the selected Go `html/template` theme, and optional vault-root `custom.css`. Themes use the complete `oxpio.theme.vm/v1` View Model and can replace the HTML shell; no runtime resource is downloaded and no public Go SDK is provided.
 
-Theme resources are planned during validation and published with content-addressed URLs. In slots, use `{{themeAssetURL .SiteRootRel "logo.svg"}}` for `.oxpio/theme/assets/logo.svg`. Relative CSS URLs and imports are rewritten to planned resources: `theme.css` resolves them from `assets/`, and nested stylesheets from their own directory. Missing references and cyclic stylesheet dependencies are validation errors.
+Themes live under `.oxpio/themes/<theme-id>/` and require `theme.yaml`, `layouts/base.html`, `section.html`, `article.html`, `tag.html`, `timeline.html`, and `404.html`. The embedded `base` theme is selected by default; `oxpio theme init` creates an editable `minimal` copy. Theme resources are planned with content-addressed URLs and are referenced from templates with `{{assetURL "assets/name.css"}}`. CSS dependencies and missing resources are validated before publication.
+
+Theme development uses `oxpio theme context`, `theme read`, `theme write`/`theme edit` with CAS hashes, `theme validate --theme ID`, and the isolated `theme preview --theme ID`. Templates receive the immutable `oxpio.theme.vm/v1` View Model and may use only `siteURL`, `routeURL`, `assetURL`, `formatDate`, and `emitJSONLD`; theme tools never publish or modify Markdown/config selection. Run `oxpio publish` explicitly after selecting a local theme.
 
 ## Related recommendations
 

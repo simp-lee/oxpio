@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/simp-lee/oxpio/internal/model"
+	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 )
 
 func TestStrictCacheManifestSeparatesInputsFromOutputs(t *testing.T) {
@@ -75,13 +76,20 @@ func TestStrictCacheInvalidatesListingMetadata(t *testing.T) {
 	}
 }
 
-func TestStrictCacheTracksRecursiveCustomCSSDependencies(t *testing.T) {
+func TestStrictCacheTracksRecursiveThemeCSSDependencies(t *testing.T) {
 	vault := t.TempDir()
-	writeStrictFile(t, vault, "oxpio.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\ntheme: cache\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
-	writeStrictFile(t, vault, "custom.css", `@import "styles/nested.css";`)
-	writeStrictFile(t, vault, "styles/nested.css", `@font-face { src: url("../fonts/site.woff2"); }`)
-	writeStrictFile(t, vault, "fonts/site.woff2", "first font")
+	files, err := internaltheme.InitFiles("cache")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["assets/nested.css"] = []byte(`@import "dependency.css";`)
+	files["assets/dependency.css"] = []byte(`body { color: red; }`)
+	for rel, data := range files {
+		writeStrictFile(t, vault, filepath.Join(".oxpio", "themes", "cache", filepath.FromSlash(rel)), string(data))
+	}
+	writeStrictFile(t, vault, "custom.css", `@import "assets/nested.css";`)
 	output := filepath.Join(t.TempDir(), "site")
 	firstResult, err := BuildWithOptions(vault, output, Options{Strict: true})
 	if err != nil {
@@ -89,9 +97,9 @@ func TestStrictCacheTracksRecursiveCustomCSSDependencies(t *testing.T) {
 	}
 	first := loadStrictCacheManifest(output)
 	firstDependency, firstOutput := cacheDependencyByOwner(first, "custom CSS"), cacheOutputByOwner(first, "custom CSS")
-	oldNested := firstResult.Assets["styles/nested.css"].DstPath
+	oldNested := firstResult.Assets[".oxpio/themes/cache/assets/nested.css"].DstPath
 
-	writeStrictFile(t, vault, "fonts/site.woff2", "second font")
+	writeStrictFile(t, vault, filepath.Join(".oxpio", "themes", "cache", "assets", "dependency.css"), `body { color: blue; }`)
 	secondResult, err := BuildWithOptions(vault, output, Options{Strict: true})
 	if err != nil {
 		t.Fatal(err)
@@ -99,10 +107,10 @@ func TestStrictCacheTracksRecursiveCustomCSSDependencies(t *testing.T) {
 	second := loadStrictCacheManifest(output)
 	secondDependency, secondOutput := cacheDependencyByOwner(second, "custom CSS"), cacheOutputByOwner(second, "custom CSS")
 	if firstDependency.InputSignature == secondDependency.InputSignature || firstOutput.OutputHash == secondOutput.OutputHash {
-		t.Fatal("recursive CSS change did not invalidate the fixed custom CSS output")
+		t.Fatal("recursive theme CSS change did not invalidate the fixed custom CSS output")
 	}
-	if secondResult.Assets["styles/nested.css"].DstPath == oldNested {
-		t.Fatal("recursive CSS change did not invalidate the transformed stylesheet")
+	if secondResult.Assets[".oxpio/themes/cache/assets/nested.css"].DstPath == oldNested {
+		t.Fatal("recursive theme CSS change did not invalidate the transformed stylesheet")
 	}
 	if _, err := os.Stat(filepath.Join(output, filepath.FromSlash(oldNested))); !os.IsNotExist(err) {
 		t.Fatalf("stale transformed stylesheet remains after rebuild: %v", err)

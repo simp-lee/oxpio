@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/simp-lee/oxpio/internal/asset"
 	"github.com/simp-lee/oxpio/internal/diag"
@@ -62,7 +63,13 @@ func planVaultCSS(plan *model.SitePlan, scan vault.ScanResult, index *model.Vaul
 			return nil, err
 		}
 		if strings.EqualFold(path.Ext(source), ".css") {
+			if !utf8.Valid(data) {
+				return nil, fmt.Errorf("CSS file %q is not valid UTF-8", source)
+			}
 			data, err = asset.RewriteCSSURLs(data, func(raw string) (string, error) {
+				if source == rootSource && isExternalCSSURL(raw) {
+					return "", fmt.Errorf("custom CSS external URL %q is not allowed", raw)
+				}
 				return rewriteVaultCSSURL(plan, scan, index, source, raw, resolve)
 			})
 			if err != nil {
@@ -109,6 +116,26 @@ func planVaultCSS(plan *model.SitePlan, scan vault.ScanResult, index *model.Vaul
 	}
 }
 
+func customCSSRootSource(plan *model.SitePlan) string {
+	if plan == nil || plan.VaultPath == "" || plan.Config.CustomCSS == "" {
+		return ""
+	}
+	relative, err := filepath.Rel(plan.VaultPath, plan.Config.CustomCSS)
+	if err != nil || relative == "." || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return ""
+	}
+	return filepath.ToSlash(relative)
+}
+
+func isExternalCSSURL(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" || strings.HasPrefix(raw, "#") {
+		return false
+	}
+	parsed, err := url.Parse(raw)
+	return err != nil || parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(raw, "//")
+}
+
 func rewriteVaultCSSURL(plan *model.SitePlan, scan vault.ScanResult, index *model.VaultIndex, source, raw string, resolve func(string) (*model.PlannedAsset, error)) (string, error) {
 	if !resourcepath.IsLocalTarget(raw) {
 		return raw, nil
@@ -124,6 +151,20 @@ func rewriteVaultCSSURL(plan *model.SitePlan, scan vault.ScanResult, index *mode
 		targetPath = decoded
 	}
 	targetPath = strings.ReplaceAll(targetPath, `\`, "/")
+	if rootSource := customCSSRootSource(plan); rootSource != "" && source == rootSource {
+		themePath := path.Clean(strings.TrimPrefix(targetPath, "/"))
+		if themePath == "." || themePath == ".." || strings.HasPrefix(themePath, "../") || strings.HasPrefix(targetPath, "/") {
+			return "", fmt.Errorf("custom CSS asset %q is not a normalized theme asset", raw)
+		}
+		if destination := plan.ThemeAssetURLs[themePath]; destination != "" {
+			suffix := ""
+			if position := strings.IndexAny(raw, "?#"); position >= 0 {
+				suffix = raw[position:]
+			}
+			return path.Base(destination) + suffix, nil
+		}
+		return "", fmt.Errorf("custom CSS asset %q is not a selected theme asset", raw)
+	}
 	candidate := path.Clean(path.Join(path.Dir(source), targetPath))
 	if rootRelative, ok := strings.CutPrefix(targetPath, "/"); ok {
 		candidate = path.Clean(rootRelative)

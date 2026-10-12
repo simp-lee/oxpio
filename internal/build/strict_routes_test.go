@@ -173,6 +173,40 @@ type: page
 	}
 }
 
+func TestStrictBuildPaginatesSectionAndTagLists(t *testing.T) {
+	vault := t.TempDir()
+	writeStrictFile(t, vault, "oxpio.yaml", `title: Pagination
+baseURL: https://example.test/
+navigation: []
+pagination:
+  pageSize: 1
+`)
+	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	for _, item := range []string{"first", "second"} {
+		writeStrictFile(t, vault, item+".md", "---\ntitle: "+item+"\npublish: true\ntype: page\ntags: [common]\n---\n"+item+"\n")
+	}
+	output := filepath.Join(t.TempDir(), "site")
+	result, err := BuildWithOptions(vault, output, Options{Strict: true})
+	if err != nil {
+		t.Fatalf("BuildWithOptions() error = %v; diagnostics = %#v", err, result.Diagnostics)
+	}
+	for _, relPath := range []string{"page/2/index.html", "tags/common/index.html", "tags/common/page/2/index.html"} {
+		if _, statErr := os.Stat(filepath.Join(output, filepath.FromSlash(relPath))); statErr != nil {
+			t.Fatalf("generated page %q is missing: %v", relPath, statErr)
+		}
+	}
+	for _, relPath := range []string{"index.html", "tags/common/index.html"} {
+		page, readErr := os.ReadFile(filepath.Join(output, filepath.FromSlash(relPath)))
+		if readErr != nil || !strings.Contains(string(page), "page/2/") {
+			t.Fatalf("page %q does not link to page 2: %v\n%s", relPath, readErr, page)
+		}
+	}
+	sitemap, err := os.ReadFile(filepath.Join(output, "sitemap.xml"))
+	if err != nil || !strings.Contains(string(sitemap), "tags/common/page/2/") || !strings.Contains(string(sitemap), "page/2/") {
+		t.Fatalf("sitemap does not include paginated routes: %v\n%s", err, sitemap)
+	}
+}
+
 func TestStrictBuildUsesCanonicalRoutesForNestedMarkdownLinks(t *testing.T) {
 	vault := copyFixtureVault(t, "runtime-vault")
 	output := filepath.Join(t.TempDir(), "site")

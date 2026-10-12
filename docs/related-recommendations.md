@@ -177,7 +177,7 @@ tag contribution by `0.15`, content contribution by `1.0`, and final score by
 | Feature count per article | 64 before singleton-selection pruning |
 | Ranking workers | at most `min(GOMAXPROCS, N, 8)`; a positive requested build concurrency below that cap is used |
 | Related article title links rendered per source | final result count, therefore at most 20 |
-| Candidate tag links rendered per related entry | at most 8; the current fixed shell renders none |
+| Candidate tag links rendered per related entry | at most 8; the default theme renders none |
 | Pre-ranking term/tag/link candidate count | no separate cap; at most `N-1` distinct candidates |
 
 Ranking order is final score descending, normalized published relative path

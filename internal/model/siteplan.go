@@ -61,25 +61,31 @@ type RouteOutputIndex struct {
 // validation, asset planning, and rendering. Slices are sorted by the planner;
 // consumers must treat the pointed-to values as read-only.
 type SitePlan struct {
-	VaultPath  string
-	Config     SiteConfig
-	Root       *Section
-	Sections   []*Section
-	Articles   []*Note
-	Documents  []*Note
-	Posts      []*Note
-	Pages      []*Note
-	Versions   []*Version
-	Timeline   *TimelinePagePlan
-	RouteIndex *RouteOutputIndex
-	Routes     map[string]string
+	VaultPath    string
+	Config       SiteConfig
+	Root         *Section
+	Sections     []*Section
+	Articles     []*Note
+	Documents    []*Note
+	Posts        []*Note
+	Pages        []*Note
+	Versions     []*Version
+	Timeline     *TimelinePagePlan
+	SectionPages map[string]*TimelinePagePlan
+	TagPages     map[string]*TimelinePagePlan
+	RouteIndex   *RouteOutputIndex
+	Routes       map[string]string
 	// PublicPageRoutes contains generated HTML page routes that do not have a
 	// note or section target in the vault index.
 	PublicPageRoutes map[string]struct{}
 	ReservedRoutes   map[string]struct{}
-	ThemeAssets      map[string]*PlannedAsset
-	ThemeAssetURLs   map[string]string
-	CustomCSSData    []byte
+	// ThemeFiles is the immutable selected theme snapshot consumed by the
+	// single html/template renderer. Keys are theme-relative paths.
+	ThemeFiles         map[string][]byte
+	ThemeAssetManifest string
+	ThemeAssets        map[string]*PlannedAsset
+	ThemeAssetURLs     map[string]string
+	CustomCSSData      []byte
 	// VaultCSSAssets contains transformed vault CSS and its recursive assets,
 	// including stylesheets referenced from raw HTML.
 	VaultCSSAssets map[string]*PlannedAsset

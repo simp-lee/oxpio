@@ -9,7 +9,6 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
-	"io/fs"
 	"net/url"
 	"path"
 	"path/filepath"
@@ -24,8 +23,8 @@ import (
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/markdown"
 	"github.com/simp-lee/oxpio/internal/model"
-	"github.com/simp-lee/oxpio/internal/render"
 	"github.com/simp-lee/oxpio/internal/slug"
+	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	"github.com/simp-lee/oxpio/internal/vault"
 	_ "golang.org/x/image/webp"
 	"golang.org/x/text/cases"
@@ -104,6 +103,18 @@ func BuildWithConfig(vaultPath string, cfg model.SiteConfig) (*Result, error) {
 	return buildWithConfigAndOutput(vaultPath, cfg, "", 0)
 }
 
+// BuildForOutputWithConfig applies an in-memory theme selection while keeping
+// the formal output boundary out of source discovery. The config file is never
+// written by this preview/validation path.
+func BuildForOutputWithConfig(vaultPath, outputPath string, cfg model.SiteConfig) (*Result, error) {
+	boundary, err := internalfsutil.ResolveVaultOutput(vaultPath, outputPath)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ThemeDir = ""
+	return buildWithConfigAndOutput(boundary.VaultPath, cfg, boundary.OutputPath, 0)
+}
+
 func buildWithConfigAndOutput(vaultPath string, cfg model.SiteConfig, outputPath string, concurrency int) (*Result, error) {
 	return buildWithConfigAndOutputAndOverlay(vaultPath, cfg, outputPath, nil, nil, concurrency)
 }
@@ -145,6 +156,8 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 	plan := &model.SitePlan{
 		VaultPath: resolvedVault, Config: cfg,
 		Routes:           make(map[string]string),
+		SectionPages:     make(map[string]*model.TimelinePagePlan),
+		TagPages:         make(map[string]*model.TimelinePagePlan),
 		PublicPageRoutes: map[string]struct{}{routeKey("/404.html"): {}},
 		ReservedRoutes:   reservedRoutes(),
 	}
@@ -202,12 +215,24 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 	if cfg.Timeline.Enabled {
 		plan.Timeline = model.NewTimelinePagePlan(cfg.Timeline.Path, cfg.Pagination.PageSize, len(plan.Posts))
 	}
+	for _, section := range plan.Sections {
+		if section == nil || section.Route == "" {
+			continue
+		}
+		pages := model.NewRoutePagePlan(section.Route, cfg.Pagination.PageSize, len(section.Articles))
+		plan.SectionPages[section.Route] = pages
+		for _, page := range pages.Pages {
+			if page.Number > 1 {
+				claimPublicPageRoute(plan, page.Route, "section:"+section.SourcePath, collector)
+			}
+		}
+	}
 	indexResult, indexErr := vault.BuildStrictIndex(scan, sources, plan.Articles, plan.Sections, collector, vault.BuildIndexOptions{Concurrency: concurrency, CollectRelatedSemantic: cfg.Related.Enabled, ResourceSections: allSections(sections)})
 	if indexErr != nil {
 		record(collector, diag.KindSchema, resolvedVault, "index strict Markdown: %v", indexErr)
 	}
-	planVaultCSS(plan, scan, indexResult.Index, collector)
 	validateStrictOptionalInputs(resolvedVault, outputPath, plan, scan, indexResult.Index, collector)
+	planVaultCSS(plan, scan, indexResult.Index, collector)
 	if indexResult.Index != nil {
 		for _, tag := range sortedStrictTags(indexResult.Index.Tags) {
 			if tag != nil {
@@ -219,11 +244,24 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 				claimPublicPageRoute(plan, page.Route, "timeline", collector)
 			}
 		}
+		for _, tag := range sortedStrictTags(indexResult.Index.Tags) {
+			if tag == nil {
+				continue
+			}
+			route := "/" + encodePath(tag.Slug) + "/"
+			pages := model.NewRoutePagePlan(route, cfg.Pagination.PageSize, len(tag.Notes))
+			plan.TagPages[route] = pages
+			for _, page := range pages.Pages {
+				if page.Number > 1 {
+					claimPublicPageRoute(plan, page.Route, "tag:"+tag.Name, collector)
+				}
+			}
+		}
 		validateStrictMarkdown(plan, indexResult.Index, collector)
 	}
 
-	plannedAssetOutputs := validateAssetDestinations(resolvedVault, plan, frontmatterAssets, assetOwners, indexResult.Index, scan.ResourceFiles, collector)
-	validateThemeSlotAssets(plan, indexResult.Index, plannedAssetOutputs, collector)
+	_ = validateAssetDestinations(resolvedVault, plan, frontmatterAssets, assetOwners, indexResult.Index, scan.ResourceFiles, collector)
+	validateThemeAssets(plan, collector)
 	result := &Result{Plan: plan, Scan: scan, Sources: sources, Index: indexResult.Index, RelatedSemantic: indexResult.RelatedSemantic, Diagnostics: collector.Diagnostics()}
 	if collector.HasErrors() {
 		return result, fmt.Errorf("site plan has %d error(s)", collector.ErrorCount())
@@ -802,73 +840,48 @@ func validateStrictOptionalInputs(vaultRoot, outputPath string, plan *model.Site
 			record(collector, diag.KindMetadata, plan.Config.CustomCSS, "custom CSS: %v", err)
 		}
 	}
-	if plan.Config.ThemeDir == "" {
+	var selected internaltheme.Source
+	var err error
+	if plan.Config.Theme == internalconfig.ThemeBaseID {
+		selected, err = internaltheme.BaseSource()
+	} else {
+		selected, err = internaltheme.LoadLocal(vaultRoot, plan.Config.Theme)
+	}
+	if err != nil {
+		record(collector, diag.KindMetadata, filepath.Join(vaultRoot, ".oxpio", "themes", plan.Config.Theme), "selected theme: %v", err)
 		return
 	}
-	relTheme, err := filepath.Rel(vaultRoot, plan.Config.ThemeDir)
-	if err != nil || relTheme == ".." || strings.HasPrefix(relTheme, ".."+string(filepath.Separator)) || filepath.IsAbs(relTheme) {
-		record(collector, diag.KindMetadata, plan.Config.ThemeDir, "theme directory must be inside the vault")
+	if err := internaltheme.Validate(selected); err != nil {
+		record(collector, diag.KindMetadata, filepath.Join(vaultRoot, ".oxpio", "themes", plan.Config.Theme), "selected theme: %v", err)
 		return
 	}
+	plan.ThemeFiles = selected.Files
+	plan.ThemeAssetManifest = internaltheme.ManifestOf(selected).Hash
 	inputs := make(map[string][]byte)
 	assetSources := make(map[string]string)
-	cssSource := ""
-	_ = filepath.WalkDir(plan.Config.ThemeDir, func(current string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			record(collector, diag.KindMetadata, current, "theme entry: %v", walkErr)
-			return nil
+	for rel, data := range selected.Files {
+		if !strings.HasPrefix(rel, "assets/") || strings.TrimPrefix(rel, "assets/") == "" {
+			continue
 		}
-		if outputPath != "" && internalfsutil.SamePath(current, outputPath) {
-			if entry.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		rel, err := filepath.Rel(plan.Config.ThemeDir, current)
-		if err != nil {
-			record(collector, diag.KindMetadata, current, "theme entry path: %v", err)
-			return nil
-		}
-		if rel == "." {
-			return nil
-		}
-		rel = filepath.ToSlash(rel)
-		if entry.Type()&fs.ModeSymlink != 0 {
-			record(collector, diag.KindMetadata, current, "theme entry %q must not be a symbolic link", rel)
-			return nil
-		}
-		if entry.IsDir() {
-			if rel != "assets" && !strings.HasPrefix(rel, "assets/") {
-				record(collector, diag.KindMetadata, current, "unsupported theme directory %q", rel)
-			}
-			return nil
-		}
-		_, data, _, readErr := internalfsutil.ReadContainedRegularFile(vaultRoot, current)
-		if readErr != nil {
-			record(collector, diag.KindMetadata, current, "theme entry %q: %v", rel, readErr)
-			return nil
-		}
-		if rel == "slots.html" {
-			if slotErr := render.ValidateThemeSlots(string(data)); slotErr != nil {
-				record(collector, diag.KindMetadata, current, "theme slots: %v", slotErr)
-			} else {
-				plan.Config.ThemeSlots = string(data)
-			}
-			return nil
-		}
-		source := filepath.ToSlash(filepath.Join(relTheme, filepath.FromSlash(rel)))
-		if rel == "theme.css" {
-			cssSource = source
-		} else if strings.HasPrefix(rel, "assets/") {
-			assetSources[strings.TrimPrefix(rel, "assets/")] = source
-		} else {
-			record(collector, diag.KindMetadata, current, "unsupported theme entry %q", rel)
-			return nil
+		assetName := strings.TrimPrefix(rel, "assets/")
+		source := rel
+		if !selected.Embedded {
+			source = filepath.ToSlash(filepath.Join(internalconfig.ThemeRootRelPath, plan.Config.Theme, rel))
 		}
 		inputs[source] = data
-		return nil
-	})
-	planThemeAssets(plan, scan, index, inputs, assetSources, cssSource, collector)
+		assetSources[assetName] = source
+	}
+	planThemeAssets(plan, scan, index, inputs, assetSources, "", collector)
+}
+
+func validateThemeAssets(plan *model.SitePlan, collector *diag.Collector) {
+	if plan == nil || collector == nil || len(plan.ThemeFiles) == 0 {
+		return
+	}
+	selected := internaltheme.Source{ID: plan.Config.Theme, Name: plan.Config.Theme, APIVersion: internaltheme.APIVersion, Files: plan.ThemeFiles, Dirs: map[string]bool{"layouts": true, "partials": true, "assets": true}}
+	if err := internaltheme.ValidateWithAssets(selected, plan.ThemeAssetURLs, plan.Config.BaseURL); err != nil {
+		record(collector, diag.KindMetadata, filepath.Join(plan.Config.ThemeDir, "theme.yaml"), "theme validation: %v", err)
+	}
 }
 
 func portableVaultAssetPath(value string) bool {

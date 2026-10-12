@@ -135,17 +135,30 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		if section == nil || section.Route == "" {
 			continue
 		}
-		pageAssets := newStrictCacheAssetSink(assetCollector)
-		data, renderErr := render.RenderStrictSection(plan, section, planned.Index, pageAssets)
-		if renderErr != nil {
-			return result, fmt.Errorf("render section %q: %w", section.RelPath, renderErr)
+		pages := plan.SectionPages[section.Route]
+		if pages == nil {
+			pages = model.NewRoutePagePlan(section.Route, plan.Config.Pagination.PageSize, len(section.Articles))
 		}
-		owner := "section:" + section.SourcePath
-		if dependencyErr := outputs.dependency(owner, section.SourcePath, strictCacheSectionPageInput(plan, section, lookupDigests.forEmbeds(len(section.Embeds) > 0), pageAssets.destinations)); dependencyErr != nil {
-			return result, dependencyErr
-		}
-		if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(section.Route), owner, data); writeErr != nil {
-			return result, writeErr
+		for _, page := range pages.Pages {
+			pageAssets := newStrictCacheAssetSink(assetCollector)
+			pageNotes := section.Articles[page.Start:page.End]
+			data, renderErr := render.RenderStrictSectionPage(plan, section, page.Route, pageNotes, planned.Index, pageAssets)
+			if renderErr != nil {
+				return result, fmt.Errorf("render section %q: %w", section.RelPath, renderErr)
+			}
+			owner := "section:" + section.SourcePath
+			if page.Number > 1 {
+				owner += ":page:" + strconv.Itoa(page.Number)
+			}
+			dependency := strictCacheSectionPageInput(plan, section, lookupDigests.forEmbeds(len(section.Embeds) > 0), pageAssets.destinations)
+			dependency.Route = page.Route
+			dependency.Entries = strictCachePageEntries(pageNotes)
+			if dependencyErr := outputs.dependency(owner, section.SourcePath, dependency); dependencyErr != nil {
+				return result, dependencyErr
+			}
+			if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(page.Route), owner, data); writeErr != nil {
+				return result, writeErr
+			}
 		}
 	}
 	socialCards, cardErr := generateStrictSocialCards(plan, boundary.VaultPath, workerConcurrency)
@@ -197,21 +210,31 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 				notes = append(notes, note)
 			}
 		}
-		data, renderErr := render.RenderStrictTag(plan, tag, notes)
-		if renderErr != nil {
-			return result, fmt.Errorf("render tag %q: %w", tag.Name, renderErr)
-		}
 		route := "/" + slug.EncodePath(tag.Slug) + "/"
-		owner := "tag:" + tag.Name
-		dependency := strictCacheHTMLBase(plan, route, "Tag: "+tag.Name, "", "", "", true)
-		dependency.Entries = strictCachePageEntries(notes)
-		if dependencyErr := outputs.dependency(owner, tag.Name, dependency); dependencyErr != nil {
-			return result, dependencyErr
+		pages := plan.TagPages[route]
+		if pages == nil {
+			pages = model.NewRoutePagePlan(route, plan.Config.Pagination.PageSize, len(notes))
 		}
-		if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(route), owner, data); writeErr != nil {
-			return result, writeErr
+		for _, page := range pages.Pages {
+			pageNotes := notes[page.Start:page.End]
+			data, renderErr := render.RenderStrictTagPage(plan, tag, page.Route, pageNotes)
+			if renderErr != nil {
+				return result, fmt.Errorf("render tag %q: %w", tag.Name, renderErr)
+			}
+			owner := "tag:" + tag.Name
+			if page.Number > 1 {
+				owner += ":page:" + strconv.Itoa(page.Number)
+			}
+			dependency := strictCacheHTMLBase(plan, page.Route, "Tag: "+tag.Name, "", "", "", true)
+			dependency.Entries = strictCachePageEntries(pageNotes)
+			if dependencyErr := outputs.dependency(owner, tag.Name, dependency); dependencyErr != nil {
+				return result, dependencyErr
+			}
+			if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(page.Route), owner, data); writeErr != nil {
+				return result, writeErr
+			}
+			result.TagPages++
 		}
-		result.TagPages++
 	}
 	if plan.Timeline != nil {
 		for _, page := range plan.Timeline.Pages {
@@ -477,9 +500,7 @@ type strictCacheHTMLConfig struct {
 	DefaultImgExternal bool                   `json:"defaultImgExternal,omitempty"`
 	CustomCSS          bool                   `json:"customCSS,omitempty"`
 	ThemeCSS           string                 `json:"themeCSS,omitempty"`
-	ThemeSlots         string                 `json:"themeSlots,omitempty"`
-	ThemeAuthor        string                 `json:"themeAuthor,omitempty"`
-	ThemeDescription   string                 `json:"themeDescription,omitempty"`
+	ThemeManifest      string                 `json:"themeManifest,omitempty"`
 	Popover            bool                   `json:"popover,omitempty"`
 }
 
@@ -535,7 +556,7 @@ func strictCacheHTMLBase(plan *model.SitePlan, route, title, description, source
 	if versionID != "" {
 		input.Versions = strictCacheVersionEntries(plan)
 	}
-	if strings.TrimSpace(plan.Config.ThemeSlots) != "" {
+	if len(plan.ThemeAssetURLs) > 0 {
 		input.ThemeAssetURLs = make(map[string]string, len(plan.ThemeAssetURLs))
 		for name, assetRoute := range plan.ThemeAssetURLs {
 			input.ThemeAssetURLs[name] = assetRoute
@@ -562,14 +583,10 @@ func strictCacheConfig(plan *model.SitePlan) strictCacheHTMLConfig {
 		DefaultImgExternal: plan.Config.DefaultImgExternal,
 		CustomCSS:          plan.Config.CustomCSS != "",
 		ThemeCSS:           plan.Config.ThemeCSS,
+		ThemeManifest:      plan.ThemeAssetManifest,
 		Popover:            plan.Config.Popover.Enabled,
 	}
 	config.Navigation = append([]model.NavigationItem(nil), plan.Config.Navigation...)
-	if strings.TrimSpace(plan.Config.ThemeSlots) != "" {
-		config.ThemeSlots = plan.Config.ThemeSlots
-		config.ThemeAuthor = plan.Config.Author
-		config.ThemeDescription = plan.Config.Description
-	}
 	return config
 }
 
@@ -1266,6 +1283,13 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 	for _, section := range plan.Sections {
 		if section != nil && section.Route != "" {
 			_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc>%s</url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, section.Route)), strictLastMod(section.LastModified))
+			if pages := plan.SectionPages[section.Route]; pages != nil {
+				for _, page := range pages.Pages {
+					if page.Number > 1 {
+						_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, page.Route)))
+					}
+				}
+			}
 		}
 	}
 	for _, article := range plan.Articles {
@@ -1276,7 +1300,15 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 	if index != nil {
 		for _, tag := range strictBuildTags(index.Tags) {
 			if tag != nil {
-				_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, "/"+slug.EncodePath(tag.Slug)+"/")))
+				route := "/" + slug.EncodePath(tag.Slug) + "/"
+				_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, route)))
+				if pages := plan.TagPages[route]; pages != nil {
+					for _, page := range pages.Pages {
+						if page.Number > 1 {
+							_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, page.Route)))
+						}
+					}
+				}
 			}
 		}
 	}

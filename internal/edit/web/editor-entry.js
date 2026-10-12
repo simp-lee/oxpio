@@ -73,7 +73,7 @@ async function refreshLivePreview(request) {
   frame.hidden = false;
   await loaded;
   if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
-  const documentRoot = frame.contentDocument?.querySelector(".content-preview-content");
+  const documentRoot = frame.contentDocument?.querySelector("[data-page-content]");
   if (!documentRoot) return;
   const blocks = [...documentRoot.children].map(child => serializeLivePreviewBlock(child, frame.contentDocument));
   const styles = livePreviewStyles(frame.contentDocument);

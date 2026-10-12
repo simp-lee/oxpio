@@ -101,39 +101,12 @@ func TestServerCloseRemovesTemporaryPreviews(t *testing.T) {
 	}
 }
 
-func TestRenderContentPreviewUsesRenderedEntryContentOnly(t *testing.T) {
-	fullPage := []byte(`<!doctype html><html lang="zh"><head>
-		<script src="/docs/assets/oxpio/runtime.abc.js"></script>
-		<link rel="stylesheet" href="/docs/assets/oxpio-runtime/katex.min.css">
-		<link rel="stylesheet" href="/docs/assets/custom.css"><link rel="stylesheet" href="/docs/theme.css">
-	</head><body><header class="site-header">Navigation</header><main><div class="site-content"><article class="article-sheet">
-		<h1>Article</h1><div class="entry-content article-content" data-page-content><p>Body</p><img src="/docs/assets/image.png"><img src="../../assets/relative.png"><pre><code>code</code></pre><table><tr><td>table</td></tr></table><span data-oxpio-math-source>$$x$$</span></div>
-		<section class="related-articles">Related</section></article></div></main><aside class="sidebar-shell">Sidebar</aside><footer class="site-footer">Footer</footer></body></html>`)
-	got, err := renderContentPreview(fullPage, "token", "Article", "/docs/guide/article/")
-	if err != nil {
-		t.Fatal(err)
-	}
-	html := string(got)
-	for _, want := range []string{
-		`data-oxpio-content-preview`,
-		`data-oxpio-math`,
-		`Article`,
-		`Body`,
-		`/_oxpio/preview/token/content.css`,
-		`/_oxpio/logo.svg`,
-		`<base href="/_oxpio/preview/token/docs/guide/article/">`,
-		`/_oxpio/preview/token/docs/assets/image.png`,
-		`../../assets/relative.png`,
-		`/_oxpio/preview/token/docs/assets/oxpio/runtime.abc.js`,
-		`/_oxpio/preview/token/docs/assets/oxpio-runtime/katex.min.css`,
-	} {
+func TestRewritePreviewHTMLPreservesThemedShellAndRewritesResources(t *testing.T) {
+	fullPage := []byte(`<!doctype html><html><head><link rel="stylesheet" href="/docs/theme.css"></head><body><header class="site-header">Navigation</header><main><div data-page-content><p>Body</p><img src="/docs/assets/image.png"></div></main></body></html>`)
+	html := string(rewritePreviewHTML(fullPage, "/_oxpio/preview/token"))
+	for _, want := range []string{"site-header", "data-page-content", "/_oxpio/preview/token/docs/theme.css", "/_oxpio/preview/token/docs/assets/image.png"} {
 		if !strings.Contains(html, want) {
-			t.Fatalf("content preview missing %q: %s", want, html)
-		}
-	}
-	for _, unwanted := range []string{"site-header", "sidebar-shell", "site-footer", "related-articles", "custom.css", "theme.css"} {
-		if strings.Contains(html, unwanted) {
-			t.Fatalf("content preview contains %q: %s", unwanted, html)
+			t.Fatalf("preview missing %q: %s", want, html)
 		}
 	}
 }

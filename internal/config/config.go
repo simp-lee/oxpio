@@ -137,16 +137,23 @@ source: {}
 // LoadForBuild reads exactly <resolvedVault>/oxpio.yaml and discovers only the
 // fixed optional vault inputs.
 func LoadForBuild(resolvedVault string) (model.SiteConfig, error) {
-	return loadForBuild(resolvedVault, "")
+	return loadForBuild(resolvedVault, "", false)
 }
 
 // LoadForBuildWithOutput excludes fixed optional inputs inside the formal
 // output boundary. The required vault configuration itself is never optional.
 func LoadForBuildWithOutput(resolvedVault, resolvedOutput string) (model.SiteConfig, error) {
-	return loadForBuild(resolvedVault, resolvedOutput)
+	return loadForBuild(resolvedVault, resolvedOutput, false)
 }
 
-func loadForBuild(resolvedVault, resolvedOutput string) (model.SiteConfig, error) {
+// LoadForThemePreview validates the site configuration while deferring the
+// configured theme directory lookup so an explicit preview theme can replace
+// a missing or invalid current selection in memory.
+func LoadForThemePreview(resolvedVault, resolvedOutput string) (model.SiteConfig, error) {
+	return loadForBuild(resolvedVault, resolvedOutput, true)
+}
+
+func loadForBuild(resolvedVault, resolvedOutput string, skipThemeDirectory bool) (model.SiteConfig, error) {
 	vaultRoot := filepath.Clean(strings.TrimSpace(resolvedVault))
 	if vaultRoot == "" || !filepath.IsAbs(vaultRoot) {
 		return model.SiteConfig{}, fmt.Errorf("resolved vault path is required")
@@ -204,7 +211,7 @@ func loadForBuild(resolvedVault, resolvedOutput string) (model.SiteConfig, error
 	if outputOverlapsPath(resolvedOutput, obsidianRoot) {
 		return model.SiteConfig{}, fmt.Errorf("output must not overlap .obsidian")
 	}
-	if cfg.Theme != ThemeBaseID {
+	if cfg.Theme != ThemeBaseID && !skipThemeDirectory {
 		themeRelPath := path.Join(ThemeRootRelPath, cfg.Theme)
 		themePath := filepath.Join(vaultRoot, filepath.FromSlash(themeRelPath))
 		if outputOverlapsPath(resolvedOutput, themePath) {

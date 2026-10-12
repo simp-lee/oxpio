@@ -1,179 +1,59 @@
 package siteplan
 
 import (
+	"bytes"
+	"encoding/xml"
 	"fmt"
 	"io"
 	"net/url"
 	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
 	"github.com/simp-lee/oxpio/internal/asset"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	"github.com/simp-lee/oxpio/internal/diag"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
-	"github.com/simp-lee/oxpio/internal/markdown"
 	"github.com/simp-lee/oxpio/internal/model"
-	"github.com/simp-lee/oxpio/internal/render"
-	"github.com/simp-lee/oxpio/internal/resourcepath"
+	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	"github.com/simp-lee/oxpio/internal/vault"
-	xhtml "golang.org/x/net/html"
 )
 
-func validateThemeSlotAssets(plan *model.SitePlan, index *model.VaultIndex, plannedOutputs map[string]struct{}, collector *diag.Collector) {
-	if strings.TrimSpace(plan.Config.ThemeSlots) == "" {
-		return
-	}
-	publicOutputs, err := themeSlotPublicOutputPaths(plan.Config.BaseURL, plannedOutputs)
-	if err != nil {
-		record(collector, diag.KindMetadata, filepath.Join(plan.Config.ThemeDir, "slots.html"), "theme slot resource plan: %v", err)
-		return
-	}
-	check := func(route, title string, note *model.Note, source string) {
-		slots, err := render.RenderStrictThemeSlots(plan, route, title, note, source)
-		if err == nil {
-			err = validateExpandedThemeSlotResources(plan.Config.BaseURL, route, slots, publicOutputs)
-		}
-		if err != nil {
-			record(collector, diag.KindMetadata, filepath.Join(plan.Config.ThemeDir, "slots.html"), "theme slots for %q: %v", route, err)
-		}
-	}
-	for _, section := range plan.Sections {
-		if section != nil && section.Route != "" {
-			check(section.Route, section.Title, nil, section.SourcePath)
-		}
-	}
-	for _, article := range plan.Articles {
-		if article != nil && article.Route != "" {
-			check(article.Route, article.Frontmatter.Title, article, article.RelPath)
-		}
-	}
-	if index != nil {
-		for _, tag := range sortedStrictTags(index.Tags) {
-			check("/"+encodePath(tag.Slug)+"/", "Tag: "+tag.Name, nil, "")
-		}
-	}
-	if plan.Timeline != nil {
-		for _, page := range plan.Timeline.Pages {
-			check(page.Route, "Recent articles", nil, "")
-		}
-	}
-	check("/404.html", "Not found", nil, "")
-}
+var themeJavaScriptImportPattern = regexp.MustCompile(`(?m)(\b(?:import|export)\s+(?:[^;\n]*?\s+from\s+)?|\bimport\s*\(\s*)(?:"([^"]+)"|'([^']+)')`)
 
-func themeSlotPublicOutputPaths(baseURL string, outputs map[string]struct{}) (map[string]struct{}, error) {
-	base, err := url.Parse(baseURL)
-	if err != nil {
-		return nil, err
-	}
-	public := make(map[string]struct{}, len(outputs)+1)
-	for output := range outputs {
-		reference, err := url.Parse(strings.TrimPrefix(output, "/"))
-		if err != nil {
-			return nil, fmt.Errorf("planned output %q: %w", output, err)
-		}
-		public[base.ResolveReference(reference).Path] = struct{}{}
-	}
-	// style.css is emitted by the strict builder rather than the asset planner.
-	public[base.ResolveReference(&url.URL{Path: "style.css"}).Path] = struct{}{}
-	return public, nil
-}
-
-func validateExpandedThemeSlotResources(baseURL, route string, slots map[string]string, plannedOutputs map[string]struct{}) error {
-	base, err := url.Parse(baseURL)
-	if err != nil {
+// ValidateThemeSource validates a theme with the same content-addressed asset
+// planner used by a strict site plan, without scanning or writing a vault.
+func ValidateThemeSource(vaultRoot string, source internaltheme.Source) error {
+	if err := internaltheme.Validate(source); err != nil {
 		return err
 	}
-	routeReference, err := url.Parse(strings.TrimPrefix(route, "/"))
-	if err != nil {
-		return err
-	}
-	page := base.ResolveReference(routeReference)
-	names := make([]string, 0, len(slots))
-	for name := range slots {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		validateResource := func(raw string) error {
-			if !resourcepath.IsLocalTarget(raw) {
-				return nil
-			}
-			reference, err := url.Parse(strings.TrimSpace(raw))
-			if err == nil {
-				resolved := page.ResolveReference(reference)
-				if resolved.Scheme == page.Scheme && resolved.Host == page.Host {
-					if _, ok := plannedOutputs[resolved.Path]; ok {
-						return nil
-					}
-				}
-			}
-			return fmt.Errorf("local resource %q does not point to a planned output; use themeAssetURL for theme resources", raw)
+	plan := &model.SitePlan{VaultPath: vaultRoot, ThemeFiles: source.Files, ThemeAssets: map[string]*model.PlannedAsset{}, VaultCSSAssets: map[string]*model.PlannedAsset{}, CSSInputFiles: map[string]struct{}{}}
+	inputs := make(map[string][]byte)
+	assetSources := make(map[string]string)
+	for rel, data := range source.Files {
+		if !strings.HasPrefix(rel, "assets/") || strings.TrimPrefix(rel, "assets/") == "" {
+			continue
 		}
-		_, err := markdown.RewriteRawHTMLResources([]byte(slots[name]), func(raw string) (string, error) {
-			return raw, validateResource(raw)
-		})
-		if err == nil {
-			err = validateThemeSlotAttachmentLinks(slots[name], validateResource)
+		name := strings.TrimPrefix(rel, "assets/")
+		physical := rel
+		if !source.Embedded {
+			physical = filepath.ToSlash(filepath.Join(internalconfig.ThemeRootRelPath, source.ID, rel))
 		}
-		if err != nil {
-			return fmt.Errorf("theme slot %q: %w", name, err)
+		inputs[physical] = data
+		assetSources[name] = physical
+	}
+	collector := diag.NewCollector()
+	planThemeAssets(plan, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+	if collector.HasErrors() {
+		items := collector.Diagnostics()
+		if len(items) > 0 {
+			return fmt.Errorf("theme asset validation: %s", items[0].Message)
 		}
+		return fmt.Errorf("theme asset validation failed")
 	}
-	return nil
-}
-
-func validateThemeSlotAttachmentLinks(output string, validate func(string) error) error {
-	z := xhtml.NewTokenizer(strings.NewReader(output))
-	for {
-		switch z.Next() {
-		case xhtml.ErrorToken:
-			if err := z.Err(); err != nil && err != io.EOF {
-				return err
-			}
-			return nil
-		case xhtml.StartTagToken, xhtml.SelfClosingTagToken:
-			token := z.Token()
-			if token.Data == "noscript" {
-				z.NextIsNotRawText()
-			}
-			if token.Data != "a" && token.Data != "area" {
-				continue
-			}
-			href, download := "", false
-			for _, attribute := range token.Attr {
-				switch strings.ToLower(attribute.Key) {
-				case "href":
-					href = attribute.Val
-				case "download":
-					download = true
-				}
-			}
-			if href != "" && (download || themeSlotLooksLikeAttachment(href)) {
-				if err := validate(href); err != nil {
-					return err
-				}
-			}
-		}
-	}
-}
-
-func themeSlotLooksLikeAttachment(raw string) bool {
-	if !resourcepath.IsLocalTarget(raw) {
-		return false
-	}
-	parsed, err := url.Parse(strings.TrimSpace(raw))
-	targetPath := ""
-	if err == nil {
-		targetPath = parsed.Path
-	} else {
-		targetPath = raw
-		if index := strings.IndexAny(targetPath, "?#"); index >= 0 {
-			targetPath = targetPath[:index]
-		}
-	}
-	extension := strings.ToLower(path.Ext(targetPath))
-	return extension != "" && extension != ".html" && extension != ".htm" && extension != ".md"
+	return internaltheme.ValidateWithAssets(source, plan.ThemeAssetURLs, "https://theme.invalid/")
 }
 
 // Theme inputs are admitted explicitly, not via Markdown's resource discovery.
@@ -229,7 +109,7 @@ func planThemeAssets(plan *model.SitePlan, scan vault.ScanResult, index *model.V
 			return planned, nil
 		}
 		if visiting[source] {
-			return nil, fmt.Errorf("cyclic theme CSS dependency at %q", source)
+			return nil, fmt.Errorf("cyclic theme asset dependency at %q", source)
 		}
 		visiting[source] = true
 		defer delete(visiting, source)
@@ -241,11 +121,14 @@ func planThemeAssets(plan *model.SitePlan, scan vault.ScanResult, index *model.V
 				if err != nil {
 					return "", fmt.Errorf("theme CSS URL %q: %w", raw, err)
 				}
-				if u.IsAbs() || u.Host != "" || strings.HasPrefix(raw, "//") || u.Path == "" {
+				if u.IsAbs() || u.Host != "" || strings.HasPrefix(raw, "//") {
+					return "", fmt.Errorf("theme CSS external URL %q is not allowed", raw)
+				}
+				if u.Path == "" {
 					return raw, nil
 				}
 				if strings.HasPrefix(raw, "/") {
-					return rewriteVaultCSSURL(plan, scan, index, "", raw, resolveVault)
+					return "", fmt.Errorf("theme CSS URL %q must reference a theme asset", raw)
 				}
 				name := path.Join(cssDirs[source], u.Path)
 				target := assetSources[name]
@@ -268,6 +151,25 @@ func planThemeAssets(plan *model.SitePlan, scan vault.ScanResult, index *model.V
 			if err != nil {
 				return nil, err
 			}
+		} else if strings.EqualFold(path.Ext(source), ".js") {
+			var err error
+			data, err = rewriteThemeJavaScriptImports(data, source, assetSources, resolve)
+			if err != nil {
+				return nil, err
+			}
+		} else if strings.EqualFold(path.Ext(source), ".svg") {
+			assetName := ""
+			for name, candidate := range assetSources {
+				if candidate == source {
+					assetName = name
+					break
+				}
+			}
+			var err error
+			data, err = rewriteThemeSVGReferences(data, assetName, assetSources, resolve)
+			if err != nil {
+				return nil, err
+			}
 		}
 		planned := asset.PlanData(source, data)
 		plan.ThemeAssets[source] = planned
@@ -286,9 +188,152 @@ func planThemeAssets(plan *model.SitePlan, scan vault.ScanResult, index *model.V
 	for name, source := range assetSources {
 		if planned := plan.ThemeAssets[source]; planned != nil {
 			plan.ThemeAssetURLs[name] = planned.DstPath
+			plan.ThemeAssetURLs["assets/"+name] = planned.DstPath
 		}
 	}
-	if planned := plan.ThemeAssets[cssSource]; planned != nil {
-		plan.Config.ThemeCSS = planned.DstPath
+	if cssSource != "" {
+		if planned := plan.ThemeAssets[cssSource]; planned != nil {
+			plan.Config.ThemeCSS = planned.DstPath
+		}
+	} else if source := assetSources["style.css"]; source != "" {
+		if planned := plan.ThemeAssets[source]; planned != nil {
+			plan.Config.ThemeCSS = planned.DstPath
+		}
 	}
+}
+
+func rewriteThemeSVGReferences(data []byte, assetName string, assetSources map[string]string, resolve func(string) (*model.PlannedAsset, error)) ([]byte, error) {
+	var rewritten, safe bytes.Buffer
+	rewrittenEncoder := xml.NewEncoder(&rewritten)
+	safeEncoder := xml.NewEncoder(&safe)
+	decoder := xml.NewDecoder(bytes.NewReader(data))
+	didRewrite := false
+	for {
+		token, err := decoder.Token()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("decode theme SVG: %w", err)
+		}
+		start, ok := token.(xml.StartElement)
+		if ok {
+			safeStart := start
+			safeStart.Attr = append([]xml.Attr(nil), start.Attr...)
+			for i := range start.Attr {
+				attribute := &start.Attr[i]
+				if !strings.EqualFold(attribute.Name.Local, "href") && !strings.EqualFold(attribute.Name.Local, "src") {
+					continue
+				}
+				value := strings.TrimSpace(attribute.Value)
+				if value == "" || strings.HasPrefix(value, "#") {
+					continue
+				}
+				parsed, parseErr := url.Parse(value)
+				if parseErr != nil || parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(value, "//") || strings.ContainsAny(value, "\\\\\r\n\x00") {
+					return nil, fmt.Errorf("theme SVG reference %q is not a local asset", value)
+				}
+				resourcePath := parsed.Path
+				if resourcePath == "" || path.Clean(resourcePath) != resourcePath || strings.HasPrefix(resourcePath, "/") || strings.HasPrefix(resourcePath, "../") || resourcePath == ".." {
+					return nil, fmt.Errorf("theme SVG reference %q is not a normalized asset path", value)
+				}
+				name := path.Join(path.Dir(assetName), resourcePath)
+				target := assetSources[name]
+				if target == "" {
+					return nil, fmt.Errorf("theme SVG asset %q was not found", value)
+				}
+				dependency, resolveErr := resolve(target)
+				if resolveErr != nil {
+					return nil, resolveErr
+				}
+				suffix := value[len(resourcePath):]
+				attribute.Value = path.Base(dependency.DstPath) + suffix
+				safeStart.Attr[i].Value = "#theme-asset"
+				didRewrite = true
+			}
+			if err := rewrittenEncoder.EncodeToken(start); err != nil {
+				return nil, err
+			}
+			if err := safeEncoder.EncodeToken(safeStart); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		if err := rewrittenEncoder.EncodeToken(token); err != nil {
+			return nil, err
+		}
+		if err := safeEncoder.EncodeToken(token); err != nil {
+			return nil, err
+		}
+	}
+	if err := rewrittenEncoder.Flush(); err != nil {
+		return nil, err
+	}
+	if err := safeEncoder.Flush(); err != nil {
+		return nil, err
+	}
+	if didRewrite {
+		if err := asset.ValidateLocalSVG(safe.Bytes()); err != nil {
+			return nil, fmt.Errorf("theme SVG: %w", err)
+		}
+		return rewritten.Bytes(), nil
+	}
+	if err := asset.ValidateLocalSVG(data); err != nil {
+		return nil, fmt.Errorf("theme SVG: %w", err)
+	}
+	return data, nil
+}
+
+func rewriteThemeJavaScriptImports(data []byte, source string, assetSources map[string]string, resolve func(string) (*model.PlannedAsset, error)) ([]byte, error) {
+	assetName := ""
+	for name, candidate := range assetSources {
+		if candidate == source {
+			assetName = name
+			break
+		}
+	}
+	if assetName == "" {
+		return data, nil
+	}
+	matches := themeJavaScriptImportPattern.FindAllSubmatchIndex(data, -1)
+	if len(matches) == 0 {
+		return data, nil
+	}
+	var rewritten strings.Builder
+	last := 0
+	for _, match := range matches {
+		refStart, refEnd := match[4], match[5]
+		if refStart < 0 {
+			refStart, refEnd = match[6], match[7]
+		}
+		raw := string(data[refStart:refEnd])
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/") || strings.ContainsAny(raw, "\\\\\r\n\x00") {
+			return nil, fmt.Errorf("theme JavaScript import %q is not a local asset", raw)
+		}
+		resourcePath := raw
+		suffix := ""
+		if split := strings.IndexAny(raw, "?#"); split >= 0 {
+			resourcePath, suffix = raw[:split], raw[split:]
+		}
+		resourcePath = strings.TrimPrefix(resourcePath, "./")
+		if resourcePath == "" || path.Clean(resourcePath) != resourcePath || strings.HasPrefix(resourcePath, "../") || resourcePath == ".." {
+			return nil, fmt.Errorf("theme JavaScript import %q is not a normalized asset path", raw)
+		}
+		name := path.Join(path.Dir(assetName), resourcePath)
+		target := assetSources[name]
+		if target == "" {
+			return nil, fmt.Errorf("theme JavaScript asset %q was not found", raw)
+		}
+		dependency, err := resolve(target)
+		if err != nil {
+			return nil, err
+		}
+		rewritten.Write(data[last:refStart])
+		rewritten.WriteString(path.Base(dependency.DstPath))
+		rewritten.WriteString(suffix)
+		last = refEnd
+	}
+	rewritten.Write(data[last:])
+	return []byte(rewritten.String()), nil
 }

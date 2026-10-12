@@ -72,11 +72,9 @@ Inline <img src="../images/inline.bin?v=1#icon" data-keep="yes"> resource.
 
 Inline style <style>.inline-style { background: url("../images/inline-style.bin") }</style> text.
 
-<link rel="canonical" href="/canonical/"><link rel="stylesheet" href="../styles/content.css"><link rel="stylesheet" href="../custom.css">
+<link rel="canonical" href="/canonical/"><link rel="stylesheet" href="../styles/content.css"><link rel="stylesheet" href="../styles/nested.css"><link rel="stylesheet" href="../custom.css">
 `)
-	writeStrictFile(t, vault, "custom.css", `@import "styles/nested.css" screen;
-body { background: url("images/custom-bg.bin?v=2#main"); }
-.remote { background: url(https://cdn.example.test/remote.png); }
+	writeStrictFile(t, vault, "custom.css", `@import "assets/style.css" screen;
 `)
 	writeStrictFile(t, vault, "styles/nested.css", `@font-face { src: url('../fonts/site.woff2'); }`)
 	writeStrictFile(t, vault, "styles/content.css", `.content { background: url('../images/content-bg.bin'); }`)
@@ -89,7 +87,6 @@ body { background: url("images/custom-bg.bin?v=2#main"); }
 		"images/sheet.bin":        "sheet",
 		"images/inline-style.bin": "inline style",
 		"images/content-bg.bin":   "content background",
-		"images/custom-bg.bin":    "background",
 		"fonts/site.woff2":        "font",
 	} {
 		writeStrictFile(t, vault, source, content)
@@ -101,7 +98,7 @@ body { background: url("images/custom-bg.bin?v=2#main"); }
 	}
 	for _, source := range []string{
 		"images/inline.bin", "images/block.bin", "images/one.bin", "images/two-local.bin", "images/style.bin", "images/sheet.bin", "images/inline-style.bin",
-		"styles/content.css", "images/content-bg.bin", "custom.css", "styles/nested.css", "images/custom-bg.bin", "fonts/site.woff2",
+		"styles/content.css", "images/content-bg.bin", "custom.css", "styles/nested.css", "fonts/site.woff2",
 	} {
 		planned := result.Assets[source]
 		if planned == nil || planned.DstPath == "" {
@@ -135,9 +132,7 @@ body { background: url("images/custom-bg.bin?v=2#main"); }
 
 	customCSS := string(readBuildOutputFile(t, output, customCSSOutputPath))
 	for _, want := range []string{
-		path.Base(result.Assets["styles/nested.css"].DstPath),
-		path.Base(result.Assets["images/custom-bg.bin"].DstPath) + "?v=2#main",
-		"https://cdn.example.test/remote.png",
+		path.Base(result.Assets["assets/style.css"].DstPath),
 	} {
 		if !strings.Contains(customCSS, want) {
 			t.Fatalf("custom CSS missing %q: %s", want, customCSS)

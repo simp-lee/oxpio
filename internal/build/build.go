@@ -85,6 +85,38 @@ func BuildWithOptions(vaultPath, outputPath string, options Options) (*BuildResu
 	return strictResult, buildErr
 }
 
+// BuildWithConfig publishes an in-memory normalized configuration selection.
+// It is used only by isolated preview paths; it never writes the config file.
+func BuildWithConfig(vaultPath, outputPath string, cfg model.SiteConfig, options Options) (*BuildResult, error) {
+	sourceOutputPath := outputPath
+	if options.SourceOutputPath != "" {
+		sourceOutputPath = options.SourceOutputPath
+	}
+	planned, analyzeErr := siteplan.BuildForOutputWithConfig(vaultPath, sourceOutputPath, cfg)
+	if planned == nil {
+		return &BuildResult{}, analyzeErr
+	}
+	result := buildResultFromAnalysis(planned.Diagnostics)
+	result.Catalog = sourceCatalog(planned)
+	if analyzeErr != nil || result.ErrorCount > 0 || options.Strict && result.WarningCount > 0 {
+		if analyzeErr != nil {
+			return result, analyzeErr
+		}
+		return result, internalanalyze.Failure(planned.Diagnostics)
+	}
+	strictResult, buildErr := buildStrictSiteWithTransactionTracking(planned, vaultPath, outputPath, options.DiagnosticsWriter, options.TrackOutputTransactionPath, options.Concurrency)
+	if strictResult == nil {
+		strictResult = &BuildResult{}
+	}
+	strictResult.Diagnostics = append(result.Diagnostics, strictResult.Diagnostics...)
+	if strictResult.Catalog == nil {
+		strictResult.Catalog = result.Catalog
+	}
+	strictResult.ErrorCount += result.ErrorCount
+	strictResult.WarningCount += result.WarningCount
+	return strictResult, buildErr
+}
+
 // SourceCatalogForPlan exposes the canonical source mapping to shared
 // application adapters. The mapping is read-only and includes hidden sources
 // with an empty public route.

@@ -412,7 +412,7 @@ func TestRenamePathNoReplacePreservesDestination(t *testing.T) {
 }
 
 func TestValidateManagedPathsRejectReservedAndTraversal(t *testing.T) {
-	for _, pathValue := range []string{"../escape.md", "/absolute.md", ".oxpio/theme.css", "oxpio.yaml", "OXPIO.YAML", "node_modules/pkg", "NODE_MODULES/pkg", "docs/../guide.md"} {
+	for _, pathValue := range []string{"../escape.md", "/absolute.md", ".oxpio/themes/minimal/layouts/article.html", "oxpio.yaml", "OXPIO.YAML", "node_modules/pkg", "NODE_MODULES/pkg", "docs/../guide.md"} {
 		if err := validateManagedRelPath(pathValue); err == nil {
 			t.Fatalf("validateManagedRelPath(%q) succeeded", pathValue)
 		}

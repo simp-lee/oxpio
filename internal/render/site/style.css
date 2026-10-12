@@ -1777,8 +1777,8 @@ a.listing-card {
   object-fit: cover;
 }
 
-/* Strict section pages use the same fixed shell with a small, server-rendered
-   layout. Keep the authored navigation usable before the runtime is ready. */
+/* The embedded and local Go-template themes share a small server-rendered
+   layout. Keep authored navigation usable before the runtime is ready. */
 .site-body {
   display: block;
 }
