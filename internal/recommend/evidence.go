@@ -31,6 +31,23 @@ type PairScore struct {
 	Final   float64
 }
 
+// Reasons returns the stable signal names contributing to a positive score.
+// The order is the same as the production score tuple and is shared by page
+// and Agent recommendation DTOs.
+func Reasons(score PairScore) []string {
+	result := make([]string, 0, 3)
+	if score.Content > 0 {
+		result = append(result, "content")
+	}
+	if score.Link > 0 {
+		result = append(result, "link")
+	}
+	if score.Tag > 0 {
+		result = append(result, "tag")
+	}
+	return result
+}
+
 // TopicShape is the centralized lexical topic predicate.
 func TopicShape(term string) bool {
 	normalized := strings.ToLower(norm.NFKC.String(strings.TrimSpace(term)))

@@ -491,6 +491,8 @@ func commandForSpec(spec internalapplication.CommandSpec, deps commandDependenci
 		return newTagsCommand()
 	case "grep":
 		return newGrepCommand()
+	case "related":
+		return newRelatedCommand()
 	case "theme init":
 		return newThemeInitCommand()
 	case "theme validate":

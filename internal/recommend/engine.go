@@ -277,7 +277,7 @@ func rankSourceDocument(
 		if score.Final <= 0 {
 			continue
 		}
-		topK.add(RankedDocument{DocID: candidateDocID, Score: score.Final}, limit)
+		topK.add(RankedDocument{DocID: candidateDocID, Score: score.Final, Signals: score}, limit)
 	}
 
 	sort.Slice(topK.items, func(left int, right int) bool {

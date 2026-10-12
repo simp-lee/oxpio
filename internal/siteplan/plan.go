@@ -227,7 +227,10 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 			}
 		}
 	}
-	indexResult, indexErr := vault.BuildStrictIndex(scan, sources, plan.Articles, plan.Sections, collector, vault.BuildIndexOptions{Concurrency: concurrency, CollectRelatedSemantic: cfg.Related.Enabled, ResourceSections: allSections(sections)})
+	// The normalized plan always retains the source-AST semantic owner. Page
+	// rendering may disable the related section, but the independent Agent
+	// related query must use the same parsed source and production engine.
+	indexResult, indexErr := vault.BuildStrictIndex(scan, sources, plan.Articles, plan.Sections, collector, vault.BuildIndexOptions{Concurrency: concurrency, CollectRelatedSemantic: true, ResourceSections: allSections(sections)})
 	if indexErr != nil {
 		record(collector, diag.KindSchema, resolvedVault, "index strict Markdown: %v", indexErr)
 	}

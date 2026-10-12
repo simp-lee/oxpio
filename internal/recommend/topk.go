@@ -4,8 +4,9 @@ import "container/heap"
 
 // RankedDocument is one compact candidate retained by the bounded engine.
 type RankedDocument struct {
-	DocID int
-	Score float64
+	DocID   int
+	Score   float64
+	Signals PairScore
 }
 
 type rankingDocument struct {

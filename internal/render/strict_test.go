@@ -1,11 +1,59 @@
 package render
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/simp-lee/oxpio/internal/model"
+	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 )
+
+func TestStrictArticleThemeReceivesRecommendationEvidence(t *testing.T) {
+	files, err := internaltheme.BaseFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["layouts/base.html"] = []byte(`{{define "base"}}{{range .Related}}{{.Path}}|{{.Score}}|{{range .Reasons}}{{.}},{{end}}|{{.Signals.Content}}|{{.Signals.Link}}|{{.Signals.Tag}}{{end}}{{end}}`)
+	plan := &model.SitePlan{Config: model.SiteConfig{Title: "Site", BaseURL: "https://example.test/", Theme: "base"}, ThemeFiles: files}
+	article := &model.Note{RelPath: "alpha.md", Route: "/alpha/", Frontmatter: model.Frontmatter{Title: "Alpha", Type: "doc"}, RawContent: []byte("Body\n")}
+	index := &model.VaultIndex{Notes: map[string]*model.Note{
+		"beta.md": {RelPath: "beta.md", Route: "/beta/", Frontmatter: model.Frontmatter{Title: "Beta", Type: "doc"}},
+	}}
+	recommendations := []model.RelatedRecommendation{{
+		RelPath: "beta.md", Score: 1.15, Reasons: []string{"content", "tag"},
+		Signals: model.RecommendationSignals{Content: 1, Tag: 0.15},
+	}}
+	data, err := RenderStrictArticleWithRecommendations(plan, article, nil, nil, 0, 0, nil, nil, recommendations, index, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "beta.md|1.15|content,tag,|1|0|0.15") {
+		t.Fatalf("theme did not receive recommendation evidence: %s", data)
+	}
+}
+
+func TestThemedRecommendationCardsPreserveAgentEvidence(t *testing.T) {
+	plan := &model.SitePlan{Config: model.SiteConfig{BaseURL: "https://example.test/"}}
+	index := &model.VaultIndex{Notes: map[string]*model.Note{
+		"beta.md": {RelPath: "beta.md", Route: "/beta/", Frontmatter: model.Frontmatter{Title: "Beta", Type: "doc"}},
+	}}
+	recommendations := []model.RelatedRecommendation{{
+		RelPath: "beta.md", Score: 1.15, Reasons: []string{"content", "tag"},
+		Signals: model.RecommendationSignals{Content: 1, Tag: 0.15},
+	}}
+	cards := themedRecommendationCards(plan, index, recommendations)
+	if len(cards) != 1 {
+		t.Fatalf("recommendation cards = %#v, want one card", cards)
+	}
+	card := cards[0]
+	if card.Path != "beta.md" || card.Href != "/beta/" || card.Title != "Beta" || card.Score != 1.15 {
+		t.Fatalf("card identity = %#v", card)
+	}
+	if !reflect.DeepEqual(card.Reasons, recommendations[0].Reasons) || card.Signals.Content != 1 || card.Signals.Tag != 0.15 {
+		t.Fatalf("card evidence = %#v", card)
+	}
+}
 
 func TestStrictLeadingTitlePlacementAvoidsRetainedIDCollisions(t *testing.T) {
 	note := &model.Note{Headings: []model.Heading{{Level: 1, Text: "Title", ID: "title"}}}

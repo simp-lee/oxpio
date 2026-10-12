@@ -171,7 +171,7 @@ func TestBuildStrictRelationsConsumesRelatedSemanticOwner(t *testing.T) {
 		RelatedSemantic: fixture.Semantics,
 	}
 
-	_, related, err := buildStrictRelations(planned, 4)
+	_, related, _, err := buildStrictRelationsWithDetails(planned, 4)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -213,7 +213,7 @@ func TestBuildStrictRelationsPartitionsRecommendationCorpusByVersion(t *testing.
 		RelatedSemantic: semantics,
 	}
 
-	_, related, err := buildStrictRelations(planned, 1)
+	_, related, _, err := buildStrictRelationsWithDetails(planned, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

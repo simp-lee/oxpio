@@ -52,6 +52,7 @@ func TestRealCommandMatrixUsesStableJSONEnvelope(t *testing.T) {
 		{"ls", ".", "--vault", vault, "--format", "json"},
 		{"tags", "--vault", vault, "--format", "json"},
 		{"grep", "Body", "--vault", vault, "--format", "json"},
+		{"related", "article.md", "--vault", vault, "--format", "json"},
 		{"publish", "--vault", vault, "--dry-run", "--format", "json"},
 	}
 	for _, args := range probes {

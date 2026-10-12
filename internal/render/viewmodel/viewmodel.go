@@ -35,8 +35,17 @@ type SidebarNode struct {
 	Current                 bool
 	Children                []SidebarNode
 }
+type RecommendationSignals struct {
+	Content float64
+	Link    float64
+	Tag     float64
+}
+
 type Card struct {
 	Path, URL, Href, Title, Summary, PublishedAt, Type, VersionID string
+	Score                                                         float64
+	Reasons                                                       []string
+	Signals                                                       RecommendationSignals
 	Tags                                                          []string
 }
 type Pagination struct {

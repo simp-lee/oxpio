@@ -76,6 +76,31 @@ func TestStrictCacheInvalidatesListingMetadata(t *testing.T) {
 	}
 }
 
+func TestStrictCacheInvalidatesRelatedCardMetadata(t *testing.T) {
+	vault := t.TempDir()
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\nrelated:\n  enabled: true\n  count: 5\n")
+	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeStrictFile(t, vault, "alpha.md", "---\ntitle: Alpha\npublish: true\ntype: doc\ntags: [shared]\n---\ndatabase protocol shared\n")
+	writeStrictFile(t, vault, "beta.md", "---\ntitle: Beta\npublish: true\ntype: doc\ntags: [shared]\n---\ndatabase protocol shared\n")
+	output := filepath.Join(t.TempDir(), "site")
+	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
+		t.Fatal(err)
+	}
+	first := cacheDependencyByOwner(loadStrictCacheManifest(output), "article:alpha.md")
+	if first.InputSignature == "" {
+		t.Fatal("related article cache dependency is missing")
+	}
+
+	writeStrictFile(t, vault, "beta.md", "---\ntitle: Beta\npublish: true\ntype: doc\ntags: [changed]\n---\ndatabase protocol shared\n")
+	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
+		t.Fatal(err)
+	}
+	second := cacheDependencyByOwner(loadStrictCacheManifest(output), "article:alpha.md")
+	if first.InputSignature == second.InputSignature {
+		t.Fatal("related card metadata change did not invalidate the source article cache")
+	}
+}
+
 func TestStrictCacheTracksRecursiveThemeCSSDependencies(t *testing.T) {
 	vault := t.TempDir()
 	writeStrictFile(t, vault, "oxpio.yaml", "title: Cache\nbaseURL: https://example.test/\nnavigation: []\ntheme: cache\n")
@@ -141,7 +166,7 @@ func TestStrictCacheHTMLConfigScopesPageDependencies(t *testing.T) {
 		return strictCacheSectionPageInput(plan, section, "lookup", nil)
 	}
 	articleInput := func() strictCacheHTMLInput {
-		return strictCacheArticlePageInput(plan, article, section, nil, nil, 1, 1, nil, nil, "lookup", nil)
+		return strictCacheArticlePageInputWithRecommendations(plan, article, section, nil, nil, 1, 1, nil, nil, nil, "lookup", nil)
 	}
 	tagInput := func() strictCacheHTMLInput {
 		return strictCacheHTMLBase(plan, "/tags/topic/", "Tag: topic", "", "", "", true)
@@ -169,7 +194,7 @@ func TestStrictCacheHTMLConfigScopesPageDependencies(t *testing.T) {
 	versionArticle := *article
 	versionArticle.VersionID = "v1"
 	versionArticleInput := func() strictCacheHTMLInput {
-		return strictCacheArticlePageInput(plan, &versionArticle, section, nil, nil, 1, 1, nil, nil, "lookup", nil)
+		return strictCacheArticlePageInputWithRecommendations(plan, &versionArticle, section, nil, nil, 1, 1, nil, nil, nil, "lookup", nil)
 	}
 	unrelatedSectionBefore := marshal(sectionInput())
 	versionArticleBefore := marshal(versionArticleInput())

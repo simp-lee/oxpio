@@ -16,6 +16,7 @@ type themedPageExtras struct {
 	index                          *model.VaultIndex
 	tag                            *model.Tag
 	entries, backlinks, related    []*model.Note
+	relatedRecommendations         []model.RelatedRecommendation
 	previous, next                 *model.Note
 	position, total                int
 	titleID, metadataHTML, tocHTML string
@@ -52,6 +53,9 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 	page.Entries = themedCards(plan, extras.entries)
 	page.Backlinks = themedCards(plan, extras.backlinks)
 	page.Related = themedCards(plan, extras.related)
+	if len(extras.relatedRecommendations) > 0 {
+		page.Related = themedRecommendationCards(plan, extras.index, extras.relatedRecommendations)
+	}
 	if extras.tag != nil {
 		page.Tags = append([]string(nil), extras.tag.Name)
 	}
@@ -351,6 +355,26 @@ func themedCards(plan *model.SitePlan, notes []*model.Note) []viewmodel.Card {
 	for _, note := range notes {
 		if note != nil {
 			result = append(result, themedCard(plan, note))
+		}
+	}
+	return result
+}
+
+func themedRecommendationCards(plan *model.SitePlan, index *model.VaultIndex, recommendations []model.RelatedRecommendation) []viewmodel.Card {
+	if recommendations == nil {
+		return nil
+	}
+	result := make([]viewmodel.Card, 0, len(recommendations))
+	for _, recommendation := range recommendations {
+		if index == nil {
+			continue
+		}
+		if note := index.Notes[recommendation.RelPath]; note != nil {
+			card := themedCard(plan, note)
+			card.Score = recommendation.Score
+			card.Reasons = append([]string(nil), recommendation.Reasons...)
+			card.Signals = viewmodel.RecommendationSignals{Content: recommendation.Signals.Content, Link: recommendation.Signals.Link, Tag: recommendation.Signals.Tag}
+			result = append(result, card)
 		}
 	}
 	return result

@@ -54,9 +54,10 @@ func RenderStrictSectionPage(plan *model.SitePlan, section *model.Section, route
 	return strictDocument(plan, route, section.Title, section.Description, section.Breadcrumbs, section.VersionID, section.VersionRoutes, "", nil, section.SourcePath, StrictSidebarNodes(plan, section.VersionID), content, themedPageExtras{index: index, entries: notes, titleID: headingID})
 }
 
-// RenderStrictArticle renders a normalized article page and its single shared
-// document reading-flow metadata.
-func RenderStrictArticle(plan *model.SitePlan, article *model.Note, previous, next *model.Note, position, total int, backlinks, related []*model.Note, index *model.VaultIndex, assets markdown.AssetSink) ([]byte, error) {
+// RenderStrictArticleWithRecommendations renders a normalized article page with
+// the same recommendation DTO that the Agent adapter returns, preserving score
+// and signal evidence for themes.
+func RenderStrictArticleWithRecommendations(plan *model.SitePlan, article *model.Note, previous, next *model.Note, position, total int, backlinks, related []*model.Note, recommendations []model.RelatedRecommendation, index *model.VaultIndex, assets markdown.AssetSink) ([]byte, error) {
 	if plan == nil || article == nil {
 		return nil, fmt.Errorf("article page requires a plan and article")
 	}
@@ -88,7 +89,7 @@ func RenderStrictArticle(plan *model.SitePlan, article *model.Note, previous, ne
 	var metadataHTML, tocHTML strings.Builder
 	writeStrictArticleMetadata(&metadataHTML, article)
 	writeStrictTOC(&tocHTML, article, tocHeadingID)
-	return strictDocument(plan, article.Route, article.Frontmatter.Title, article.Frontmatter.Description, breadcrumbs, article.VersionID, article.VersionRoutes, article.SocialImage, article, article.RelPath, StrictSidebarNodes(plan, article.VersionID), content, themedPageExtras{index: index, previous: previous, next: next, position: position, total: total, backlinks: backlinks, related: related, titleID: headingID, metadataHTML: metadataHTML.String(), tocHTML: tocHTML.String()})
+	return strictDocument(plan, article.Route, article.Frontmatter.Title, article.Frontmatter.Description, breadcrumbs, article.VersionID, article.VersionRoutes, article.SocialImage, article, article.RelPath, StrictSidebarNodes(plan, article.VersionID), content, themedPageExtras{index: index, previous: previous, next: next, position: position, total: total, backlinks: backlinks, related: related, relatedRecommendations: recommendations, titleID: headingID, metadataHTML: metadataHTML.String(), tocHTML: tocHTML.String()})
 }
 
 // RenderStrictNotFound renders the fixed static 404 page.

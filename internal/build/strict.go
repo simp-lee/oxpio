@@ -50,7 +50,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		return result, fmt.Errorf("strict site plan is required")
 	}
 	plan := planned.Plan
-	graph, relatedByPath, relationErr := buildStrictRelations(planned, workerConcurrency)
+	graph, relatedByPath, relatedDetailsByPath, relationErr := buildStrictRelationsWithDetails(planned, workerConcurrency)
 	if relationErr != nil {
 		return result, relationErr
 	}
@@ -185,12 +185,12 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		backlinks := strictBacklinks(planned.Index, graph, article)
 		related := relatedByPath[article.RelPath]
 		pageAssets := newStrictCacheAssetSink(assetCollector)
-		data, renderErr := render.RenderStrictArticle(plan, article, previous, next, position, total, backlinks, related, planned.Index, pageAssets)
+		data, renderErr := render.RenderStrictArticleWithRecommendations(plan, article, previous, next, position, total, backlinks, related, relatedDetailsByPath[article.RelPath], planned.Index, pageAssets)
 		if renderErr != nil {
 			return result, fmt.Errorf("render article %q: %w", article.RelPath, renderErr)
 		}
 		owner := "article:" + article.RelPath
-		if dependencyErr := outputs.dependency(owner, article.RelPath, strictCacheArticlePageInput(plan, article, section, previous, next, position, total, backlinks, related, lookupDigests.forEmbeds(len(article.Embeds) > 0), pageAssets.destinations)); dependencyErr != nil {
+		if dependencyErr := outputs.dependency(owner, article.RelPath, strictCacheArticlePageInputWithRecommendations(plan, article, section, previous, next, position, total, backlinks, related, relatedDetailsByPath[article.RelPath], lookupDigests.forEmbeds(len(article.Embeds) > 0), pageAssets.destinations)); dependencyErr != nil {
 			return result, dependencyErr
 		}
 		if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(article.Route), owner, data); writeErr != nil {
@@ -426,6 +426,21 @@ type strictCachePageEntry struct {
 	VersionID   string `json:"versionID,omitempty"`
 }
 
+type strictCacheRecommendationSignals struct {
+	Content float64 `json:"content"`
+	Link    float64 `json:"link"`
+	Tag     float64 `json:"tag"`
+}
+
+type strictCacheRecommendationEntry struct {
+	strictCachePageEntry
+	Type    string                           `json:"type"`
+	Tags    []string                         `json:"tags,omitempty"`
+	Score   float64                          `json:"score"`
+	Reasons []string                         `json:"reasons,omitempty"`
+	Signals strictCacheRecommendationSignals `json:"signals"`
+}
+
 type strictCacheVersionEntry struct {
 	ID        string `json:"id"`
 	Label     string `json:"label"`
@@ -510,28 +525,28 @@ type strictCacheSourceInput struct {
 }
 
 type strictCacheHTMLInput struct {
-	Config            strictCacheHTMLConfig     `json:"config"`
-	ThemeAssetURLs    map[string]string         `json:"themeAssetURLs,omitempty"`
-	Route             string                    `json:"route"`
-	Title             string                    `json:"title"`
-	Description       string                    `json:"description,omitempty"`
-	SourcePath        string                    `json:"sourcePath,omitempty"`
-	VersionID         string                    `json:"versionID,omitempty"`
-	Source            *strictCacheSourceInput   `json:"source,omitempty"`
-	Versions          []strictCacheVersionEntry `json:"versions,omitempty"`
-	Sidebar           []model.SidebarNode       `json:"sidebar,omitempty"`
-	Section           *strictCacheSectionInput  `json:"section,omitempty"`
-	Article           *strictCacheArticleInput  `json:"article,omitempty"`
-	Entries           []strictCachePageEntry    `json:"entries,omitempty"`
-	Previous          *strictCachePageEntry     `json:"previous,omitempty"`
-	Next              *strictCachePageEntry     `json:"next,omitempty"`
-	Position          int                       `json:"position,omitempty"`
-	Total             int                       `json:"total,omitempty"`
-	TimelinePageCount int                       `json:"timelinePageCount,omitempty"`
-	Backlinks         []strictCachePageEntry    `json:"backlinks,omitempty"`
-	Related           []strictCachePageEntry    `json:"related,omitempty"`
-	MarkdownAssets    map[string]string         `json:"markdownAssets,omitempty"`
-	LookupDigest      string                    `json:"lookupDigest,omitempty"`
+	Config            strictCacheHTMLConfig            `json:"config"`
+	ThemeAssetURLs    map[string]string                `json:"themeAssetURLs,omitempty"`
+	Route             string                           `json:"route"`
+	Title             string                           `json:"title"`
+	Description       string                           `json:"description,omitempty"`
+	SourcePath        string                           `json:"sourcePath,omitempty"`
+	VersionID         string                           `json:"versionID,omitempty"`
+	Source            *strictCacheSourceInput          `json:"source,omitempty"`
+	Versions          []strictCacheVersionEntry        `json:"versions,omitempty"`
+	Sidebar           []model.SidebarNode              `json:"sidebar,omitempty"`
+	Section           *strictCacheSectionInput         `json:"section,omitempty"`
+	Article           *strictCacheArticleInput         `json:"article,omitempty"`
+	Entries           []strictCachePageEntry           `json:"entries,omitempty"`
+	Previous          *strictCachePageEntry            `json:"previous,omitempty"`
+	Next              *strictCachePageEntry            `json:"next,omitempty"`
+	Position          int                              `json:"position,omitempty"`
+	Total             int                              `json:"total,omitempty"`
+	TimelinePageCount int                              `json:"timelinePageCount,omitempty"`
+	Backlinks         []strictCachePageEntry           `json:"backlinks,omitempty"`
+	Related           []strictCacheRecommendationEntry `json:"related,omitempty"`
+	MarkdownAssets    map[string]string                `json:"markdownAssets,omitempty"`
+	LookupDigest      string                           `json:"lookupDigest,omitempty"`
 }
 
 func strictCacheHTMLBase(plan *model.SitePlan, route, title, description, sourcePath, versionID string, includeDefaultImage bool) strictCacheHTMLInput {
@@ -627,6 +642,35 @@ func strictCachePageEntries(notes []*model.Note) []strictCachePageEntry {
 		if note != nil {
 			entries = append(entries, *strictCacheNoteEntry(note))
 		}
+	}
+	return entries
+}
+
+func strictCacheRecommendationEntries(notes []*model.Note, recommendations []model.RelatedRecommendation) []strictCacheRecommendationEntry {
+	if recommendations == nil {
+		return nil
+	}
+	byPath := make(map[string]*model.Note, len(notes))
+	for _, note := range notes {
+		if note != nil {
+			byPath[note.RelPath] = note
+		}
+	}
+	entries := make([]strictCacheRecommendationEntry, 0, len(recommendations))
+	for _, recommendation := range recommendations {
+		entry := strictCacheRecommendationEntry{
+			Score:   recommendation.Score,
+			Reasons: append([]string(nil), recommendation.Reasons...),
+			Signals: strictCacheRecommendationSignals{Content: recommendation.Signals.Content, Link: recommendation.Signals.Link, Tag: recommendation.Signals.Tag},
+		}
+		if note := byPath[recommendation.RelPath]; note != nil {
+			entry.strictCachePageEntry = *strictCacheNoteEntry(note)
+			entry.Type = note.Frontmatter.Type
+			entry.Tags = append([]string(nil), note.Tags...)
+		} else {
+			entry.RelPath = recommendation.RelPath
+		}
+		entries = append(entries, entry)
 	}
 	return entries
 }
@@ -735,7 +779,7 @@ func strictCacheSectionPageInput(plan *model.SitePlan, section *model.Section, l
 	return input
 }
 
-func strictCacheArticlePageInput(plan *model.SitePlan, article *model.Note, section *model.Section, previous, next *model.Note, position, total int, backlinks, related []*model.Note, lookupDigest string, markdownAssets map[string]string) strictCacheHTMLInput {
+func strictCacheArticlePageInputWithRecommendations(plan *model.SitePlan, article *model.Note, section *model.Section, previous, next *model.Note, position, total int, backlinks, related []*model.Note, recommendations []model.RelatedRecommendation, lookupDigest string, markdownAssets map[string]string) strictCacheHTMLInput {
 	input := strictCacheHTMLBase(plan, article.Route, article.Frontmatter.Title, article.Frontmatter.Description, article.RelPath, article.VersionID, false)
 	input.Article = &strictCacheArticleInput{
 		RelPath: article.RelPath, Route: article.Route, SectionPath: article.SectionPath,
@@ -756,7 +800,7 @@ func strictCacheArticlePageInput(plan *model.SitePlan, article *model.Note, sect
 	input.Position = position
 	input.Total = total
 	input.Backlinks = strictCachePageEntries(backlinks)
-	input.Related = strictCachePageEntries(related)
+	input.Related = strictCacheRecommendationEntries(related, recommendations)
 	input.MarkdownAssets = markdownAssets
 	input.LookupDigest = lookupDigest
 	return input
@@ -970,61 +1014,112 @@ func strictSocialCardInput(plan *model.SitePlan, article *model.Note, cover []by
 	}, nil
 }
 
-func buildStrictRelations(planned *siteplan.Result, concurrency int) (*model.LinkGraph, map[string][]*model.Note, error) {
-	related := make(map[string][]*model.Note)
+// RelatedRecommendations exposes the production recommendation result for
+// Agent adapters. It deliberately ignores related.enabled: that setting only
+// controls page rendering, not the independent query capability.
+func RelatedRecommendations(planned *siteplan.Result, concurrency int) (map[string][]model.RelatedRecommendation, error) {
+	return buildRelatedRecommendations(planned, concurrency, false)
+}
+
+func buildRelatedRecommendations(planned *siteplan.Result, concurrency int, consume bool) (map[string][]model.RelatedRecommendation, error) {
+	result := make(map[string][]model.RelatedRecommendation)
 	if planned == nil || planned.Plan == nil || planned.Index == nil {
-		return &model.LinkGraph{Forward: map[string][]string{}, Backward: map[string][]string{}}, related, nil
+		return result, nil
 	}
-	if planned.Plan.Config.Related.Enabled {
-		// Recommendations intentionally use only source-declared edges and consume
-		// their semantic owner before the render-equivalent backlinks pass.
-		recommendationGraph := link.BuildSourceGraph(planned.Index)
-		groups := make(map[string][]model.RelatedSemanticDocument)
-		for index := range planned.RelatedSemantic {
-			semantic := planned.RelatedSemantic[index]
-			versionID := ""
-			if note := planned.Index.Notes[semantic.RelPath]; note != nil {
-				versionID = note.VersionID
-			}
-			groups[versionID] = append(groups[versionID], semantic)
+	recommendationGraph := link.BuildSourceGraph(planned.Index)
+	groups := make(map[string][]model.RelatedSemanticDocument)
+	for index := range planned.RelatedSemantic {
+		semantic := planned.RelatedSemantic[index]
+		versionID := ""
+		if note := planned.Index.Notes[semantic.RelPath]; note != nil {
+			versionID = note.VersionID
+		}
+		groups[versionID] = append(groups[versionID], semantic)
+		if consume {
 			planned.RelatedSemantic[index] = model.RelatedSemanticDocument{}
 		}
+	}
+	if consume {
 		planned.RelatedSemantic = nil
-		groupKeys := make([]string, 0, len(groups))
-		for key := range groups {
-			groupKeys = append(groupKeys, key)
+	}
+	groupKeys := make([]string, 0, len(groups))
+	for key := range groups {
+		groupKeys = append(groupKeys, key)
+	}
+	sort.Strings(groupKeys)
+	for _, key := range groupKeys {
+		semanticOwner := groups[key]
+		delete(groups, key)
+		parameters := recommend.ProductionEngineParameters(planned.Plan.Config.Related.Count, concurrency)
+		var engine *recommend.EngineResult
+		var err error
+		if consume {
+			engine, err = recommend.BuildEngineFromSemanticOwner(&semanticOwner, planned.Index, recommendationGraph, parameters)
+		} else {
+			engine, err = recommend.BuildEngine(semanticOwner, planned.Index, recommendationGraph, parameters)
 		}
-		sort.Strings(groupKeys)
-		for _, key := range groupKeys {
-			semanticOwner := groups[key]
-			delete(groups, key)
-			engine, err := recommend.BuildEngineFromSemanticOwner(&semanticOwner, planned.Index, recommendationGraph, recommend.ProductionEngineParameters(planned.Plan.Config.Related.Count, concurrency))
-			if err != nil {
-				return nil, nil, fmt.Errorf("build related articles: %w", err)
-			}
-			for _, document := range engine.Documents {
-				items := make([]*model.Note, 0, len(document.Related))
-				for _, candidate := range document.Related {
-					if candidate.DocID < 0 || candidate.DocID >= len(engine.Documents) {
-						continue
-					}
-					target := planned.Index.Notes[engine.Documents[candidate.DocID].RelPath]
-					if target != nil {
-						items = append(items, target)
-					}
+		if err != nil {
+			return nil, fmt.Errorf("build related articles: %w", err)
+		}
+		for _, document := range engine.Documents {
+			items := make([]model.RelatedRecommendation, 0, len(document.Related))
+			for _, candidate := range document.Related {
+				if candidate.DocID < 0 || candidate.DocID >= len(engine.Documents) {
+					continue
 				}
-				related[document.RelPath] = items
+				target := engine.Documents[candidate.DocID]
+				items = append(items, model.RelatedRecommendation{
+					RelPath: target.RelPath,
+					Score:   candidate.Score,
+					Reasons: recommend.Reasons(candidate.Signals),
+					Signals: model.RecommendationSignals{Content: candidate.Signals.Content, Link: candidate.Signals.Link, Tag: candidate.Signals.Tag},
+				})
 			}
+			result[document.RelPath] = items
 		}
+	}
+	return result, nil
+}
+
+func buildStrictRelationsWithDetails(planned *siteplan.Result, concurrency int) (*model.LinkGraph, map[string][]*model.Note, map[string][]model.RelatedRecommendation, error) {
+	related := make(map[string][]*model.Note)
+	details := make(map[string][]model.RelatedRecommendation)
+	if planned == nil || planned.Plan == nil || planned.Index == nil {
+		return &model.LinkGraph{Forward: map[string][]string{}, Backward: map[string][]string{}}, related, details, nil
+	}
+	if planned.Plan.Config.Related.Enabled {
+		var err error
+		details, err = buildRelatedRecommendations(planned, concurrency, true)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		related = recommendationNotes(planned, details)
 	}
 
 	// Backlinks describe visible page content and therefore include links
 	// contributed by embeds from the render-local pass-2 results.
 	graph, err := buildStrictRenderGraph(planned.Index)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-	return graph, related, nil
+	return graph, related, details, nil
+}
+
+func recommendationNotes(planned *siteplan.Result, details map[string][]model.RelatedRecommendation) map[string][]*model.Note {
+	result := make(map[string][]*model.Note, len(details))
+	if planned == nil || planned.Index == nil {
+		return result
+	}
+	for source, candidates := range details {
+		notes := make([]*model.Note, 0, len(candidates))
+		for _, candidate := range candidates {
+			if note := planned.Index.Notes[candidate.RelPath]; note != nil {
+				notes = append(notes, note)
+			}
+		}
+		result[source] = notes
+	}
+	return result
 }
 
 // buildStrictRenderGraph performs the same markdown expansion used for pages,
