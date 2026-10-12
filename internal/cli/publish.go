@@ -3,10 +3,59 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	"github.com/spf13/cobra"
 )
+
+func writePublishSummary(stdout, stderr io.Writer, vaultPath, outputPath string, result *internalapplication.PublishResult, dryRun bool) error {
+	if result == nil {
+		return fmt.Errorf("publish returned no result")
+	}
+	descriptor := internalapplication.OutputDescriptor(vaultPath, outputPath)
+	phase := "Published"
+	if dryRun {
+		phase = "Dry-run"
+	}
+	if _, err := fmt.Fprintf(stdout, "%s output: %s (%s)\n", phase, descriptor["path"], descriptor["kind"]); err != nil {
+		return err
+	}
+	if dryRun {
+		if _, err := fmt.Fprintf(stdout, "No output changes published; preview changes: %d\n", len(result.Changes)); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintf(stdout, "Output changes: %d\n", len(result.Changes)); err != nil {
+		return err
+	}
+	if result.Build != nil {
+		if _, err := fmt.Fprintf(stdout, "Pages: %d, tag pages: %d, assets: %d, warnings: %d, errors: %d\n", result.Build.NotePages, result.Build.TagPages, len(result.Build.Assets), result.Build.WarningCount, result.Build.ErrorCount); err != nil {
+			return err
+		}
+		if err := writePublishDiagnostics(stderr, result); err != nil {
+			return err
+		}
+		if result.Build.OutputCleanupError != nil {
+			if _, err := fmt.Fprintf(stderr, "POST_COMMIT_WARNING: %v\n", result.Build.OutputCleanupError); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func writePublishDiagnostics(stderr io.Writer, result *internalapplication.PublishResult) error {
+	if result == nil || result.Build == nil {
+		return nil
+	}
+	diagnostics := redactHiddenCatalogDiagnostics(diagnosticsFromBuild(result.Build.Diagnostics), result.Build.Catalog)
+	for _, diagnostic := range diagnostics {
+		if _, err := fmt.Fprintf(stderr, "%s: %s\n", diagnostic.Severity, diagnostic.Message); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 func newPublishCommand(deps commandDependencies) *cobra.Command {
 	var vaultPath, outputPath string
@@ -23,7 +72,15 @@ func newPublishCommand(deps commandDependencies) *cobra.Command {
 			result, publishErr := publishWithDependencies(deps, boundary.VaultPath, boundary.OutputPath, internalapplication.PublishOptions{DryRun: dryRun})
 			if publishErr != nil {
 				if result != nil && result.Build != nil {
-					return diagnosticError{err: publishErr, diagnostics: redactHiddenCatalogDiagnostics(diagnosticsFromBuild(result.Build.Diagnostics), result.Build.Catalog)}
+					diagnostics := redactHiddenCatalogDiagnostics(diagnosticsFromBuild(result.Build.Diagnostics), result.Build.Catalog)
+					if formatOf(cmd) != "json" {
+						for _, diagnostic := range diagnostics {
+							if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s\n", diagnostic.Severity, diagnostic.Message); writeErr != nil {
+								return writeErr
+							}
+						}
+					}
+					return diagnosticError{err: publishErr, diagnostics: diagnostics}
 				}
 				return publishErr
 			}
@@ -60,7 +117,7 @@ func newPublishCommand(deps commandDependencies) *cobra.Command {
 				_, err = cmd.OutOrStdout().Write(append(encoded, '\n'))
 				return err
 			}
-			return nil
+			return writePublishSummary(cmd.OutOrStdout(), cmd.ErrOrStderr(), boundary.VaultPath, boundary.OutputPath, result, dryRun)
 		},
 	}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")

@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -13,12 +14,12 @@ func TestPublishCommandPublishesAndDryRunPreservesOutput(t *testing.T) {
 	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	stdout, stderr, err := executeForTest(t, defaultCommandDependencies(), []string{"publish", "--vault", vault, "--output", output})
-	if err != nil || stdout != "" || stderr != "" {
+	if err != nil || stderr != "" || !strings.Contains(stdout, "Published output:") {
 		t.Fatalf("publish = stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 	before := snapshotCLIOutput(t, output)
 	stdout, stderr, err = executeForTest(t, defaultCommandDependencies(), []string{"publish", "--dry-run", "--vault", vault, "--output", output})
-	if err != nil || stdout != "" || stderr != "" {
+	if err != nil || stderr != "" || !strings.Contains(stdout, "Dry-run output:") || !strings.Contains(stdout, "No output changes published") {
 		t.Fatalf("publish --dry-run = stdout %q, stderr %q, error %v", stdout, stderr, err)
 	}
 	if after := snapshotCLIOutput(t, output); !reflect.DeepEqual(after, before) {

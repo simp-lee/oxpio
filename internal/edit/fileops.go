@@ -16,6 +16,7 @@ import (
 
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	internalpublish "github.com/simp-lee/oxpio/internal/publish"
 	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
@@ -45,8 +46,8 @@ type fileManagerState struct {
 	isDir  bool
 }
 
-// CreateFolder creates one empty vault directory after a CAS check and a
-// successful candidate build.
+// CreateFolder creates one empty vault directory after a CAS check without
+// building or publishing formal output.
 func (coordinator *Coordinator) CreateFolder(relPath, expectedHash string) (TransactionResult, error) {
 	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationFolder, path: relPath, expected: expectedHash})
 }
@@ -193,6 +194,17 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, &ConflictError{Path: mutation.path, Expected: mutation.expected, Actual: latest.hash}
 	}
 
+	if mutation.operation == fileMutationFolder || (current.isDir && (mutation.operation == fileMutationRename || mutation.operation == fileMutationDelete)) {
+		rollback, finalize, expectedAfter, applyErr := applyFileManagerMutation(coordinator.vault, mutation, current, "")
+		if applyErr != nil {
+			return TransactionResult{}, applyErr
+		}
+		if verifyErr := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); verifyErr != nil {
+			return rollbackMutationResult(rollback, verifyErr)
+		}
+		return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, SourceCleanupError: finalize()}, nil
+	}
+
 	inputFingerprint, err := workspace.Fingerprint(coordinator.vault, coordinator.output)
 	if err != nil {
 		return TransactionResult{}, err
@@ -205,7 +217,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	if err := copyFileManagerTree(coordinator.vault, candidateRoot, coordinator.output); err != nil {
 		return TransactionResult{}, fmt.Errorf("copy file-operation candidate vault: %w", err)
 	}
-	_, _, candidateExpected, err := applyFileManagerMutation(candidateRoot, mutation, current)
+	_, _, candidateExpected, err := applyFileManagerMutation(candidateRoot, mutation, current, "")
 	if err != nil {
 		return TransactionResult{}, err
 	}
@@ -213,11 +225,16 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, err
 	}
 
+	keepArtifacts := false
 	stageRoot, err := os.MkdirTemp(filepath.Dir(coordinator.output), ".oxpio-file-stage-*")
 	if err != nil {
 		return TransactionResult{}, fmt.Errorf("create file-operation staging directory: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(stageRoot) }()
+	defer func() {
+		if !keepArtifacts {
+			_ = os.RemoveAll(stageRoot)
+		}
+	}()
 	stageOutput := filepath.Join(stageRoot, "public")
 	built, buildErr := buildCandidate(candidateRoot, stageOutput)
 	if buildErr != nil {
@@ -232,24 +249,42 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during candidate build")
 	}
 
-	rollback, finalize, expectedAfter, err := applyFileManagerMutation(coordinator.vault, mutation, current)
+	expectedAfterFingerprint, fingerprintErr := workspace.Fingerprint(candidateRoot, coordinator.output)
+	if fingerprintErr != nil {
+		return TransactionResult{}, fingerprintErr
+	}
+	backupPath := ""
+	artifactRoot := ""
+	if current.exists {
+		artifactRoot, err = os.MkdirTemp(filepath.Dir(filepath.Join(coordinator.vault, filepath.FromSlash(mutation.path))), ".oxpio-source-txn-*")
+		if err != nil {
+			return TransactionResult{}, err
+		}
+		defer func() {
+			if !keepArtifacts {
+				_ = os.RemoveAll(artifactRoot)
+			}
+		}()
+		original, readErr := os.ReadFile(filepath.Join(coordinator.vault, filepath.FromSlash(mutation.path)))
+		if readErr != nil {
+			return TransactionResult{}, readErr
+		}
+		if _, err := createSourceJournalBackupAt(artifactRoot, original); err != nil {
+			return TransactionResult{}, err
+		}
+		backupPath = artifactRoot
+	}
+	seed, predictedPath, predictedAfter := predictedFileManagerJournal(coordinator.vault, mutation, current)
+	seed.BackupPath = backupPath
+	seed.CleanupPaths = []string{stageRoot}
+	transaction, err := internalpublish.AdoptStaging(coordinator.vault, coordinator.output, stageOutput, internalpublish.Options{
+		Durable:          true,
+		InputFingerprint: inputFingerprint,
+		RemoveAll:        editOutputRemoveAll,
+		JournalSeed:      &seed,
+	})
 	if err != nil {
 		return TransactionResult{}, err
-	}
-	rollbackMutation := func(operationErr error) (TransactionResult, error) {
-		rollbackErr := rollback()
-		return TransactionResult{}, errors.Join(operationErr, rollbackErr)
-	}
-	if expectedAfter.hash != candidateExpected.hash || expectedAfter.exists != candidateExpected.exists || expectedAfter.isDir != candidateExpected.isDir {
-		return rollbackMutation(&ConflictError{Path: mutation.path, Expected: candidateExpected.hash, Actual: expectedAfter.hash})
-	}
-	if err := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); err != nil {
-		return rollbackMutation(err)
-	}
-
-	expectedAfterFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output)
-	if fingerprintErr != nil {
-		return rollbackMutation(fingerprintErr)
 	}
 	validateInput := func() error {
 		currentFingerprint, currentErr := workspace.Fingerprint(coordinator.vault, coordinator.output)
@@ -261,7 +296,40 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		}
 		return nil
 	}
-	finalizeOutput, cleanupOutput, err := commitStagedOutput(coordinator.vault, stageOutput, coordinator.output, expectedAfterFingerprint, validateInput)
+	if err := transaction.MarkSourceCommitted(expectedAfterFingerprint, validateInput); err != nil {
+		return TransactionResult{}, errors.Join(err, transaction.Abort())
+	}
+	rollback, finalize, expectedAfter, err := applyFileManagerMutation(coordinator.vault, mutation, current, artifactRoot)
+	if err != nil {
+		keepArtifacts = true
+		preserveErr := transaction.PreserveForRecovery()
+		return TransactionResult{}, errors.Join(err, preserveErr, fmt.Errorf("%w: source mutation recovery required", workspace.ErrRecovery))
+	}
+	rollbackMutation := func(operationErr error) (TransactionResult, error) {
+		rollbackErr := rollback()
+		if rollbackErr != nil {
+			keepArtifacts = true
+			preserveErr := transaction.PreserveForRecovery()
+			return TransactionResult{}, errors.Join(operationErr, rollbackErr, preserveErr, fmt.Errorf("%w: source rollback failed", workspace.ErrRecovery))
+		}
+		return TransactionResult{}, errors.Join(operationErr, transaction.Abort())
+	}
+	if expectedAfter.hash != candidateExpected.hash || expectedAfter.exists != candidateExpected.exists || expectedAfter.isDir != candidateExpected.isDir {
+		return rollbackMutation(&ConflictError{Path: mutation.path, Expected: candidateExpected.hash, Actual: expectedAfter.hash})
+	}
+	if err := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); err != nil {
+		return rollbackMutation(err)
+	}
+	if expectedAfter.hash != predictedAfter || filepath.ToSlash(expectedAfter.path) != filepath.ToSlash(predictedPath) {
+		return rollbackMutation(&ConflictError{Path: mutation.path, Expected: predictedAfter, Actual: expectedAfter.hash})
+	}
+
+	if currentFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output); fingerprintErr != nil {
+		return rollbackMutation(fingerprintErr)
+	} else if currentFingerprint != expectedAfterFingerprint {
+		return rollbackMutation(fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during source mutation"))
+	}
+	commit, err := transaction.Commit()
 	if err != nil {
 		return rollbackMutation(err)
 	}
@@ -269,14 +337,9 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	if verifyErr := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); verifyErr != nil {
 		postCommitWarning = verifyErr
 	}
-	if finalizeErr := finalizeOutput(); finalizeErr != nil {
-		postCommitWarning = errors.Join(postCommitWarning, finalizeErr)
-	}
+	postCommitWarning = errors.Join(postCommitWarning, commit.CleanupError)
 	if verifyErr := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); verifyErr != nil {
 		postCommitWarning = errors.Join(postCommitWarning, verifyErr)
-	}
-	if cleanupErr := cleanupOutput(); cleanupErr != nil {
-		postCommitWarning = errors.Join(postCommitWarning, cleanupErr)
 	}
 	// Source cleanup is also post-commit: neither source nor output backups
 	// are safe to use for rollback once cleanup has started.
@@ -307,11 +370,40 @@ func (coordinator *Coordinator) validateEditableFileManagerTarget(relPath string
 	return nil
 }
 
-func buildCandidate(vault, output string) (*internalbuild.BuildResult, error) {
-	return internalbuild.BuildWithOptions(vault, output, internalbuild.Options{Strict: true})
+func rollbackMutationResult(rollback func() error, operationErr error) (TransactionResult, error) {
+	return TransactionResult{}, errors.Join(operationErr, rollback())
 }
 
-func applyFileManagerMutation(vault string, mutation fileManagerMutation, current fileManagerState) (rollback func() error, finalize func() error, expected fileManagerState, err error) {
+func predictedFileManagerJournal(vault string, mutation fileManagerMutation, current fileManagerState) (workspace.Journal, string, string) {
+	pathValue := mutation.path
+	afterHash := fileManagerHashAbsent
+	switch mutation.operation {
+	case fileMutationMarkdown, fileMutationUpload:
+		hash := sha256.Sum256(mutation.content)
+		afterHash = fmt.Sprintf("%x", hash)
+	case fileMutationRename:
+		pathValue = mutation.destination
+		afterHash = current.hash
+	case fileMutationDelete:
+		afterHash = fileManagerHashAbsent
+	case fileMutationFolder:
+		hash := sha256.Sum256(nil)
+		afterHash = fmt.Sprintf("%x", hash)
+	}
+	return workspace.Journal{
+		SourcePath: filepath.Join(vault, filepath.FromSlash(pathValue)), SourceBeforePath: filepath.Join(vault, filepath.FromSlash(mutation.path)), SourceBeforeHash: current.hash, SourceAfterHash: afterHash,
+	}, pathValue, afterHash
+}
+
+func buildCandidate(vault, output string) (*internalbuild.BuildResult, error) {
+	return internalbuild.BuildWithOptions(vault, output, internalbuild.Options{Strict: true, Ephemeral: true})
+}
+
+func applyFileManagerMutation(vault string, mutation fileManagerMutation, current fileManagerState, artifactRoots ...string) (rollback func() error, finalize func() error, expected fileManagerState, err error) {
+	artifactRoot := ""
+	if len(artifactRoots) > 0 {
+		artifactRoot = artifactRoots[0]
+	}
 	source := filepath.Join(vault, filepath.FromSlash(mutation.path))
 
 	switch mutation.operation {
@@ -340,8 +432,16 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 		return rollback, func() error { return nil }, expected, nil
 
 	case fileMutationDelete:
+		if current.isDir {
+			if err := os.Remove(source); err != nil {
+				return nil, nil, fileManagerState{}, err
+			}
+			expected = fileManagerState{path: mutation.path, hash: fileManagerHashAbsent, exists: false}
+			rollback = func() error { return os.Mkdir(source, 0o755) }
+			return rollback, func() error { return nil }, expected, nil
+		}
 		// Retain exact rollback bytes even if displaced-file cleanup succeeds
-		// before a later output-cleanup failure. Directories here are empty.
+		// before a later output-cleanup failure.
 		var original []byte
 		if !current.isDir {
 			_, original, _, err = internalfsutil.ReadContainedRegularFile(vault, mutation.path)
@@ -349,7 +449,7 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 				return nil, nil, fileManagerState{}, err
 			}
 		}
-		displaced, err := movePathForCAS(source)
+		displaced, err := movePathForCAS(source, artifactRoot)
 		if err != nil {
 			return nil, nil, fileManagerState{}, fmt.Errorf("delete %q: %w", mutation.path, err)
 		}
@@ -384,12 +484,20 @@ func applyFileManagerMutation(vault string, mutation fileManagerMutation, curren
 
 	case fileMutationRename:
 		destination := filepath.Join(vault, filepath.FromSlash(mutation.destination))
-		backup, err := createFileManagerBackup(source, current.isDir)
+		if current.isDir {
+			if err := renamePathNoReplace(source, destination); err != nil {
+				return nil, nil, fileManagerState{}, err
+			}
+			expected = fileManagerState{path: mutation.destination, hash: current.hash, exists: true, isDir: true}
+			rollback = func() error { return renamePathNoReplace(destination, source) }
+			return rollback, func() error { return nil }, expected, nil
+		}
+		backup, err := createFileManagerBackup(source, current.isDir, artifactRoot)
 		if err != nil {
 			return nil, nil, fileManagerState{}, err
 		}
 		cleanupBackup := func() error { return fileManagerRemoveAll(backup) }
-		displaced, err := movePathForCAS(source)
+		displaced, err := movePathForCAS(source, artifactRoot)
 		if err != nil {
 			return nil, nil, fileManagerState{}, errors.Join(fmt.Errorf("rename %q: %w", mutation.path, err), cleanupBackup())
 		}
@@ -600,16 +708,20 @@ func removeCreatedPath(vault, relPath, expectedHash string) error {
 	return os.RemoveAll(filename)
 }
 
-func createFileManagerBackup(filename string, isDir bool) (string, error) {
+func createFileManagerBackup(filename string, isDir bool, artifactRoot string) (string, error) {
+	temporaryDir := filepath.Dir(filename)
+	if artifactRoot != "" {
+		temporaryDir = artifactRoot
+	}
 	if isDir {
-		return os.MkdirTemp(filepath.Dir(filename), ".oxpio-rename-backup-*")
+		return os.MkdirTemp(temporaryDir, ".oxpio-rename-backup-*")
 	}
 	input, err := os.Open(filename)
 	if err != nil {
 		return "", err
 	}
 	defer func() { _ = input.Close() }()
-	backup, err := os.CreateTemp(filepath.Dir(filename), ".oxpio-rename-backup-*")
+	backup, err := os.CreateTemp(temporaryDir, ".oxpio-rename-backup-*")
 	if err != nil {
 		return "", err
 	}
@@ -671,8 +783,12 @@ func createFileNoReplace(filename string, content []byte) error {
 	return nil
 }
 
-func movePathForCAS(filename string) (string, error) {
-	temporary, err := os.CreateTemp(filepath.Dir(filename), ".oxpio-displaced-*")
+func movePathForCAS(filename, artifactRoot string) (string, error) {
+	temporaryDir := filepath.Dir(filename)
+	if artifactRoot != "" {
+		temporaryDir = artifactRoot
+	}
+	temporary, err := os.CreateTemp(temporaryDir, ".oxpio-displaced-*")
 	if err != nil {
 		return "", err
 	}

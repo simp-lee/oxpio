@@ -67,7 +67,9 @@ func (s *Server) serveFileFolder(w http.ResponseWriter, r *http.Request) {
 		s.writeMutationError(w, err)
 		return
 	}
-	s.NotifyReload()
+	if result.Build != nil {
+		s.NotifyReload()
+	}
 	s.writeMutationResult(w, result)
 }
 
@@ -136,7 +138,9 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 			s.writeMutationError(w, err)
 			return
 		}
-		s.NotifyReload()
+		if result.Build != nil {
+			s.NotifyReload()
+		}
 		s.writeMutationResult(w, result)
 	case http.MethodDelete:
 		if r.URL.Query().Get("confirm") != "true" {
@@ -148,7 +152,9 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 			s.writeMutationError(w, err)
 			return
 		}
-		s.NotifyReload()
+		if result.Build != nil {
+			s.NotifyReload()
+		}
 		s.writeMutationResult(w, result)
 	default:
 		w.Header().Set("Allow", "PUT, DELETE")

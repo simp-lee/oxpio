@@ -10,6 +10,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
@@ -27,19 +28,22 @@ type Options struct {
 	ValidateInput        func() error
 	TrackTransactionPath func(string)
 	RemoveAll            func(string) error
+	JournalSeed          *workspace.Journal
 }
 
 type Transaction struct {
-	vault          string
-	output         string
-	staging        string
-	outputState    outputState
-	options        Options
-	outputLease    func() error
-	outputLockPath string
-	journal        workspace.Journal
-	validateInput  func() error
-	closed         bool
+	vault            string
+	output           string
+	staging          string
+	outputState      outputState
+	options          Options
+	outputLease      func() error
+	outputLockPath   string
+	journal          workspace.Journal
+	validateInput    func() error
+	outputBeforeHash string
+	stagingHash      string
+	closed           bool
 }
 
 type CommitResult struct{ CleanupError error }
@@ -77,7 +81,23 @@ func Prepare(vault, output string, options Options) (*Transaction, error) {
 	if err != nil {
 		return nil, err
 	}
-	transaction := &Transaction{vault: boundary.VaultPath, output: boundary.OutputPath, outputState: state, options: options, validateInput: options.ValidateInput}
+	staging, err := os.MkdirTemp(parent, ".oxpio-publish-stage-*")
+	if err != nil {
+		return nil, fmt.Errorf("create publish staging: %w", err)
+	}
+	transaction, err := initializeTransaction(boundary, state, parent, staging, options)
+	if err != nil {
+		_ = os.RemoveAll(staging)
+		return nil, err
+	}
+	if options.TrackTransactionPath != nil {
+		options.TrackTransactionPath(filepath.Clean(staging))
+	}
+	return transaction, nil
+}
+
+func initializeTransaction(boundary internalfsutil.VaultOutputBoundary, state outputState, parent, staging string, options Options) (*Transaction, error) {
+	transaction := &Transaction{vault: boundary.VaultPath, output: boundary.OutputPath, staging: staging, outputState: state, options: options, validateInput: options.ValidateInput, outputBeforeHash: directoryHash(boundary.OutputPath)}
 	if options.Durable {
 		lease, lockPath, lockErr := acquireOutputLease(boundary.VaultPath, boundary.OutputPath)
 		if lockErr != nil {
@@ -85,32 +105,35 @@ func Prepare(vault, output string, options Options) (*Transaction, error) {
 		}
 		transaction.outputLease = lease
 		transaction.outputLockPath = lockPath
-	}
-	if options.Durable {
 		if probeErr := workspace.ProbeAtomicReplace(parent); probeErr != nil {
 			_ = transaction.releaseOutputLock()
 			return nil, probeErr
 		}
-	}
-	staging, err := os.MkdirTemp(parent, ".oxpio-publish-stage-*")
-	if err != nil {
-		_ = transaction.releaseOutputLock()
-		return nil, fmt.Errorf("create publish staging: %w", err)
-	}
-	transaction.staging = staging
-	if options.TrackTransactionPath != nil {
-		options.TrackTransactionPath(filepath.Clean(staging))
-	}
-	if options.Durable {
 		beforeHash := directoryHash(boundary.OutputPath)
-		transaction.journal = workspace.Journal{
+		journal := workspace.Journal{
 			Version: workspace.JournalVersion, CommitKind: "source+output", Phase: "prepared",
 			InputFingerprint: options.InputFingerprint, TargetPath: boundary.OutputPath, TemporaryPath: staging,
 			BeforeHash: beforeHash, OutputBeforeHash: beforeHash, OutputIdentity: outputIdentity(boundary.OutputPath),
 		}
+		if strings.TrimSpace(journal.InputFingerprint) == "" {
+			fingerprint, fingerprintErr := workspace.Fingerprint(boundary.VaultPath, boundary.OutputPath)
+			if fingerprintErr != nil {
+				_ = transaction.releaseOutputLock()
+				return nil, fmt.Errorf("fingerprint publish inputs: %w", fingerprintErr)
+			}
+			journal.InputFingerprint = fingerprint
+		}
+		if options.JournalSeed != nil {
+			journal.SourcePath = options.JournalSeed.SourcePath
+			journal.SourceBeforePath = options.JournalSeed.SourceBeforePath
+			journal.SourceBeforeHash = options.JournalSeed.SourceBeforeHash
+			journal.SourceAfterHash = options.JournalSeed.SourceAfterHash
+			journal.CleanupPaths = append([]string(nil), options.JournalSeed.CleanupPaths...)
+			journal.BackupPath = options.JournalSeed.BackupPath
+		}
+		transaction.journal = journal
 		if err := workspace.WriteJournal(boundary.VaultPath, transaction.journal); err != nil {
 			_ = transaction.releaseOutputLock()
-			_ = os.RemoveAll(staging)
 			return nil, fmt.Errorf("write publish journal: %w", err)
 		}
 	}
@@ -131,21 +154,81 @@ func (t *Transaction) OutputPath() string {
 	return t.output
 }
 
-// AdoptStaging moves an already-generated same-filesystem staging tree into a
+// MarkSourceCommitted persists the source-committed phase before output swap.
+// It is used by source+output mutations so recovery can finish the output
+// commit after a process interruption.
+func (t *Transaction) MarkStagingReady() error {
+	if t == nil || t.closed {
+		return errors.New("publish transaction is closed")
+	}
+	if strings.TrimSpace(t.staging) == "" {
+		return errors.New("publish staging is unavailable")
+	}
+	hash := directoryHash(t.staging)
+	if hash == "unavailable" {
+		return errors.New("inspect staged output before journaling")
+	}
+	t.stagingHash = hash
+	if !t.options.Durable {
+		return nil
+	}
+	t.journal.OutputAfterHash = hash
+	t.journal.OutputAfterIdentity = outputIdentity(t.staging)
+	t.journal.AfterHash = hash
+	return workspace.WriteJournal(t.vault, t.journal)
+}
+
+func (t *Transaction) MarkSourceCommitted(inputFingerprint string, validateInput func() error) error {
+	if t == nil || t.closed {
+		return errors.New("publish transaction is closed")
+	}
+	t.validateInput = validateInput
+	t.journal.InputFingerprint = inputFingerprint
+	if !t.options.Durable {
+		return nil
+	}
+	t.journal.Phase = "source-committed"
+	return workspace.WriteJournal(t.vault, t.journal)
+}
+
+// AdoptStaging adopts an already-generated same-filesystem staging tree into a
 // transaction owned by this package. The caller must not use the source path
 // after this function returns.
 func AdoptStaging(vault, output, staging string, options Options) (*Transaction, error) {
-	transaction, err := Prepare(vault, output, options)
+	boundary, err := internalfsutil.ResolveVaultOutput(vault, output)
 	if err != nil {
 		return nil, err
 	}
-	if err := os.RemoveAll(transaction.staging); err != nil {
-		_ = transaction.Abort()
+	state, err := inspectOutputBoundary(boundary)
+	if err != nil {
 		return nil, err
 	}
-	if err := os.Rename(staging, transaction.staging); err != nil {
-		_ = transaction.Abort()
-		return nil, fmt.Errorf("adopt publish staging: %w", err)
+	parent, err := existingParent(filepath.Dir(boundary.OutputPath))
+	if err != nil {
+		return nil, err
+	}
+	stagingInfo, err := os.Lstat(staging)
+	if err != nil {
+		return nil, err
+	}
+	if stagingInfo.Mode()&os.ModeSymlink != 0 || !stagingInfo.IsDir() || !internalfsutil.PathWithinRoot(parent, staging) || filepath.Clean(staging) == parent || filepath.Clean(staging) == boundary.OutputPath {
+		return nil, fmt.Errorf("publish staging must be a private regular directory below output parent")
+	}
+	transaction, err := initializeTransaction(boundary, state, parent, filepath.Clean(staging), options)
+	if err != nil {
+		return nil, err
+	}
+	if transaction.options.Durable {
+		transaction.stagingHash = directoryHash(transaction.staging)
+		transaction.journal.OutputAfterHash = transaction.stagingHash
+		transaction.journal.OutputAfterIdentity = outputIdentity(transaction.staging)
+		if err := workspace.WriteJournal(transaction.vault, transaction.journal); err != nil {
+			_ = transaction.Abort()
+			return nil, fmt.Errorf("persist staged output hash: %w", err)
+		}
+	}
+	if options.TrackTransactionPath != nil {
+		options.TrackTransactionPath(filepath.Clean(staging))
 	}
 	return transaction, nil
 }
@@ -165,11 +248,25 @@ func (t *Transaction) Commit() (result CommitResult, err error) {
 	if err := t.revalidate(); err != nil {
 		return result, err
 	}
+	currentStagingHash := directoryHash(t.staging)
+	if currentStagingHash == "unavailable" {
+		return result, fmt.Errorf("inspect staged output before commit")
+	}
+	if t.stagingHash != "" && currentStagingHash != t.stagingHash {
+		return result, fmt.Errorf("staged output changed while publishing")
+	}
+	if t.options.Durable && t.journal.OutputAfterHash != "" && currentStagingHash != t.journal.OutputAfterHash {
+		return result, fmt.Errorf("staged output changed after journaling")
+	}
+	if t.stagingHash == "" {
+		t.stagingHash = currentStagingHash
+	}
 	if err := os.Chmod(t.staging, t.mode()); err != nil {
 		return result, fmt.Errorf("set staged output permissions: %w", err)
 	}
 	if t.options.Durable {
-		t.journal.OutputAfterHash = directoryHash(t.staging)
+		t.journal.OutputAfterHash = currentStagingHash
+		t.journal.OutputAfterIdentity = outputIdentity(t.staging)
 		t.journal.AfterHash = t.journal.OutputAfterHash
 		if err := workspace.WriteJournal(t.vault, t.journal); err != nil {
 			return result, fmt.Errorf("persist staged output hash: %w", err)
@@ -194,6 +291,7 @@ func (t *Transaction) Commit() (result CommitResult, err error) {
 		t.journal.OutputAfterHash = directoryHash(t.output)
 		t.journal.AfterHash = t.journal.OutputAfterHash
 		t.journal.OutputIdentity = outputIdentity(t.output)
+		t.journal.OutputAfterIdentity = t.journal.OutputIdentity
 		if journalErr := workspace.WriteJournal(t.vault, t.journal); journalErr != nil {
 			result.CleanupError = journalErr
 		}
@@ -202,12 +300,25 @@ func (t *Transaction) Commit() (result CommitResult, err error) {
 		result.CleanupError = errors.Join(result.CleanupError, fmt.Errorf("cleanup previous output: %w", removeErr))
 	}
 	if t.options.Durable {
+		if cleanupErr := removeJournalArtifacts(t.journal); cleanupErr != nil {
+			result.CleanupError = errors.Join(result.CleanupError, cleanupErr)
+		}
 		if clearErr := workspace.ClearJournal(t.vault); clearErr != nil {
 			result.CleanupError = errors.Join(result.CleanupError, clearErr)
 		}
 	}
 	result.CleanupError = errors.Join(result.CleanupError, t.releaseOutputLock())
 	return result, nil
+}
+
+// PreserveForRecovery releases transient locks while retaining the journal and
+// staging needed for a later bounded recovery attempt.
+func (t *Transaction) PreserveForRecovery() error {
+	if t == nil || t.closed {
+		return nil
+	}
+	t.closed = true
+	return t.releaseOutputLock()
 }
 
 // Abort removes only uncommitted staging and clears its prepared journal.
@@ -221,7 +332,7 @@ func (t *Transaction) Abort() error {
 		err = t.removeAll(t.staging)
 	}
 	if t.options.Durable {
-		err = errors.Join(err, workspace.ClearJournal(t.vault))
+		err = errors.Join(err, removeJournalArtifacts(t.journal), workspace.ClearJournal(t.vault))
 	}
 	err = errors.Join(err, t.releaseOutputLock())
 	return err
@@ -303,6 +414,13 @@ func (t *Transaction) revalidate() error {
 	}
 	if current.exists && !current.empty && !current.managed {
 		return fmt.Errorf("output path gained unmanaged content while staging")
+	}
+	currentHash := directoryHash(t.output)
+	if currentHash == "unavailable" || t.outputBeforeHash == "unavailable" {
+		return fmt.Errorf("output contents are unavailable while staging")
+	}
+	if t.outputBeforeHash != "" && currentHash != t.outputBeforeHash {
+		return fmt.Errorf("output bytes changed while staging")
 	}
 	return nil
 }
@@ -392,8 +510,14 @@ func directoryHash(path string) string {
 		if entry.Type()&os.ModeSymlink != 0 {
 			return fmt.Errorf("output contains symbolic link %q", current)
 		}
-		if !entry.Type().IsRegular() {
+		if current == path {
 			return nil
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		if !entry.Type().IsRegular() {
+			return fmt.Errorf("output contains unsupported entry %q", current)
 		}
 		data, err := os.ReadFile(current)
 		if err != nil {
@@ -418,5 +542,21 @@ func outputIdentity(path string) string {
 	if err != nil {
 		return "absent"
 	}
-	return fmt.Sprintf("%T:%v:%o", info.Sys(), info.Sys(), info.Mode())
+	value := reflect.ValueOf(info.Sys())
+	if value.IsValid() && value.Kind() == reflect.Pointer {
+		value = value.Elem()
+	}
+	identity := make([]string, 0, 4)
+	for _, name := range []string{"Dev", "Ino", "VolumeSerialNumber", "FileIndexHigh", "FileIndexLow"} {
+		if value.IsValid() && value.Kind() == reflect.Struct {
+			field := value.FieldByName(name)
+			if field.IsValid() && field.CanInterface() {
+				identity = append(identity, fmt.Sprint(field.Interface()))
+			}
+		}
+	}
+	if len(identity) == 0 {
+		identity = append(identity, fmt.Sprint(info.Sys()))
+	}
+	return fmt.Sprintf("%T:%s:%o", info.Sys(), strings.Join(identity, ":"), info.Mode())
 }

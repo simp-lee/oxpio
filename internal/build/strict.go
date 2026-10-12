@@ -79,9 +79,13 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 			}
 			return
 		}
+		if readyErr := publisher.MarkStagingReady(); readyErr != nil {
+			err = errors.Join(readyErr, publisher.Abort())
+			return
+		}
 		commit, commitErr := publisher.Commit()
 		if commitErr != nil {
-			err = commitErr
+			err = errors.Join(commitErr, publisher.Abort())
 			return
 		}
 		if commit.CleanupError != nil {

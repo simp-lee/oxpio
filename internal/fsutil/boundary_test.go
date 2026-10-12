@@ -57,6 +57,8 @@ func TestResolveVaultOutputBoundary(t *testing.T) {
 		wantErr    string
 	}{
 		{name: "vault descendant", output: filepath.Join(vault, "public"), wantInside: true},
+		{name: "reserved management directory", output: filepath.Join(vault, ".oxpio", "out"), wantErr: "reserved Vault directory"},
+		{name: "reserved metadata directory", output: filepath.Join(vault, ".obsidian", "out"), wantErr: "reserved Vault directory"},
 		{name: "external output", output: filepath.Join(root, "published", "site")},
 		{name: "vault root", output: vault, wantErr: "must not equal the vault root"},
 		{name: "vault ancestor", output: root, wantErr: "must not contain the vault"},

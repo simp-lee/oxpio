@@ -52,23 +52,26 @@ func (e *codedError) Is(target error) bool {
 // can be completed after a process interruption. Paths are internal state and
 // must never be copied to public agent responses.
 type Journal struct {
-	Version          int    `json:"version"`
-	CommitKind       string `json:"commitKind"`
-	Phase            string `json:"phase"`
-	InputFingerprint string `json:"inputFingerprint"`
-	TargetPath       string `json:"targetPath"`
-	SourcePath       string `json:"sourcePath,omitempty"`
-	OutputPath       string `json:"outputPath,omitempty"`
-	TemporaryPath    string `json:"temporaryPath"`
-	BackupPath       string `json:"backupPath,omitempty"`
-	BeforeHash       string `json:"beforeHash,omitempty"`
-	AfterHash        string `json:"afterHash,omitempty"`
-	SourceBeforeHash string `json:"sourceBeforeHash,omitempty"`
-	SourceAfterHash  string `json:"sourceAfterHash,omitempty"`
-	OutputIdentity   string `json:"outputIdentity,omitempty"`
-	OutputBeforeHash string `json:"outputBeforeHash,omitempty"`
-	OutputAfterHash  string `json:"outputAfterHash,omitempty"`
-	Integrity        string `json:"integrity"`
+	Version             int      `json:"version"`
+	CommitKind          string   `json:"commitKind"`
+	Phase               string   `json:"phase"`
+	InputFingerprint    string   `json:"inputFingerprint"`
+	TargetPath          string   `json:"targetPath"`
+	SourcePath          string   `json:"sourcePath,omitempty"`
+	SourceBeforePath    string   `json:"sourceBeforePath,omitempty"`
+	OutputPath          string   `json:"outputPath,omitempty"`
+	TemporaryPath       string   `json:"temporaryPath"`
+	BackupPath          string   `json:"backupPath,omitempty"`
+	CleanupPaths        []string `json:"cleanupPaths,omitempty"`
+	BeforeHash          string   `json:"beforeHash,omitempty"`
+	AfterHash           string   `json:"afterHash,omitempty"`
+	SourceBeforeHash    string   `json:"sourceBeforeHash,omitempty"`
+	SourceAfterHash     string   `json:"sourceAfterHash,omitempty"`
+	OutputIdentity      string   `json:"outputIdentity,omitempty"`
+	OutputAfterIdentity string   `json:"outputAfterIdentity,omitempty"`
+	OutputBeforeHash    string   `json:"outputBeforeHash,omitempty"`
+	OutputAfterHash     string   `json:"outputAfterHash,omitempty"`
+	Integrity           string   `json:"integrity"`
 }
 
 // Lease is an exclusive workspace lock. Release is idempotent.
@@ -151,23 +154,24 @@ func Check(vault string) error {
 	if err != nil {
 		return err
 	}
-	if err := checkJournals(resolved); err != nil {
-		return err
-	}
 	lockPath := filepath.Join(resolved, ".oxpio", "lock")
 	if _, err := os.Lstat(lockPath); errors.Is(err, os.ErrNotExist) {
-		return nil
+		// No lock object exists; continue with journal inspection.
 	} else if err != nil {
 		return fmt.Errorf("inspect workspace lock: %w", err)
-	}
-	release, err := acquireFileLock(lockPath, false)
-	if err != nil {
-		if errors.Is(err, ErrBusy) {
-			return &codedError{Code: "BUSY", Err: err}
+	} else {
+		release, lockErr := acquireFileLock(lockPath, false)
+		if lockErr != nil {
+			if errors.Is(lockErr, ErrBusy) {
+				return &codedError{Code: "BUSY", Err: lockErr}
+			}
+			return &codedError{Code: "RECOVERY_ERROR", Err: lockErr}
 		}
-		return &codedError{Code: "RECOVERY_ERROR", Err: err}
+		if releaseErr := release(); releaseErr != nil {
+			return &codedError{Code: "RECOVERY_ERROR", Err: releaseErr}
+		}
 	}
-	return release()
+	return checkJournals(resolved)
 }
 
 func ensureControlDir(vault string) error {
@@ -223,8 +227,11 @@ func checkJournalsLocked(vault string) error {
 		return &codedError{Code: "RECOVERY_ERROR", Err: err}
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if filepath.Ext(entry.Name()) != ".json" {
 			continue
+		}
+		if entry.IsDir() {
+			return &codedError{Code: "RECOVERY_ERROR", Err: fmt.Errorf("invalid transaction journal %q", entry.Name())}
 		}
 		path := filepath.Join(transactions, entry.Name())
 		info, err := os.Lstat(path)
@@ -406,11 +413,17 @@ func FingerprintWithOverlay(vault, output string, overlay map[string][]byte, del
 			}
 			rel = filepath.ToSlash(rel)
 		}
+		if path != root && strings.HasPrefix(filepath.Base(path), ".oxpio-") {
+			if entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
 		if path != root && entry.IsDir() {
 			switch {
 			case internalfsutil.PathWithinRoot(outputResolved, path):
 				return fs.SkipDir
-			case strings.HasPrefix(filepath.Base(path), ".oxpio-publish-stage-") || strings.HasPrefix(filepath.Base(path), ".oxpio-edit-stage-") || strings.HasPrefix(filepath.Base(path), ".oxpio-file-stage-"):
+			case strings.HasPrefix(filepath.Base(path), ".oxpio-publish-stage-") || strings.HasPrefix(filepath.Base(path), ".oxpio-edit-stage-") || strings.HasPrefix(filepath.Base(path), ".oxpio-file-stage-") || strings.HasPrefix(filepath.Base(path), ".oxpio-source-txn-"):
 				return fs.SkipDir
 			case rel == ".obsidian" || rel == ".oxpio/cache" || rel == ".oxpio/staging" || rel == ".oxpio/transactions":
 				return fs.SkipDir

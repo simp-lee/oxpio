@@ -26,10 +26,13 @@ func newValidateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := workspace.Check(boundary.VaultPath); err != nil {
+				return err
+			}
 			if err := internalfsutil.ValidateOutputParent(boundary); err != nil {
 				return err
 			}
-			if err := workspace.Check(boundary.VaultPath); err != nil {
+			if err := internalpublish.CheckOutputBoundary(boundary.VaultPath, boundary.OutputPath); err != nil {
 				return err
 			}
 			if err := internalpublish.CheckExternalOutputLock(boundary.VaultPath, boundary.OutputPath); err != nil {

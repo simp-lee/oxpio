@@ -49,14 +49,14 @@ func Publish(vaultPath, outputPath string, options PublishOptions) (*PublishResu
 		return nil, err
 	}
 	result := &PublishResult{OutputPath: boundary.OutputPath, DryRun: options.DryRun}
-	if err := internalfsutil.ValidateOutputParent(boundary); err != nil {
-		return result, err
-	}
 	if options.DryRun {
-		if err := internalpublish.CheckOutputBoundary(boundary.VaultPath, boundary.OutputPath); err != nil {
+		if err := workspace.Check(boundary.VaultPath); err != nil {
 			return result, err
 		}
-		if err := workspace.Check(boundary.VaultPath); err != nil {
+		if err := internalfsutil.ValidateOutputParent(boundary); err != nil {
+			return result, err
+		}
+		if err := internalpublish.CheckOutputBoundary(boundary.VaultPath, boundary.OutputPath); err != nil {
 			return result, err
 		}
 		if err := internalpublish.CheckExternalOutputLock(boundary.VaultPath, boundary.OutputPath); err != nil {
@@ -96,6 +96,9 @@ func Publish(vaultPath, outputPath string, options PublishOptions) (*PublishResu
 		result.Changes = diffOutput(before, after)
 		result.Published = false
 		return result, nil
+	}
+	if err := internalfsutil.ValidateOutputParent(boundary); err != nil {
+		return result, err
 	}
 
 	err = workspace.WithLock(boundary.VaultPath, func() error {

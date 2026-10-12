@@ -182,14 +182,20 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	if err != nil {
 		return TransactionResult{}, err
 	}
+	keepArtifacts := false
 	stageRoot, err := os.MkdirTemp(filepath.Dir(coordinator.output), ".oxpio-edit-stage-*")
 	if err != nil {
 		return TransactionResult{}, fmt.Errorf("create edit staging directory: %w", err)
 	}
-	defer func() { _ = os.RemoveAll(stageRoot) }()
+	defer func() {
+		if !keepArtifacts {
+			_ = os.RemoveAll(stageRoot)
+		}
+	}()
 	stageOutput := filepath.Join(stageRoot, "public")
 	built, err := internalbuild.BuildWithOptions(coordinator.vault, stageOutput, internalbuild.Options{
 		Strict:           true,
+		Ephemeral:        true,
 		SourceOverlay:    overlay,
 		SourceDeleted:    deleted,
 		SourceOutputPath: coordinator.output,
@@ -215,29 +221,65 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 		return TransactionResult{}, &ConflictError{Path: relPath, Expected: expectedHash, Actual: actual}
 	}
 
-	if err := commitSource(coordinator.vault, relPath, expectedHash, content, deleting, creating); err != nil {
-		return TransactionResult{}, err
-	}
 	committedHash := AbsentSourceHash
 	if !deleting {
 		committedHash = hashForAbsentOrBytes(content)
 	}
-
-	currentAfterSource, existsAfterSource, readErr := readSource(coordinator.vault, relPath)
-	actualAfterSource := AbsentSourceHash
-	if existsAfterSource {
-		actualAfterSource = hashForAbsentOrBytes(currentAfterSource)
+	sourceBeforeHash := AbsentSourceHash
+	if exists {
+		sourceBeforeHash = hashForAbsentOrBytes(current)
 	}
-	if readErr != nil {
-		return TransactionResult{}, errors.Join(restoreSource(coordinator.vault, relPath, committedHash, current, exists), readErr)
-	}
-	if actualAfterSource != committedHash {
-		return TransactionResult{}, errors.Join(restoreSource(coordinator.vault, relPath, committedHash, current, exists), &ConflictError{Path: relPath, Expected: committedHash, Actual: actualAfterSource})
-	}
-
-	expectedAfterFingerprint, err := workspace.Fingerprint(coordinator.vault, coordinator.output)
+	sourceFilename := filepath.Join(coordinator.vault, filepath.FromSlash(relPath))
+	artifactRoot, err := os.MkdirTemp(filepath.Dir(sourceFilename), ".oxpio-source-txn-*")
 	if err != nil {
-		return TransactionResult{}, errors.Join(restoreSource(coordinator.vault, relPath, committedHash, current, exists), err)
+		return TransactionResult{}, err
+	}
+	defer func() {
+		if !keepArtifacts {
+			_ = os.RemoveAll(artifactRoot)
+		}
+	}()
+	if exists {
+		if _, err := createSourceJournalBackupAt(artifactRoot, current); err != nil {
+			return TransactionResult{}, err
+		}
+	}
+	expectedAfterFingerprint, err := workspace.FingerprintWithOverlay(coordinator.vault, coordinator.output, overlay, deleted)
+	if err != nil {
+		return TransactionResult{}, err
+	}
+	transaction, err := internalpublish.AdoptStaging(coordinator.vault, coordinator.output, stageOutput, internalpublish.Options{
+		Durable:          true,
+		InputFingerprint: inputFingerprint,
+		RemoveAll:        editOutputRemoveAll,
+		JournalSeed:      &workspace.Journal{SourcePath: sourceFilename, SourceBeforePath: sourceFilename, SourceBeforeHash: sourceBeforeHash, SourceAfterHash: committedHash, BackupPath: artifactRoot, CleanupPaths: []string{stageRoot}},
+	})
+	if err != nil {
+		return TransactionResult{}, err
+	}
+	rollbackSource := func() error {
+		return restoreSource(coordinator.vault, relPath, committedHash, current, exists)
+	}
+	sourceCommitted := false
+	abortBeforeOutput := func(operationErr error) (TransactionResult, error) {
+		if !sourceCommitted {
+			currentSource, currentExists, readErr := readSource(coordinator.vault, relPath)
+			actualSource := AbsentSourceHash
+			if currentExists {
+				actualSource = hashForAbsentOrBytes(currentSource)
+			}
+			if readErr == nil && actualSource == expectedHash {
+				return TransactionResult{}, errors.Join(operationErr, transaction.Abort())
+			}
+			sourceCommitted = true
+		}
+		rollbackErr := rollbackSource()
+		if rollbackErr != nil {
+			keepArtifacts = true
+			preserveErr := transaction.PreserveForRecovery()
+			return TransactionResult{}, errors.Join(operationErr, rollbackErr, preserveErr, fmt.Errorf("%w: source rollback failed", workspace.ErrRecovery))
+		}
+		return TransactionResult{}, errors.Join(operationErr, transaction.Abort())
 	}
 	validateInput := func() error {
 		currentFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output)
@@ -249,12 +291,28 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 		}
 		return nil
 	}
-	rollbackSource := func() error {
-		return restoreSource(coordinator.vault, relPath, committedHash, current, exists)
+	if err := transaction.MarkSourceCommitted(expectedAfterFingerprint, validateInput); err != nil {
+		return abortBeforeOutput(err)
 	}
-	finalizeOutput, cleanupOutput, err := commitStagedOutput(coordinator.vault, stageOutput, coordinator.output, expectedAfterFingerprint, validateInput)
+	if err := commitSource(coordinator.vault, relPath, expectedHash, content, deleting, creating, artifactRoot); err != nil {
+		return abortBeforeOutput(err)
+	}
+	sourceCommitted = true
+	currentAfterSource, existsAfterSource, readErr := readSource(coordinator.vault, relPath)
+	actualAfterSource := AbsentSourceHash
+	if existsAfterSource {
+		actualAfterSource = hashForAbsentOrBytes(currentAfterSource)
+	}
+	if readErr != nil {
+		return abortBeforeOutput(readErr)
+	}
+	if actualAfterSource != committedHash {
+		return abortBeforeOutput(&ConflictError{Path: relPath, Expected: committedHash, Actual: actualAfterSource})
+	}
+
+	commit, err := transaction.Commit()
 	if err != nil {
-		return TransactionResult{}, errors.Join(rollbackSource(), err)
+		return abortBeforeOutput(err)
 	}
 	var postCommitWarning error
 	currentAfterCommit, nowExists, readErr := readSource(coordinator.vault, relPath)
@@ -269,14 +327,9 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	} else if verifyErr := verifyCommittedSource(coordinator.vault, relPath, committedHash); verifyErr != nil {
 		postCommitWarning = verifyErr
 	}
-	if finalizeErr := finalizeOutput(); finalizeErr != nil {
-		postCommitWarning = errors.Join(postCommitWarning, finalizeErr)
-	}
+	postCommitWarning = errors.Join(postCommitWarning, commit.CleanupError)
 	if verifyErr := verifyCommittedSource(coordinator.vault, relPath, committedHash); verifyErr != nil {
 		postCommitWarning = errors.Join(postCommitWarning, verifyErr)
-	}
-	if cleanupErr := cleanupOutput(); cleanupErr != nil {
-		postCommitWarning = errors.Join(postCommitWarning, cleanupErr)
 	}
 	if postCommitWarning != nil {
 		built.OutputCleanupError = postCommitWarning
@@ -350,7 +403,11 @@ func inspectSourceParent(vault, relPath string) error {
 	return err
 }
 
-func commitSource(vault, relPath, expected string, content []byte, deleting, creating bool) error {
+func commitSource(vault, relPath, expected string, content []byte, deleting, creating bool, transactionRoots ...string) error {
+	artifactRoot := ""
+	if len(transactionRoots) > 0 {
+		artifactRoot = transactionRoots[0]
+	}
 	current, exists, err := readSource(vault, relPath)
 	if err != nil {
 		return err
@@ -375,10 +432,10 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 		if exists {
 			return &ConflictError{Path: relPath, Expected: AbsentSourceHash, Actual: actual}
 		}
-		return createSourceNoReplace(filename, relPath, content)
+		return createSourceNoReplace(filename, relPath, content, artifactRoot)
 	}
 
-	casName, err := makeCASSnapshot(filename)
+	casName, err := makeCASSnapshot(filename, artifactRoot)
 	if err != nil {
 		return err
 	}
@@ -387,7 +444,7 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 		return err
 	}
 	if deleting {
-		displaced, err := moveSourceForCAS(filename)
+		displaced, err := moveSourceForCAS(filename, artifactRoot)
 		if err != nil {
 			return fmt.Errorf("delete source %q: %w", relPath, err)
 		}
@@ -408,7 +465,7 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 		return nil
 	}
 
-	temporary, err := writeSourceTransactionFile(filepath.Dir(filename), content)
+	temporary, err := writeSourceTransactionFile(filepath.Dir(filename), content, artifactRoot)
 	if err != nil {
 		return err
 	}
@@ -417,7 +474,7 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 	if err := verifyCASSnapshot(filename, casName, relPath, expected); err != nil {
 		return err
 	}
-	displaced, err := moveSourceForCAS(filename)
+	displaced, err := moveSourceForCAS(filename, artifactRoot)
 	if err != nil {
 		return fmt.Errorf("replace source %q: %w", relPath, err)
 	}
@@ -445,8 +502,12 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 	return nil
 }
 
-func moveSourceForCAS(filename string) (string, error) {
-	temporary, err := os.CreateTemp(filepath.Dir(filename), ".oxpio-displaced-*")
+func moveSourceForCAS(filename string, artifactRoot ...string) (string, error) {
+	temporaryDir := filepath.Dir(filename)
+	if len(artifactRoot) > 0 && artifactRoot[0] != "" {
+		temporaryDir = artifactRoot[0]
+	}
+	temporary, err := os.CreateTemp(temporaryDir, ".oxpio-displaced-*")
 	if err != nil {
 		return "", err
 	}
@@ -502,8 +563,8 @@ func rollbackReplacedSource(filename, displaced, expected, relPath string) error
 	return os.Remove(candidate)
 }
 
-func createSourceNoReplace(filename, relPath string, content []byte) error {
-	temporary, err := writeSourceTransactionFile(filepath.Dir(filename), content)
+func createSourceNoReplace(filename, relPath string, content []byte, artifactRoot ...string) error {
+	temporary, err := writeSourceTransactionFile(filepath.Dir(filename), content, artifactRoot...)
 	if err != nil {
 		return err
 	}
@@ -518,7 +579,10 @@ func createSourceNoReplace(filename, relPath string, content []byte) error {
 	return nil
 }
 
-func writeSourceTransactionFile(parent string, content []byte) (*os.File, error) {
+func writeSourceTransactionFile(parent string, content []byte, artifactRoot ...string) (*os.File, error) {
+	if len(artifactRoot) > 0 && artifactRoot[0] != "" {
+		parent = artifactRoot[0]
+	}
 	temporary, err := os.CreateTemp(parent, ".oxpio-source-*")
 	if err != nil {
 		return nil, fmt.Errorf("create source transaction file: %w", err)
@@ -545,8 +609,12 @@ func writeSourceTransactionFile(parent string, content []byte) (*os.File, error)
 	return temporary, nil
 }
 
-func makeCASSnapshot(filename string) (string, error) {
-	temporary, err := os.CreateTemp(filepath.Dir(filename), ".oxpio-cas-*")
+func makeCASSnapshot(filename string, artifactRoot ...string) (string, error) {
+	temporaryDir := filepath.Dir(filename)
+	if len(artifactRoot) > 0 && artifactRoot[0] != "" {
+		temporaryDir = artifactRoot[0]
+	}
+	temporary, err := os.CreateTemp(temporaryDir, ".oxpio-cas-*")
 	if err != nil {
 		return "", fmt.Errorf("create source CAS marker: %w", err)
 	}
@@ -615,34 +683,34 @@ func restoreSource(vault, relPath, expected string, original []byte, existed boo
 	return commitSource(vault, relPath, expected, original, false, expected == AbsentSourceHash)
 }
 
-func commitStagedOutput(vault, stage, output, inputFingerprint string, validateInput func() error) (func() error, func() error, error) {
-	transaction, err := internalpublish.AdoptStaging(vault, output, stage, internalpublish.Options{
-		Durable:          true,
-		InputFingerprint: inputFingerprint,
-		ValidateInput:    validateInput,
-		RemoveAll:        editOutputRemoveAll,
-	})
-	if err != nil {
-		return nil, nil, err
-	}
-	commit, err := transaction.Commit()
-	if err != nil {
-		_ = transaction.Abort()
-		return nil, nil, err
-	}
-	cleanupErr := commit.CleanupError
-	finalize := func() error { return nil }
-	cleanup := func() error {
-		err := cleanupErr
-		cleanupErr = nil
-		return err
-	}
-	return finalize, cleanup, nil
-}
-
 func hashForAbsentOrBytes(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
+}
+
+func createSourceJournalBackupAt(directory string, content []byte) (string, error) {
+	backup, err := os.CreateTemp(directory, ".oxpio-source-backup-*")
+	if err != nil {
+		return "", fmt.Errorf("create source backup: %w", err)
+	}
+	name := backup.Name()
+	cleanup := func() {
+		_ = backup.Close()
+		_ = os.Remove(name)
+	}
+	if _, err := backup.Write(content); err != nil {
+		cleanup()
+		return "", fmt.Errorf("write source backup: %w", err)
+	}
+	if err := backup.Sync(); err != nil {
+		cleanup()
+		return "", fmt.Errorf("sync source backup: %w", err)
+	}
+	if err := backup.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", fmt.Errorf("close source backup: %w", err)
+	}
+	return name, nil
 }
 
 func catalogEntry(catalog *model.SourceCatalog, relPath string) *model.SourceCatalogEntry {

@@ -18,7 +18,8 @@ func TestRecoverPreparedJournalOnlyCleansTemporaryState(t *testing.T) {
 	if err := os.MkdirAll(temporary, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	journal := workspace.Journal{Version: workspace.JournalVersion, CommitKind: "source+output", Phase: "prepared", TargetPath: filepath.Join(vault, "public"), TemporaryPath: temporary}
+	target := filepath.Join(vault, "public")
+	journal := workspace.Journal{Version: workspace.JournalVersion, CommitKind: "source+output", Phase: "prepared", InputFingerprint: "input", TargetPath: target, TemporaryPath: temporary, OutputBeforeHash: directoryHash(target), OutputIdentity: outputIdentity(target)}
 	if err := workspace.WriteJournal(vault, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +52,7 @@ func TestRecoverSourceOnlyCommitDoesNotTouchOutput(t *testing.T) {
 		t.Fatal(err)
 	}
 	hash := sha256.Sum256([]byte("new source"))
-	journal := workspace.Journal{Version: workspace.JournalVersion, CommitKind: "source-only", Phase: "source-committed", TargetPath: source, AfterHash: fmt.Sprintf("%x", hash)}
+	journal := workspace.Journal{Version: workspace.JournalVersion, CommitKind: "source-only", Phase: "source-committed", InputFingerprint: "input", TargetPath: source, AfterHash: fmt.Sprintf("%x", hash)}
 	if err := workspace.WriteJournal(vault, journal); err != nil {
 		t.Fatal(err)
 	}
@@ -86,7 +87,7 @@ func TestRecoverSourceAndOutputCommitCompletesOnlyWithMatchingHashes(t *testing.
 	if err := os.WriteFile(source, []byte("new source"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	staging := filepath.Join(vault, ".stage")
+	staging := filepath.Join(vault, ".oxpio-edit-stage-test", "public")
 	if err := os.MkdirAll(staging, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -97,10 +98,14 @@ func TestRecoverSourceAndOutputCommitCompletesOnlyWithMatchingHashes(t *testing.
 		t.Fatal(err)
 	}
 	sourceHash := sha256.Sum256([]byte("new source"))
+	inputFingerprint, err := workspace.Fingerprint(vault, output)
+	if err != nil {
+		t.Fatal(err)
+	}
 	journal := workspace.Journal{
-		Version: workspace.JournalVersion, CommitKind: "source+output", Phase: "source-committed",
-		TargetPath: output, SourcePath: source, TemporaryPath: staging,
-		SourceAfterHash: fmt.Sprintf("%x", sourceHash), OutputBeforeHash: directoryHash(output),
+		Version: workspace.JournalVersion, CommitKind: "source+output", Phase: "source-committed", InputFingerprint: inputFingerprint,
+		TargetPath: output, SourcePath: source, SourceBeforePath: source, SourceBeforeHash: "absent", TemporaryPath: staging,
+		SourceAfterHash: fmt.Sprintf("%x", sourceHash), OutputIdentity: outputIdentity(output), OutputBeforeHash: directoryHash(output), OutputAfterHash: directoryHash(staging), OutputAfterIdentity: outputIdentity(staging),
 	}
 	if err := workspace.WriteJournal(vault, journal); err != nil {
 		t.Fatal(err)
@@ -118,6 +123,175 @@ func TestRecoverSourceAndOutputCommitCompletesOnlyWithMatchingHashes(t *testing.
 	}
 	if _, err := workspace.LoadJournal(vault); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("journal after recovery = %v, want absent", err)
+	}
+}
+
+func TestRecoverRejectsCorruptedEditorStaging(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "public")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("old output"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(vault, "article.md")
+	if err := os.WriteFile(source, []byte("new source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staging := filepath.Join(vault, ".oxpio-edit-stage-test", "public")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, ManagedMarkerFilename), []byte(ManagedMarkerContents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("new output"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceHash := sha256.Sum256([]byte("new source"))
+	inputFingerprint, err := workspace.Fingerprint(vault, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := workspace.Journal{
+		Version: workspace.JournalVersion, CommitKind: "source+output", Phase: "source-committed", InputFingerprint: inputFingerprint,
+		TargetPath: output, SourcePath: source, SourceBeforePath: source, SourceBeforeHash: "absent", TemporaryPath: staging,
+		SourceAfterHash: fmt.Sprintf("%x", sourceHash), OutputIdentity: outputIdentity(output), OutputBeforeHash: directoryHash(output), OutputAfterHash: directoryHash(staging), OutputAfterIdentity: outputIdentity(staging),
+	}
+	if err := workspace.WriteJournal(vault, journal); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("tampered output"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Recover(vault, false); !errors.Is(err, workspace.ErrRecovery) {
+		t.Fatalf("Recover() error = %v, want recovery error", err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "index.html"))
+	if err != nil || string(data) != "old output" {
+		t.Fatalf("output after rejected recovery = %q, %v", data, err)
+	}
+	if _, err := workspace.LoadJournal(vault); err != nil {
+		t.Fatalf("journal after rejected recovery = %v, want retained journal", err)
+	}
+}
+
+func TestCommitRejectsOutputAndStagingChanges(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "public")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, ManagedMarkerFilename), []byte(ManagedMarkerContents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staging := filepath.Join(vault, ".oxpio-edit-stage-test", "public")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, ManagedMarkerFilename), []byte(ManagedMarkerContents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := AdoptStaging(vault, output, staging, Options{Durable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("tampered"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.Commit(); err == nil {
+		t.Fatal("Commit() accepted tampered staging")
+	}
+	if err := transaction.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "index.html"))
+	if err != nil || string(data) != "old" {
+		t.Fatalf("output after staging rejection = %q, %v", data, err)
+	}
+
+	staging = filepath.Join(vault, ".oxpio-edit-stage-output", "public")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, ManagedMarkerFilename), []byte(ManagedMarkerContents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err = AdoptStaging(vault, output, staging, Options{Durable: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("external"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transaction.Commit(); err == nil {
+		t.Fatal("Commit() accepted changed output")
+	}
+	if err := transaction.Abort(); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(filepath.Join(output, "index.html"))
+	if err != nil || string(data) != "external" {
+		t.Fatalf("output after output rejection = %q, %v", data, err)
+	}
+}
+
+func TestRecoverAcceptsExternalNestedEditorStaging(t *testing.T) {
+	vault := t.TempDir()
+	outputRoot := t.TempDir()
+	output := filepath.Join(outputRoot, "public")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	source := filepath.Join(vault, "article.md")
+	if err := os.WriteFile(source, []byte("new source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staging := filepath.Join(outputRoot, ".oxpio-edit-stage-external", "public")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, ManagedMarkerFilename), []byte(ManagedMarkerContents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sourceHash := sha256.Sum256([]byte("new source"))
+	inputFingerprint, err := workspace.Fingerprint(vault, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := workspace.Journal{
+		Version: workspace.JournalVersion, CommitKind: "source+output", Phase: "source-committed", InputFingerprint: inputFingerprint,
+		TargetPath: output, SourcePath: source, SourceBeforePath: source, SourceBeforeHash: "absent", TemporaryPath: staging,
+		SourceAfterHash: fmt.Sprintf("%x", sourceHash), OutputIdentity: outputIdentity(output), OutputBeforeHash: directoryHash(output), OutputAfterHash: directoryHash(staging), OutputAfterIdentity: outputIdentity(staging),
+	}
+	if err := workspace.WriteJournal(vault, journal); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Recover(vault, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Recover(vault, false); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(filepath.Join(output, "index.html"))
+	if err != nil || string(data) != "new" {
+		t.Fatalf("external output after recovery = %q, %v", data, err)
 	}
 }
 

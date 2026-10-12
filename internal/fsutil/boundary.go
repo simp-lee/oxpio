@@ -99,6 +99,17 @@ func ResolveVaultOutput(vaultPath string, outputPath string) (VaultOutputBoundar
 	if PathWithinRoot(resolvedOutput, vaultRoot) {
 		return VaultOutputBoundary{}, fmt.Errorf("output path %q must not contain the vault %q", absoluteOutput, vaultRoot)
 	}
+	if PathWithinRoot(vaultRoot, resolvedOutput) {
+		relative, relErr := filepath.Rel(vaultRoot, resolvedOutput)
+		if relErr != nil {
+			return VaultOutputBoundary{}, fmt.Errorf("resolve output path %q: %w", absoluteOutput, relErr)
+		}
+		for _, segment := range strings.Split(relative, string(filepath.Separator)) {
+			if segment == ".oxpio" || segment == ".obsidian" {
+				return VaultOutputBoundary{}, fmt.Errorf("output path %q must not overlap reserved Vault directory %q", absoluteOutput, segment)
+			}
+		}
+	}
 	return VaultOutputBoundary{
 		VaultPath:  vaultRoot,
 		OutputPath: resolvedOutput,

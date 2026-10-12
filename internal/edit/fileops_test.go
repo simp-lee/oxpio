@@ -43,8 +43,8 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if folder.SourceHash == AbsentSourceHash {
-		t.Fatal("created folder returned absent hash")
+	if folder.SourceHash == AbsentSourceHash || folder.Build != nil {
+		t.Fatalf("directory creation result = %#v, want source-only mutation", folder)
 	}
 	section, err := NewSectionSource("Docs")
 	if err != nil {
@@ -95,6 +95,34 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(vault, "article.md")); err != nil || !strings.Contains(string(got), "Article") {
 		t.Fatalf("unrelated source changed: %q, err=%v", got, err)
 	}
+	if _, err := coordinator.CreateFolder("empty", AbsentSourceHash); err != nil {
+		t.Fatal(err)
+	}
+	emptyState, err := inspectFileManagerState(vault, "empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := coordinator.RenamePath("empty", "moved", emptyState.hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.Build != nil {
+		t.Fatalf("directory rename built output: %#v", renamed.Build)
+	}
+	movedState, err := inspectFileManagerState(vault, "moved")
+	if err != nil {
+		t.Fatal(err)
+	}
+	deleted, err := coordinator.DeletePath("moved", movedState.hash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deleted.Build != nil {
+		t.Fatalf("directory delete built output: %#v", deleted.Build)
+	}
+	if afterOutput, err := os.ReadFile(filepath.Join(output, "article", "index.html")); err != nil || string(afterOutput) != string(beforeOutput) {
+		t.Fatalf("directory mutation changed output: err=%v", err)
+	}
 }
 
 func TestFileOperationKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
@@ -112,25 +140,12 @@ func TestFileOperationKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cleanupFailure := errors.New("simulated partial backup cleanup failure")
-	originalRemove := editOutputRemoveAll
-	editOutputRemoveAll = func(name string) error {
-		if strings.Contains(filepath.Base(name), ".oxpio-publish-stage-") {
-			if err := os.RemoveAll(name); err != nil {
-				return err
-			}
-			return cleanupFailure
-		}
-		return originalRemove(name)
-	}
-	defer func() { editOutputRemoveAll = originalRemove }()
-
 	result, err := coordinator.CreateFolder("docs", AbsentSourceHash)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.Build == nil || !errors.Is(result.Build.OutputCleanupError, cleanupFailure) {
-		t.Fatalf("build cleanup error = %#v, want %v", result.Build, cleanupFailure)
+	if result.Build != nil {
+		t.Fatalf("directory-only operation built output: %#v", result.Build)
 	}
 	if _, err := os.Stat(filepath.Join(vault, "docs")); err != nil {
 		t.Fatal(err)
