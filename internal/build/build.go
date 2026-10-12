@@ -50,6 +50,12 @@ type Options struct {
 	// SourceOutputPath is the formal output boundary to exclude from source
 	// discovery when it differs from the temporary publication path.
 	SourceOutputPath string
+	// Ephemeral disables durable journals and is used only by dry-run paths.
+	Ephemeral bool
+	// InputFingerprint and ValidateInput let the shared publish service reject
+	// source/config/theme changes immediately before output replacement.
+	InputFingerprint string
+	ValidateInput    func() error
 }
 
 // BuildWithOptions analyzes the vault once and publishes the resulting
@@ -72,7 +78,7 @@ func BuildWithOptions(vaultPath, outputPath string, options Options) (*BuildResu
 		}
 		return result, internalanalyze.Failure(analysis.Diagnostics)
 	}
-	strictResult, buildErr := buildStrictSiteWithTransactionTracking(analysis.Plan, vaultPath, outputPath, options.DiagnosticsWriter, options.TrackOutputTransactionPath, options.Concurrency)
+	strictResult, buildErr := buildStrictSiteWithTransactionTracking(analysis.Plan, vaultPath, outputPath, options.DiagnosticsWriter, options.TrackOutputTransactionPath, options.Ephemeral, options.InputFingerprint, options.ValidateInput, options.Concurrency)
 	if strictResult == nil {
 		strictResult = &BuildResult{}
 	}
@@ -104,7 +110,7 @@ func BuildWithConfig(vaultPath, outputPath string, cfg model.SiteConfig, options
 		}
 		return result, internalanalyze.Failure(planned.Diagnostics)
 	}
-	strictResult, buildErr := buildStrictSiteWithTransactionTracking(planned, vaultPath, outputPath, options.DiagnosticsWriter, options.TrackOutputTransactionPath, options.Concurrency)
+	strictResult, buildErr := buildStrictSiteWithTransactionTracking(planned, vaultPath, outputPath, options.DiagnosticsWriter, options.TrackOutputTransactionPath, options.Ephemeral, options.InputFingerprint, options.ValidateInput, options.Concurrency)
 	if strictResult == nil {
 		strictResult = &BuildResult{}
 	}

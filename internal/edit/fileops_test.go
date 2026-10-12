@@ -115,7 +115,7 @@ func TestFileOperationKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 	cleanupFailure := errors.New("simulated partial backup cleanup failure")
 	originalRemove := editOutputRemoveAll
 	editOutputRemoveAll = func(name string) error {
-		if strings.Contains(filepath.Base(name), ".oxpio-output-backup-") {
+		if strings.Contains(filepath.Base(name), ".oxpio-publish-stage-") {
 			if err := os.RemoveAll(name); err != nil {
 				return err
 			}

@@ -15,6 +15,8 @@ import (
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	internalpublish "github.com/simp-lee/oxpio/internal/publish"
+	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
 // AbsentSourceHash is the compare-and-swap sentinel for a source that does not
@@ -112,6 +114,11 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
+	lease, err := workspace.Acquire(coordinator.vault)
+	if err != nil {
+		return TransactionResult{}, err
+	}
+	defer func() { _ = lease.Release() }()
 
 	if err := validateSourceRelPath(relPath); err != nil {
 		return TransactionResult{}, err
@@ -171,6 +178,10 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	} else {
 		overlay[relPath] = append([]byte(nil), content...)
 	}
+	inputFingerprint, err := workspace.Fingerprint(coordinator.vault, coordinator.output)
+	if err != nil {
+		return TransactionResult{}, err
+	}
 	stageRoot, err := os.MkdirTemp(filepath.Dir(coordinator.output), ".oxpio-edit-stage-*")
 	if err != nil {
 		return TransactionResult{}, fmt.Errorf("create edit staging directory: %w", err)
@@ -178,12 +189,18 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	defer func() { _ = os.RemoveAll(stageRoot) }()
 	stageOutput := filepath.Join(stageRoot, "public")
 	built, err := internalbuild.BuildWithOptions(coordinator.vault, stageOutput, internalbuild.Options{
+		Strict:           true,
 		SourceOverlay:    overlay,
 		SourceDeleted:    deleted,
 		SourceOutputPath: coordinator.output,
 	})
 	if err != nil {
 		return TransactionResult{}, &CandidateBuildError{Path: relPath, Result: built, Err: err}
+	}
+	if currentFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output); fingerprintErr != nil {
+		return TransactionResult{}, fingerprintErr
+	} else if currentFingerprint != inputFingerprint {
+		return TransactionResult{}, fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during candidate build")
 	}
 
 	current, exists, err = readSource(coordinator.vault, relPath)
@@ -218,41 +235,51 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 		return TransactionResult{}, errors.Join(restoreSource(coordinator.vault, relPath, committedHash, current, exists), &ConflictError{Path: relPath, Expected: committedHash, Actual: actualAfterSource})
 	}
 
+	expectedAfterFingerprint, err := workspace.Fingerprint(coordinator.vault, coordinator.output)
+	if err != nil {
+		return TransactionResult{}, errors.Join(restoreSource(coordinator.vault, relPath, committedHash, current, exists), err)
+	}
+	validateInput := func() error {
+		currentFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output)
+		if fingerprintErr != nil {
+			return fingerprintErr
+		}
+		if currentFingerprint != expectedAfterFingerprint {
+			return fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during publish")
+		}
+		return nil
+	}
 	rollbackSource := func() error {
 		return restoreSource(coordinator.vault, relPath, committedHash, current, exists)
 	}
-	rollbackOutput, finalizeOutput, cleanupOutput, err := publishOutput(stageOutput, coordinator.output)
+	finalizeOutput, cleanupOutput, err := commitStagedOutput(coordinator.vault, stageOutput, coordinator.output, expectedAfterFingerprint, validateInput)
 	if err != nil {
 		return TransactionResult{}, errors.Join(rollbackSource(), err)
 	}
+	var postCommitWarning error
 	currentAfterCommit, nowExists, readErr := readSource(coordinator.vault, relPath)
 	actualAfterCommit := AbsentSourceHash
 	if nowExists {
 		actualAfterCommit = hashForAbsentOrBytes(currentAfterCommit)
 	}
 	if readErr != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), readErr)
+		postCommitWarning = readErr
+	} else if actualAfterCommit != committedHash {
+		postCommitWarning = &ConflictError{Path: relPath, Expected: committedHash, Actual: actualAfterCommit}
+	} else if verifyErr := verifyCommittedSource(coordinator.vault, relPath, committedHash); verifyErr != nil {
+		postCommitWarning = verifyErr
 	}
-	if actualAfterCommit != committedHash {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), &ConflictError{Path: relPath, Expected: committedHash, Actual: actualAfterCommit})
+	if finalizeErr := finalizeOutput(); finalizeErr != nil {
+		postCommitWarning = errors.Join(postCommitWarning, finalizeErr)
 	}
-	if err := verifyCommittedSource(coordinator.vault, relPath, committedHash); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), err)
+	if verifyErr := verifyCommittedSource(coordinator.vault, relPath, committedHash); verifyErr != nil {
+		postCommitWarning = errors.Join(postCommitWarning, verifyErr)
 	}
-	if err := finalizeOutput(); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), err)
+	if cleanupErr := cleanupOutput(); cleanupErr != nil {
+		postCommitWarning = errors.Join(postCommitWarning, cleanupErr)
 	}
-	// Recheck the operation bytes after output finalization. The source/output
-	// pair is not committed to the in-memory catalog or reload boundary until
-	// this postcondition still holds.
-	if err := verifyCommittedSource(coordinator.vault, relPath, committedHash); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollbackSource(), err)
-	}
-	if err := cleanupOutput(); err != nil {
-		// Publication has already committed the new source/output pair. A
-		// backup cleanup failure must not roll back through a partially
-		// removed backup and destroy the committed output.
-		built.OutputCleanupError = err
+	if postCommitWarning != nil {
+		built.OutputCleanupError = postCommitWarning
 	}
 	coordinator.catalog = cloneCatalog(built.Catalog)
 	return TransactionResult{SourceHash: committedHash, RelPath: relPath, Build: built}, nil
@@ -588,130 +615,29 @@ func restoreSource(vault, relPath, expected string, original []byte, existed boo
 	return commitSource(vault, relPath, expected, original, false, expected == AbsentSourceHash)
 }
 
-func publishOutput(stage, output string) (func() error, func() error, func() error, error) {
-	if err := os.MkdirAll(filepath.Dir(output), 0o755); err != nil {
-		return nil, nil, nil, err
-	}
-	backupRoot, err := os.MkdirTemp(filepath.Dir(output), ".oxpio-output-backup-*")
+func commitStagedOutput(vault, stage, output, inputFingerprint string, validateInput func() error) (func() error, func() error, error) {
+	transaction, err := internalpublish.AdoptStaging(vault, output, stage, internalpublish.Options{
+		Durable:          true,
+		InputFingerprint: inputFingerprint,
+		ValidateInput:    validateInput,
+		RemoveAll:        editOutputRemoveAll,
+	})
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	backup := filepath.Join(backupRoot, "previous")
-	outputInfo, outputErr := os.Lstat(output)
-	hadOutput := outputErr == nil
-	if outputErr == nil && (outputInfo.Mode()&os.ModeSymlink != 0 || !outputInfo.IsDir()) {
-		_ = os.RemoveAll(backupRoot)
-		return nil, nil, nil, fmt.Errorf("formal output %q must be a directory and not a symbolic link", output)
-	}
-	if outputErr != nil && !errors.Is(outputErr, os.ErrNotExist) {
-		_ = os.RemoveAll(backupRoot)
-		return nil, nil, nil, outputErr
-	}
-	if hadOutput {
-		currentInfo, currentErr := os.Lstat(output)
-		if currentErr != nil || !os.SameFile(outputInfo, currentInfo) {
-			_ = os.RemoveAll(backupRoot)
-			return nil, nil, nil, fmt.Errorf("formal output changed before publication")
-		}
-		if err := os.Rename(output, backup); err != nil {
-			_ = os.RemoveAll(backupRoot)
-			return nil, nil, nil, fmt.Errorf("backup formal output: %w", err)
-		}
-	}
-	if err := os.Rename(stage, output); err != nil {
-		publishErr := fmt.Errorf("publish formal output: %w", err)
-		var restoreErr error
-		restored := !hadOutput
-		if hadOutput {
-			if _, statErr := os.Lstat(output); statErr == nil {
-				restoreErr = fmt.Errorf("formal output changed while restoring after failed publication")
-			} else if !errors.Is(statErr, os.ErrNotExist) {
-				restoreErr = fmt.Errorf("inspect formal output before restore: %w", statErr)
-			} else if renameErr := os.Rename(backup, output); renameErr != nil {
-				restoreErr = fmt.Errorf("restore formal output: %w", renameErr)
-			} else if restoredInfo, inspectErr := os.Lstat(output); inspectErr != nil {
-				restoreErr = fmt.Errorf("confirm restored formal output: %w", inspectErr)
-			} else if !os.SameFile(outputInfo, restoredInfo) {
-				restoreErr = fmt.Errorf("formal output restore identity changed")
-			} else {
-				restored = true
-			}
-		}
-		var cleanupErr error
-		if restored {
-			if err := os.RemoveAll(backupRoot); err != nil {
-				cleanupErr = fmt.Errorf("cleanup formal output backup: %w", err)
-			}
-		}
-		return nil, nil, nil, errors.Join(publishErr, restoreErr, cleanupErr)
-	}
-	restorePublishedOutput := func() error {
-		var rollbackErr error
-		if _, err := os.Lstat(output); err == nil {
-			if err := os.RemoveAll(output); err != nil {
-				rollbackErr = err
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			rollbackErr = err
-		}
-		if hadOutput {
-			if _, err := os.Lstat(output); errors.Is(err, os.ErrNotExist) {
-				if err := os.Rename(backup, output); err != nil {
-					rollbackErr = errors.Join(rollbackErr, err)
-				}
-			}
-		}
-		if err := os.RemoveAll(backupRoot); err != nil {
-			rollbackErr = errors.Join(rollbackErr, err)
-		}
-		return rollbackErr
-	}
-	publishedInfo, err := os.Lstat(output)
+	commit, err := transaction.Commit()
 	if err != nil {
-		return nil, nil, nil, errors.Join(fmt.Errorf("inspect published formal output: %w", err), restorePublishedOutput())
+		_ = transaction.Abort()
+		return nil, nil, err
 	}
-	rolledBack := false
-	rollback := func() error {
-		if rolledBack {
-			return nil
-		}
-		rolledBack = true
-		var rollbackErr error
-		currentInfo, currentErr := os.Lstat(output)
-		if currentErr == nil {
-			if os.SameFile(publishedInfo, currentInfo) {
-				if err := os.RemoveAll(output); err != nil {
-					rollbackErr = err
-				}
-			} else {
-				rollbackErr = fmt.Errorf("formal output changed during rollback")
-			}
-		} else if !errors.Is(currentErr, os.ErrNotExist) {
-			rollbackErr = currentErr
-		}
-		if hadOutput {
-			if _, statErr := os.Lstat(output); errors.Is(statErr, os.ErrNotExist) {
-				if err := os.Rename(backup, output); err != nil {
-					rollbackErr = errors.Join(rollbackErr, err)
-				}
-			} else if statErr == nil {
-				// Preserve an external replacement rather than overwriting it.
-			} else {
-				rollbackErr = errors.Join(rollbackErr, statErr)
-			}
-		}
-		if err := os.RemoveAll(backupRoot); err != nil {
-			rollbackErr = errors.Join(rollbackErr, err)
-		}
-		return rollbackErr
-	}
-	// Keep the backup available through the source/output postcondition checks.
-	// The published directory is already the formal output; this checkpoint is
-	// intentionally separate from cleanup so rollback remains possible until
-	// the caller has verified the committed source bytes.
+	cleanupErr := commit.CleanupError
 	finalize := func() error { return nil }
-	cleanup := func() error { return editOutputRemoveAll(backupRoot) }
-	return rollback, finalize, cleanup, nil
+	cleanup := func() error {
+		err := cleanupErr
+		cleanupErr = nil
+		return err
+	}
+	return finalize, cleanup, nil
 }
 
 func hashForAbsentOrBytes(data []byte) string {

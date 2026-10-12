@@ -3,9 +3,14 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 
+	internalagent "github.com/simp-lee/oxpio/internal/agent"
 	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
 	internaldiag "github.com/simp-lee/oxpio/internal/diag"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	internalpublish "github.com/simp-lee/oxpio/internal/publish"
+	"github.com/simp-lee/oxpio/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -21,9 +26,21 @@ func newValidateCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := internalfsutil.ValidateOutputParent(boundary); err != nil {
+				return err
+			}
+			if err := workspace.Check(boundary.VaultPath); err != nil {
+				return err
+			}
+			if err := internalpublish.CheckExternalOutputLock(boundary.VaultPath, boundary.OutputPath); err != nil {
+				return err
+			}
 			result, analyzeErr := internalanalyze.AnalyzeWithOutput(boundary.VaultPath, boundary.OutputPath)
-			if writeErr := internalanalyze.WriteDiagnostics(cmd.ErrOrStderr(), result.Diagnostics); writeErr != nil {
-				return fmt.Errorf("write diagnostics: %w", writeErr)
+			diagnostics := redactHiddenDiagnostics(diagnosticsFromBuild(result.Diagnostics), result.Plan)
+			if formatOf(cmd) != "json" {
+				if writeErr := writeValidationDiagnostics(cmd.ErrOrStderr(), diagnostics, analyzeErr); writeErr != nil {
+					return writeErr
+				}
 			}
 			if formatOf(cmd) == "json" {
 				data, marshalErr := json.Marshal(validationSummary(result.Diagnostics))
@@ -34,7 +51,6 @@ func newValidateCommand() *cobra.Command {
 					return writeErr
 				}
 			}
-			diagnostics := redactHiddenDiagnostics(diagnosticsFromBuild(result.Diagnostics), result.Plan)
 			if analyzeErr != nil {
 				return diagnosticError{err: analyzeErr, diagnostics: diagnostics}
 			}
@@ -49,6 +65,19 @@ func newValidateCommand() *cobra.Command {
 	flags.StringVar(&vaultPath, "vault", "", "Path to the OXPIO Vault")
 	flags.StringVar(&outputPath, "output", "", "Formal site output boundary (default <vault>/public)")
 	return cmd
+}
+
+func writeValidationDiagnostics(writer io.Writer, diagnostics []internalagent.Diagnostic, analyzeErr error) error {
+	for _, diagnostic := range diagnostics {
+		if _, err := fmt.Fprintf(writer, "%s: %s\n", diagnostic.Severity, diagnostic.Message); err != nil {
+			return err
+		}
+	}
+	if len(diagnostics) == 0 && analyzeErr != nil {
+		_, err := fmt.Fprintf(writer, "error: %v\n", analyzeErr)
+		return err
+	}
+	return nil
 }
 
 type validationResult struct {

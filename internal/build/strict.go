@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"image"
 	"io"
@@ -24,6 +25,7 @@ import (
 	"github.com/simp-lee/oxpio/internal/link"
 	"github.com/simp-lee/oxpio/internal/markdown"
 	"github.com/simp-lee/oxpio/internal/model"
+	internalpublish "github.com/simp-lee/oxpio/internal/publish"
 	"github.com/simp-lee/oxpio/internal/recommend"
 	"github.com/simp-lee/oxpio/internal/render"
 	"github.com/simp-lee/oxpio/internal/siteplan"
@@ -37,10 +39,10 @@ import (
 // buildStrictSite publishes the normalized section model through the same
 // managed staging publisher used by the existing build foundation.
 func buildStrictSite(planned *siteplan.Result, vaultPath, outputPath string, diagnosticsWriter io.Writer, concurrency ...int) (result *BuildResult, err error) {
-	return buildStrictSiteWithTransactionTracking(planned, vaultPath, outputPath, diagnosticsWriter, nil, concurrency...)
+	return buildStrictSiteWithTransactionTracking(planned, vaultPath, outputPath, diagnosticsWriter, nil, false, "", nil, concurrency...)
 }
 
-func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath, outputPath string, diagnosticsWriter io.Writer, trackTransactionPath func(string), concurrency ...int) (result *BuildResult, err error) {
+func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath, outputPath string, diagnosticsWriter io.Writer, trackTransactionPath func(string), ephemeral bool, inputFingerprint string, validateInput func() error, concurrency ...int) (result *BuildResult, err error) {
 	workerConcurrency := 0
 	if len(concurrency) > 0 {
 		workerConcurrency = concurrency[0]
@@ -60,27 +62,36 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		return result, err
 	}
 	result.OutputPath = boundary.OutputPath
-	publisher, err := prepareStagedOutputPublisherWithTransactionTracking(boundary.VaultPath, boundary.OutputPath, trackTransactionPath)
+	publisher, err := internalpublish.Prepare(boundary.VaultPath, boundary.OutputPath, internalpublish.Options{
+		Durable:              !ephemeral,
+		InputFingerprint:     inputFingerprint,
+		ValidateInput:        validateInput,
+		TrackTransactionPath: trackTransactionPath,
+	})
 	if err != nil {
 		return result, err
 	}
 	previousCache := loadStrictCacheManifest(boundary.OutputPath)
 	defer func() {
-		if finalizeErr := publisher.Finalize(err == nil); finalizeErr != nil {
-			if err == nil {
-				err = finalizeErr
-			} else {
-				err = fmt.Errorf("publish strict site: %w; cleanup: %v", err, finalizeErr)
+		if err != nil {
+			if cleanupErr := publisher.Abort(); cleanupErr != nil {
+				err = errors.Join(err, cleanupErr)
 			}
+			return
 		}
-		if publisher.cleanupErr != nil {
-			result.OutputCleanupError = publisher.cleanupErr
+		commit, commitErr := publisher.Commit()
+		if commitErr != nil {
+			err = commitErr
+			return
+		}
+		if commit.CleanupError != nil {
+			result.OutputCleanupError = commit.CleanupError
 			if diagnosticsWriter != nil {
-				_, _ = fmt.Fprintf(diagnosticsWriter, "cleanup %s: %s\n", d.KindOutputCleanup, publisher.cleanupErr)
+				_, _ = fmt.Fprintf(diagnosticsWriter, "cleanup %s: %s\n", d.KindOutputCleanup, commit.CleanupError)
 			}
 		}
 	}()
-	staging := publisher.OutputPath()
+	staging := publisher.StagingPath()
 	outputs := newStrictOutputRegistry(boundary.OutputPath, previousCache)
 	if err := outputs.write(staging, managedOutputMarkerFilename, "output marker", []byte(managedOutputMarkerContents)); err != nil {
 		return result, err

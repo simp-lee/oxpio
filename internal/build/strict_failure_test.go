@@ -98,7 +98,10 @@ func TestStrictBuildPreservesEveryPublishedByteForInputFailureClasses(t *testing
 			if err != nil {
 				t.Fatal(err)
 			}
-			if len(matches) != 0 {
+			for _, match := range matches {
+				if strings.HasSuffix(match, ".lock") {
+					continue
+				}
 				t.Fatalf("transaction residue after %s failure: %v", testCase.name, matches)
 			}
 		})
@@ -137,8 +140,13 @@ func TestStrictBuildPreservesOutputAndCleansStageWhenSocialGenerationFails(t *te
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "site" {
-		t.Fatalf("social generation left temporary output: %v", entries)
+	for _, entry := range entries {
+		if strings.HasSuffix(entry.Name(), ".lock") {
+			continue
+		}
+		if entry.Name() != "site" {
+			t.Fatalf("social generation left temporary output: %v", entries)
+		}
 	}
 }
 

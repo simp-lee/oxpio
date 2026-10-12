@@ -99,11 +99,25 @@ func ResolveVaultOutput(vaultPath string, outputPath string) (VaultOutputBoundar
 	if PathWithinRoot(resolvedOutput, vaultRoot) {
 		return VaultOutputBoundary{}, fmt.Errorf("output path %q must not contain the vault %q", absoluteOutput, vaultRoot)
 	}
-
 	return VaultOutputBoundary{
 		VaultPath:  vaultRoot,
 		OutputPath: resolvedOutput,
 	}, nil
+}
+
+// ValidateOutputParent requires the parent of an output boundary to be an
+// existing, non-symlink directory. Boundary resolution itself also supports a
+// missing output leaf for read-only path planning.
+func ValidateOutputParent(boundary VaultOutputBoundary) error {
+	parent := filepath.Dir(boundary.OutputPath)
+	info, err := os.Lstat(parent)
+	if err != nil {
+		return fmt.Errorf("output parent %q must exist: %w", parent, err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("output parent %q must be a regular directory", parent)
+	}
+	return nil
 }
 
 // PathWithinRoot reports whether candidate is root or one of its descendants.

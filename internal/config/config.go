@@ -1101,6 +1101,9 @@ func discoverUnknownManagementPaths(vaultRoot string) ([]string, error) {
 		}
 	}
 	sort.Strings(unknown)
+	if len(unknown) == 0 {
+		return nil, nil
+	}
 	return unknown, nil
 }
 

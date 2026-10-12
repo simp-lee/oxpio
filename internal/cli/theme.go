@@ -425,7 +425,7 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 				return planErr
 			}
 			previewAssets = planned.Plan.ThemeAssetURLs
-			previewBuild, err = internalbuild.BuildWithConfig(boundary.VaultPath, temporary, cfg, internalbuild.Options{Strict: true, SourceOutputPath: boundary.OutputPath})
+			previewBuild, err = internalbuild.BuildWithConfig(boundary.VaultPath, temporary, cfg, internalbuild.Options{Strict: true, Ephemeral: true, SourceOutputPath: boundary.OutputPath})
 		} else {
 			cfg, cfgErr := internalconfig.LoadForBuildWithOutput(boundary.VaultPath, boundary.OutputPath)
 			if cfgErr != nil {
@@ -447,7 +447,7 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 				previewSource, err = internaltheme.LoadLocal(boundary.VaultPath, cfg.Theme)
 			}
 			if err == nil {
-				previewBuild, err = internalbuild.BuildWithConfig(boundary.VaultPath, temporary, cfg, internalbuild.Options{Strict: true, SourceOutputPath: boundary.OutputPath})
+				previewBuild, err = internalbuild.BuildWithConfig(boundary.VaultPath, temporary, cfg, internalbuild.Options{Strict: true, Ephemeral: true, SourceOutputPath: boundary.OutputPath})
 			}
 		}
 		if err != nil {
@@ -661,6 +661,7 @@ func readThemeFile(vault, candidate string) ([]byte, error) {
 	}
 	return os.ReadFile(candidate)
 }
+
 func checkThemeParents(vault, candidate string) error {
 	rel, err := filepath.Rel(vault, candidate)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
@@ -692,6 +693,7 @@ func themeFileKind(name string) string {
 	}
 	return kind
 }
+
 func readThemeCLIContent(vault, name string) ([]byte, error) {
 	if name == "-" {
 		return io.ReadAll(os.Stdin)

@@ -24,6 +24,7 @@ import (
 	"github.com/simp-lee/oxpio/internal/model"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
 	internalsiteplan "github.com/simp-lee/oxpio/internal/siteplan"
+	"github.com/simp-lee/oxpio/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -161,7 +162,7 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 			}
 		} else {
 			data, changes := splitChangesData(data)
-			envelope = internalagent.SuccessWithChanges(command, data, changes)
+			envelope = internalagent.SuccessWithDiagnosticsAndChanges(command, data, successWarnings(data), changes)
 		}
 		if stdout != nil {
 			if writeErr := internalagent.Write(stdout, envelope); writeErr != nil {
@@ -867,6 +868,16 @@ func isCLIParameterError(err error) bool {
 	return false
 }
 
+func successWarnings(data json.RawMessage) []internalagent.Diagnostic {
+	var value struct {
+		PostCommitWarning bool `json:"postCommitWarning"`
+	}
+	if err := json.Unmarshal(data, &value); err != nil || !value.PostCommitWarning {
+		return nil
+	}
+	return []internalagent.Diagnostic{{Code: "POST_COMMIT_WARNING", Severity: "warning", Category: "transaction_cleanup", Message: "publication committed, but post-commit cleanup reported a warning"}}
+}
+
 func splitChangesData(data json.RawMessage) (json.RawMessage, []internalagent.Change) {
 	if len(data) == 0 || bytes.Equal(bytes.TrimSpace(data), []byte("null")) {
 		return data, nil
@@ -892,6 +903,12 @@ func splitChangesData(data json.RawMessage) (json.RawMessage, []internalagent.Ch
 }
 
 func structuredErrorDiagnostics(err error) []internalagent.Diagnostic {
+	if errors.Is(err, workspace.ErrRecovery) {
+		return []internalagent.Diagnostic{{Code: "RECOVERY_ERROR", Severity: "error", Category: "transaction", Message: "unfinished or invalid transaction state requires recovery"}}
+	}
+	if errors.Is(err, workspace.ErrBusy) {
+		return []internalagent.Diagnostic{{Code: "BUSY", Severity: "error", Category: "workspace", Message: "workspace or output is busy"}}
+	}
 	var structured interface {
 		Diagnostics() []internalagent.Diagnostic
 	}

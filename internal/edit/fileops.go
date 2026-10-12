@@ -16,6 +16,7 @@ import (
 
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
 const (
@@ -81,6 +82,11 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
+	lease, err := workspace.Acquire(coordinator.vault)
+	if err != nil {
+		return TransactionResult{}, err
+	}
+	defer func() { _ = lease.Release() }()
 
 	if err := validateManagedRelPath(mutation.path); err != nil {
 		return TransactionResult{}, err
@@ -187,6 +193,10 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, &ConflictError{Path: mutation.path, Expected: mutation.expected, Actual: latest.hash}
 	}
 
+	inputFingerprint, err := workspace.Fingerprint(coordinator.vault, coordinator.output)
+	if err != nil {
+		return TransactionResult{}, err
+	}
 	candidateRoot, err := os.MkdirTemp(filepath.Dir(coordinator.vault), ".oxpio-file-candidate-*")
 	if err != nil {
 		return TransactionResult{}, fmt.Errorf("create file-operation candidate vault: %w", err)
@@ -216,6 +226,11 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	if err := verifyFileManagerPrecondition(coordinator.vault, mutation, current); err != nil {
 		return TransactionResult{}, err
 	}
+	if currentFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output); fingerprintErr != nil {
+		return TransactionResult{}, fingerprintErr
+	} else if currentFingerprint != inputFingerprint {
+		return TransactionResult{}, fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during candidate build")
+	}
 
 	rollback, finalize, expectedAfter, err := applyFileManagerMutation(coordinator.vault, mutation, current)
 	if err != nil {
@@ -232,28 +247,43 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return rollbackMutation(err)
 	}
 
-	rollbackOutput, finalizeOutput, cleanupOutput, err := publishOutput(stageOutput, coordinator.output)
+	expectedAfterFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output)
+	if fingerprintErr != nil {
+		return rollbackMutation(fingerprintErr)
+	}
+	validateInput := func() error {
+		currentFingerprint, currentErr := workspace.Fingerprint(coordinator.vault, coordinator.output)
+		if currentErr != nil {
+			return currentErr
+		}
+		if currentFingerprint != expectedAfterFingerprint {
+			return fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during publish")
+		}
+		return nil
+	}
+	finalizeOutput, cleanupOutput, err := commitStagedOutput(coordinator.vault, stageOutput, coordinator.output, expectedAfterFingerprint, validateInput)
 	if err != nil {
 		return rollbackMutation(err)
 	}
-	if err := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
+	var postCommitWarning error
+	if verifyErr := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); verifyErr != nil {
+		postCommitWarning = verifyErr
 	}
-	if err := finalizeOutput(); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
+	if finalizeErr := finalizeOutput(); finalizeErr != nil {
+		postCommitWarning = errors.Join(postCommitWarning, finalizeErr)
 	}
-	if err := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); err != nil {
-		return TransactionResult{}, errors.Join(rollbackOutput(), rollback(), err)
+	if verifyErr := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); verifyErr != nil {
+		postCommitWarning = errors.Join(postCommitWarning, verifyErr)
 	}
-	if err := cleanupOutput(); err != nil {
-		// Publication has already committed the new source/output pair. A
-		// backup cleanup failure must not roll back through a partially
-		// removed backup and destroy the committed output.
-		built.OutputCleanupError = err
+	if cleanupErr := cleanupOutput(); cleanupErr != nil {
+		postCommitWarning = errors.Join(postCommitWarning, cleanupErr)
 	}
 	// Source cleanup is also post-commit: neither source nor output backups
 	// are safe to use for rollback once cleanup has started.
 	sourceCleanupErr := finalize()
+	if postCommitWarning != nil {
+		built.OutputCleanupError = postCommitWarning
+	}
 	coordinator.catalog = cloneCatalog(built.Catalog)
 	return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, Build: built, SourceCleanupError: sourceCleanupErr}, nil
 }
@@ -278,7 +308,7 @@ func (coordinator *Coordinator) validateEditableFileManagerTarget(relPath string
 }
 
 func buildCandidate(vault, output string) (*internalbuild.BuildResult, error) {
-	return internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	return internalbuild.BuildWithOptions(vault, output, internalbuild.Options{Strict: true})
 }
 
 func applyFileManagerMutation(vault string, mutation fileManagerMutation, current fileManagerState) (rollback func() error, finalize func() error, expected fileManagerState, err error) {

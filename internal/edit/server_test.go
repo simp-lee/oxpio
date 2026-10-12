@@ -23,7 +23,7 @@ import (
 func TestMutationResultReportsPostCommitOutputCleanupWarning(t *testing.T) {
 	server := &Server{}
 	recorder := httptest.NewRecorder()
-	server.writeMutationResult(recorder, TransactionResult{Build: &internalbuild.BuildResult{OutputCleanupError: errors.New("/private/vault/.oxpio-output-backup")}})
+	server.writeMutationResult(recorder, TransactionResult{Build: &internalbuild.BuildResult{OutputCleanupError: errors.New("/private/vault/.oxpio-publish-stage")}})
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusOK)
 	}
@@ -95,6 +95,9 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	}
 	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\neditor:\n  username: admin\n  passwordHash: "+hash+"\n")
 	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("<!doctype html><body>public</body></html>"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, ".oxpio-output"), []byte("managed by oxpio\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(filepath.Join(output, "article"), 0o755); err != nil {
