@@ -1079,7 +1079,7 @@ func discoverUnknownManagementPaths(vaultRoot string) ([]string, error) {
 	if err != nil {
 		return nil, fmt.Errorf("read OXPIO management directory: %w", err)
 	}
-	known := map[string]bool{"themes": true, "cache": true, "staging": true, "transactions": true, "lock": true}
+	known := map[string]bool{"themes": true, "cache": true, "staging": true, "transactions": true, "lock": true, "completed.json": true, "completed.lock": true}
 	unknown := make([]string, 0)
 	for _, entry := range entries {
 		name := entry.Name()

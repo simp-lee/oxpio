@@ -50,7 +50,7 @@ func Publish(vaultPath, outputPath string, options PublishOptions) (*PublishResu
 	}
 	result := &PublishResult{OutputPath: boundary.OutputPath, DryRun: options.DryRun}
 	if options.DryRun {
-		if err := workspace.Check(boundary.VaultPath); err != nil {
+		if err := workspace.CheckDryRun(boundary.VaultPath); err != nil {
 			return result, err
 		}
 		if err := internalfsutil.ValidateOutputParent(boundary); err != nil {

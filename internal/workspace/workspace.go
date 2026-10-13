@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	JournalVersion = 1
-	journalName    = "current.json"
+	JournalVersion    = 1
+	journalName       = "current.json"
+	completedName     = "completed.json"
+	completedLockName = "completed.lock"
 )
 
 var validJournalPhases = map[string]bool{
@@ -51,6 +53,11 @@ func (e *codedError) Is(target error) bool {
 // Journal is the minimal durable state needed to decide whether a transaction
 // can be completed after a process interruption. Paths are internal state and
 // must never be copied to public agent responses.
+type CompletedPath struct {
+	Path      string `json:"path"`
+	AfterHash string `json:"afterHash"`
+}
+
 type Journal struct {
 	Version             int      `json:"version"`
 	CommitKind          string   `json:"commitKind"`
@@ -146,32 +153,54 @@ func AcquireForRecovery(vault string) (*Lease, error) {
 	return &Lease{release: release}, nil
 }
 
-// Check is the read-only recovery preflight used by validate and dry-run.
-// Missing control state is clean. It never creates a directory, lock, journal,
-// or marker.
+// Check is the read-only recovery preflight used by validate. Missing control
+// state is clean. It never creates a directory, lock, journal, or marker.
 func Check(vault string) error {
+	resolved, err := internalfsutil.ResolveVaultPath(vault)
+	if err != nil {
+		return err
+	}
+	if err := CheckLock(resolved); err != nil {
+		return err
+	}
+	return checkJournals(resolved)
+}
+
+// CheckDryRun inspects recovery state without acquiring or creating a lock.
+// The caller must perform its own start/end fingerprint checks because this is
+// intentionally not a linearizable workspace snapshot.
+func CheckDryRun(vault string) error {
+	resolved, err := internalfsutil.ResolveVaultPath(vault)
+	if err != nil {
+		return err
+	}
+	return checkJournals(resolved)
+}
+
+// CheckLock probes the existing workspace lock without retaining it. It is
+// used by validate and recovery paths that require active-lock detection.
+func CheckLock(vault string) error {
 	resolved, err := internalfsutil.ResolveVaultPath(vault)
 	if err != nil {
 		return err
 	}
 	lockPath := filepath.Join(resolved, ".oxpio", "lock")
 	if _, err := os.Lstat(lockPath); errors.Is(err, os.ErrNotExist) {
-		// No lock object exists; continue with journal inspection.
+		return nil
 	} else if err != nil {
 		return fmt.Errorf("inspect workspace lock: %w", err)
-	} else {
-		release, lockErr := acquireFileLock(lockPath, false)
-		if lockErr != nil {
-			if errors.Is(lockErr, ErrBusy) {
-				return &codedError{Code: "BUSY", Err: lockErr}
-			}
-			return &codedError{Code: "RECOVERY_ERROR", Err: lockErr}
-		}
-		if releaseErr := release(); releaseErr != nil {
-			return &codedError{Code: "RECOVERY_ERROR", Err: releaseErr}
-		}
 	}
-	return checkJournals(resolved)
+	release, lockErr := acquireFileLock(lockPath, false)
+	if lockErr != nil {
+		if errors.Is(lockErr, ErrBusy) {
+			return &codedError{Code: "BUSY", Err: lockErr}
+		}
+		return &codedError{Code: "RECOVERY_ERROR", Err: lockErr}
+	}
+	if releaseErr := release(); releaseErr != nil {
+		return &codedError{Code: "RECOVERY_ERROR", Err: releaseErr}
+	}
+	return nil
 }
 
 func ensureControlDir(vault string) error {
@@ -295,6 +324,189 @@ func ClearJournal(vault string) error {
 	return SyncDirectory(filepath.Dir(path))
 }
 
+// RecordCompleted records source-only paths whose resulting filesystem event
+// may be consumed by an active watch without triggering a formal publish.
+func RecordCompleted(vault string, paths []CompletedPath) error {
+	resolved, err := internalfsutil.ResolveVaultPath(vault)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	if err := ensureControlDir(resolved); err != nil {
+		return err
+	}
+	return withCompletedLock(resolved, func() error {
+		marker := filepath.Join(resolved, ".oxpio", completedName)
+		var existing []CompletedPath
+		data, readErr := readCompletedMarker(marker)
+		if readErr == nil {
+			if err := json.Unmarshal(data, &existing); err != nil {
+				return fmt.Errorf("read completed transaction marker: %w", err)
+			}
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			return readErr
+		}
+		for _, item := range paths {
+			cleanPath := filepath.Clean(item.Path)
+			if !internalfsutil.PathWithinRoot(resolved, cleanPath) || strings.TrimSpace(item.AfterHash) == "" {
+				return errors.New("completed transaction path is outside the Vault or has no after hash")
+			}
+			duplicate := false
+			for _, prior := range existing {
+				if filepath.Clean(prior.Path) == cleanPath && prior.AfterHash == item.AfterHash {
+					duplicate = true
+					break
+				}
+			}
+			if !duplicate {
+				existing = append(existing, CompletedPath{Path: cleanPath, AfterHash: item.AfterHash})
+			}
+		}
+		encoded, err := json.Marshal(existing)
+		if err != nil {
+			return err
+		}
+		return AtomicWriteFile(marker, append(encoded, '\n'), 0o600)
+	})
+}
+
+// ConsumeCompleted reports a matching source-only watch event and retains the
+// record until the watch debounce window is cleared.
+func ConsumeCompleted(vault, eventPath string) (bool, error) {
+	resolved, err := internalfsutil.ResolveVaultPath(vault)
+	if err != nil {
+		return false, err
+	}
+	marker := filepath.Join(resolved, ".oxpio", completedName)
+	if _, err := os.Lstat(marker); errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	var suppressed bool
+	err = withCompletedLock(resolved, func() error {
+		data, err := readCompletedMarker(marker)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		var records []CompletedPath
+		if err := json.Unmarshal(data, &records); err != nil {
+			return fmt.Errorf("read completed transaction marker: %w", err)
+		}
+		cleanEvent := filepath.Clean(eventPath)
+		currentHash := pathHash(cleanEvent)
+		remaining := records[:0]
+		for _, record := range records {
+			if filepath.Clean(record.Path) != cleanEvent {
+				remaining = append(remaining, record)
+				continue
+			}
+			if currentHash == record.AfterHash {
+				// Keep matching records until the watch debounce window drains;
+				// atomic writes can produce more than one fsnotify event.
+				suppressed = true
+				remaining = append(remaining, record)
+			}
+			// A different hash is an external event, so discard only the stale
+			// record and allow this event through.
+		}
+		return writeCompletedRecords(marker, remaining)
+	})
+	return suppressed, err
+}
+
+// ClearCompleted removes stale source-only watch suppression records when a
+// watch process starts or its debounce window drains. It never touches the
+// product or transaction journal.
+func readCompletedMarker(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, errors.New("completed transaction marker is not regular")
+	}
+	return os.ReadFile(path)
+}
+
+func ClearCompleted(vault string) error {
+	resolved, err := internalfsutil.ResolveVaultPath(vault)
+	if err != nil {
+		return err
+	}
+	marker := filepath.Join(resolved, ".oxpio", completedName)
+	if _, err := os.Lstat(marker); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return withCompletedLock(resolved, func() error {
+		if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
+}
+
+func withCompletedLock(vault string, fn func() error) error {
+	lockPath := filepath.Join(vault, ".oxpio", completedLockName)
+	release, err := acquireFileLock(lockPath, true)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = release() }()
+	return fn()
+}
+
+func writeCompletedRecords(marker string, records []CompletedPath) error {
+	if len(records) == 0 {
+		if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	encoded, err := json.Marshal(records)
+	if err != nil {
+		return err
+	}
+	return AtomicWriteFile(marker, append(encoded, '\n'), 0o600)
+}
+
+func pathHash(path string) string {
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "absent"
+	}
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return "unavailable"
+	}
+	if info.IsDir() {
+		entries, err := os.ReadDir(path)
+		if err != nil || len(entries) != 0 {
+			return "unavailable"
+		}
+		return hashBytes(nil)
+	}
+	if !info.Mode().IsRegular() {
+		return "unavailable"
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "unavailable"
+	}
+	return hashBytes(data)
+}
+
+func hashBytes(data []byte) string {
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:])
+}
+
 // LoadJournal reads the sole active journal while refusing symlinked state.
 func LoadJournal(vault string) (Journal, error) {
 	path := journalPath(vault)
@@ -389,11 +601,18 @@ func FingerprintWithOverlay(vault, output string, overlay map[string][]byte, del
 	}
 	outputResolved := boundary.OutputPath
 	selectedTheme := ""
-	if config, configErr := internalconfig.LoadForThemePreview(root, outputResolved); configErr == nil {
-		selectedTheme = config.Theme
-		if selectedTheme == "" {
-			selectedTheme = internalconfig.ThemeBaseID
+	if configBytes, ok := overlay[internalconfig.Filename]; ok {
+		if config, configErr := internalconfig.ValidateConfigBytes(configBytes); configErr == nil {
+			selectedTheme = config.Theme
 		}
+	}
+	if selectedTheme == "" {
+		if config, configErr := internalconfig.LoadForThemePreview(root, outputResolved); configErr == nil {
+			selectedTheme = config.Theme
+		}
+	}
+	if selectedTheme == "" {
+		selectedTheme = internalconfig.ThemeBaseID
 	}
 	type item struct {
 		Path string `json:"path"`

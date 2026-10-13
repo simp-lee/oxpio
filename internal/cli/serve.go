@@ -17,6 +17,7 @@ import (
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
+	"github.com/simp-lee/oxpio/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -255,6 +256,9 @@ func startServeWatchLoop(ctx context.Context, loop serveWatchLoop) error {
 		loop.debounce = defaultWatchDebounce
 	}
 	loop.fixedWatchInputs = fixedServeWatchInputs(loop.vaultPath)
+	if err := workspace.ClearCompleted(loop.vaultPath); err != nil {
+		return closeServeWatchLoopWatcher(err, loop.watcher)
+	}
 	loop.watchedDirs = make(map[string]struct{})
 	loop.vaultWatchDirs = make(map[string]struct{})
 	loop.fixedWatchDirs = make(map[string]struct{})
@@ -285,12 +289,18 @@ func (loop *serveWatchLoop) run(ctx context.Context) {
 
 	var timer *time.Timer
 	var timerC <-chan time.Time
+	var completedTimer *time.Timer
+	var completedTimerC <-chan time.Time
+	pendingWatchPaths := make(map[string]struct{})
 
 	for {
 		select {
 		case <-ctx.Done():
 			if timer != nil {
 				stopWatchTimer(timer)
+			}
+			if completedTimer != nil {
+				stopWatchTimer(completedTimer)
 			}
 			return
 		case err, ok := <-loop.watcher.Errors():
@@ -310,11 +320,20 @@ func (loop *serveWatchLoop) run(ctx context.Context) {
 			if effectiveOp == 0 {
 				continue
 			}
+			pendingWatchPaths[cleanPath] = struct{}{}
+			suppressed, suppressionErr := workspace.ConsumeCompleted(loop.vaultPath, cleanPath)
+			if suppressionErr != nil {
+				loop.reportError(suppressionErr)
+			}
+			if suppressed {
+				delete(pendingWatchPaths, cleanPath)
+			}
 
 			wasWatchedDir := loop.isWatchedDir(cleanPath)
 			outputTransaction := loop.pathIsOutputTransaction(cleanPath)
 			if outputTransaction {
 				loop.forgetOutputTransaction(cleanPath, effectiveOp)
+				delete(pendingWatchPaths, cleanPath)
 			}
 			if hasDirectoryLifecycleOp(effectiveOp) {
 				loop.removeWatchedDirSubtree(cleanPath)
@@ -326,10 +345,20 @@ func (loop *serveWatchLoop) run(ctx context.Context) {
 			if err != nil {
 				loop.reportError(err)
 			}
-			if outputTransaction {
+			if suppressed {
+				if completedTimer == nil {
+					completedTimer = time.NewTimer(loop.debounce)
+					completedTimerC = completedTimer.C
+				} else {
+					stopWatchTimer(completedTimer)
+					completedTimer.Reset(loop.debounce)
+				}
+			}
+			if outputTransaction || suppressed {
 				continue
 			}
 			if !recoveredFixedInput && !loop.shouldTrigger(cleanPath, effectiveOp, wasWatchedDir) {
+				delete(pendingWatchPaths, cleanPath)
 				continue
 			}
 
@@ -342,8 +371,34 @@ func (loop *serveWatchLoop) run(ctx context.Context) {
 			stopWatchTimer(timer)
 			timer.Reset(loop.debounce)
 			timerC = timer.C
+		case <-completedTimerC:
+			completedTimerC = nil
+			if err := workspace.ClearCompleted(loop.vaultPath); err != nil {
+				loop.reportError(err)
+			}
 		case <-timerC:
 			timerC = nil
+			for cleanPath := range pendingWatchPaths {
+				suppressed, err := workspace.ConsumeCompleted(loop.vaultPath, cleanPath)
+				if err != nil {
+					loop.reportError(err)
+					continue
+				}
+				if suppressed {
+					delete(pendingWatchPaths, cleanPath)
+					if completedTimer == nil {
+						completedTimer = time.NewTimer(loop.debounce)
+						completedTimerC = completedTimer.C
+					} else {
+						stopWatchTimer(completedTimer)
+						completedTimer.Reset(loop.debounce)
+					}
+				}
+			}
+			if len(pendingWatchPaths) == 0 {
+				continue
+			}
+			pendingWatchPaths = make(map[string]struct{})
 			rebuildErr := loop.rebuild()
 			if err := loop.syncFixedWatchInputs(loop.fixedWatchInputs); err != nil {
 				loop.reportError(err)
@@ -761,7 +816,7 @@ func isWatchableDirectoryEvent(path string, op fsnotify.Op, wasWatchedDir bool) 
 func isWatchableVaultPath(relPath string) bool {
 	parts := splitWatchPath(relPath)
 	for _, part := range parts {
-		if part == "node_modules" || part == ".obsidian" || part == ".oxpio" {
+		if part == "node_modules" || part == ".obsidian" || part == ".oxpio" || strings.HasPrefix(part, ".oxpio-") {
 			return false
 		}
 	}

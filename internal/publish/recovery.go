@@ -27,6 +27,19 @@ type RecoveryResult struct {
 func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 	journal, err := workspace.LoadJournal(vault)
 	if errors.Is(err, os.ErrNotExist) {
+		if dryRun {
+			if err := workspace.CheckDryRun(vault); err != nil {
+				return RecoveryResult{}, err
+			}
+		} else {
+			lease, lockErr := workspace.AcquireForRecovery(vault)
+			if lockErr != nil {
+				return RecoveryResult{}, lockErr
+			}
+			if releaseErr := lease.Release(); releaseErr != nil {
+				return RecoveryResult{}, releaseErr
+			}
+		}
 		return RecoveryResult{Action: "none"}, nil
 	}
 	if err != nil {
@@ -111,6 +124,22 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		}
 		if journal.OutputIdentity != "" && outputIdentity(journal.TargetPath) != journal.OutputIdentity {
 			return result, fmt.Errorf("%w: prepared output identity changed before recovery", workspace.ErrRecovery)
+		}
+		if journal.CommitKind == "source-only" {
+			if sourceOnlyAfter(journal) {
+				journal.Phase = "source-committed"
+				if err := workspace.WriteJournal(vault, journal); err != nil {
+					return result, fmt.Errorf("%w: finalize source-only recovery: %v", workspace.ErrRecovery, err)
+				}
+				if err := workspace.ClearJournal(vault); err != nil {
+					return result, err
+				}
+				result.Action, result.Changed = "confirm-source-only", true
+				break
+			}
+			if !sourceOnlyBefore(journal) {
+				return result, fmt.Errorf("%w: prepared source-only mutation has an unknown source state", workspace.ErrRecovery)
+			}
 		}
 		if journal.CommitKind == "source+output" && journal.SourcePath != "" {
 			if err := validatePreparedSource(journal); err != nil {
@@ -210,11 +239,46 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 	return result, nil
 }
 
+func sourceOnlyAfter(journal workspace.Journal) bool {
+	sourcePath := journal.SourcePath
+	if sourcePath == "" {
+		sourcePath = journal.TargetPath
+	}
+	after := journal.SourceAfterHash
+	if after == "" {
+		after = journal.AfterHash
+	}
+	if sourcePath == "" || after == "" || fileHash(sourcePath) != after {
+		return false
+	}
+	if journal.SourceBeforePath != "" && filepath.Clean(journal.SourceBeforePath) != filepath.Clean(sourcePath) {
+		return fileHash(journal.SourceBeforePath) == "absent"
+	}
+	return true
+}
+
+func sourceOnlyBefore(journal workspace.Journal) bool {
+	beforePath := journal.SourceBeforePath
+	if beforePath == "" {
+		beforePath = journal.SourcePath
+	}
+	if beforePath == "" || journal.SourceBeforeHash == "" || fileHash(beforePath) != journal.SourceBeforeHash {
+		return false
+	}
+	if journal.SourcePath != "" && filepath.Clean(journal.SourcePath) != filepath.Clean(beforePath) {
+		return fileHash(journal.SourcePath) == "absent"
+	}
+	return true
+}
+
 func recoveryAction(journal workspace.Journal) string {
 	switch journal.Phase {
 	case "prepared":
 		if journal.OutputAfterHash != "" && directoryHash(journal.TargetPath) == journal.OutputAfterHash {
 			return "cleanup-committed"
+		}
+		if journal.CommitKind == "source-only" && sourceOnlyAfter(journal) {
+			return "confirm-source-only"
 		}
 		return "discard-prepared"
 	case "source-committed":
@@ -558,6 +622,12 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 		}
 		if journal.OutputIdentity != "" && outputIdentity(journal.TargetPath) != journal.OutputIdentity {
 			return fmt.Errorf("%w: prepared output identity changed before recovery", workspace.ErrRecovery)
+		}
+		if journal.CommitKind == "source-only" {
+			if !sourceOnlyAfter(journal) && !sourceOnlyBefore(journal) {
+				return fmt.Errorf("%w: prepared source-only mutation has an unknown source state", workspace.ErrRecovery)
+			}
+			return nil
 		}
 		if journal.CommitKind == "source+output" && journal.SourcePath != "" {
 			return validatePreparedSource(journal)

@@ -24,6 +24,7 @@ const (
 	KindUnsupportedSyntax Kind = "unsupported_syntax"
 	KindUnresolvedAsset   Kind = "unresolved_asset"
 	KindOutputCleanup     Kind = "output_cleanup"
+	KindReferenceConflict Kind = "reference_conflict"
 	KindSchema            Kind = "schema"
 	KindSection           Kind = "section"
 	KindNavigation        Kind = "navigation"

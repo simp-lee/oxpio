@@ -484,7 +484,28 @@ func commandForSpec(spec internalapplication.CommandSpec, deps commandDependenci
 		return newVersionCommand()
 	case "read":
 		return newReadCommand()
+	case "write":
+		return newWriteCommand()
+	case "edit":
+		return newEditCommand()
+	case "move":
+		return newMoveCommand()
+	case "delete":
+		return newDeleteCommand()
+	case "mkdir":
+		return newMkdirCommand()
+	case "rename-dir":
+		return newRenameDirCommand()
+	case "recover":
+		return newRecoverCommand()
+	case "config read":
+		return newConfigReadCommand()
+	case "config write":
+		return newConfigWriteCommand()
+	case "config edit":
+		return newConfigEditCommand()
 	case "find":
+
 		return newFindCommand()
 	case "ls":
 		return newLSCommand()
@@ -846,7 +867,7 @@ func classifyCLIError(err error) int {
 	if errors.Is(err, os.ErrPermission) || strings.Contains(message, "permission") || strings.Contains(message, "not available in the selected read scope") {
 		return 4
 	}
-	if strings.Contains(message, "conflict") || strings.Contains(message, "hash mismatch") {
+	if strings.Contains(message, "conflict") || strings.Contains(message, "hash mismatch") || strings.Contains(message, "concurrent_input") {
 		return 3
 	}
 	if errors.Is(err, os.ErrNotExist) || errors.Is(err, os.ErrInvalid) || errors.Is(err, os.ErrClosed) || errors.Is(err, internalapplication.ErrSourceNotFound) {
@@ -860,7 +881,7 @@ func classifyCLIError(err error) int {
 
 func isCLIParameterError(err error) bool {
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "mutually exclusive", "output path", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between"} {
+	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "mutually exclusive", "output path", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between", "invalid edits json", "publish override conflicts", "passwordhash", "duplicate json key", "unknown field", "oldtext", "edit patches", "input file must"} {
 		if strings.Contains(message, marker) {
 			return true
 		}
@@ -870,12 +891,22 @@ func isCLIParameterError(err error) bool {
 
 func successWarnings(data json.RawMessage) []internalagent.Diagnostic {
 	var value struct {
-		PostCommitWarning bool `json:"postCommitWarning"`
+		PostCommitWarning bool                       `json:"postCommitWarning"`
+		Diagnostics       []internalagent.Diagnostic `json:"diagnostics"`
 	}
-	if err := json.Unmarshal(data, &value); err != nil || !value.PostCommitWarning {
+	if err := json.Unmarshal(data, &value); err != nil {
 		return nil
 	}
-	return []internalagent.Diagnostic{{Code: "POST_COMMIT_WARNING", Severity: "warning", Category: "transaction_cleanup", Message: "publication committed, but post-commit cleanup reported a warning"}}
+	warnings := make([]internalagent.Diagnostic, 0, len(value.Diagnostics)+1)
+	for _, diagnostic := range value.Diagnostics {
+		if diagnostic.Severity == "warning" {
+			warnings = append(warnings, diagnostic)
+		}
+	}
+	if value.PostCommitWarning {
+		warnings = append(warnings, internalagent.Diagnostic{Code: "POST_COMMIT_WARNING", Severity: "warning", Category: "transaction_cleanup", Message: "publication committed, but post-commit cleanup reported a warning"})
+	}
+	return warnings
 }
 
 func splitChangesData(data json.RawMessage) (json.RawMessage, []internalagent.Change) {
@@ -908,6 +939,12 @@ func structuredErrorDiagnostics(err error) []internalagent.Diagnostic {
 	}
 	if errors.Is(err, workspace.ErrBusy) {
 		return []internalagent.Diagnostic{{Code: "BUSY", Severity: "error", Category: "workspace", Message: "workspace or output is busy"}}
+	}
+	var analyzed interface {
+		AnalysisDiagnostics() []internaldiag.Diagnostic
+	}
+	if errors.As(err, &analyzed) {
+		return diagnosticsFromBuild(analyzed.AnalysisDiagnostics())
 	}
 	var structured interface {
 		Diagnostics() []internalagent.Diagnostic

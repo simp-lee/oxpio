@@ -22,6 +22,14 @@ const (
 	ManagedMarkerContents = "managed by oxpio\n"
 )
 
+// DirectoryHash returns the deterministic identity digest used by the
+// transaction journal. It is read-only and returns "absent" or "unavailable"
+// for those exact boundary states.
+func DirectoryHash(path string) string { return directoryHash(path) }
+
+// OutputIdentity returns the stable filesystem identity used by recovery.
+func OutputIdentity(path string) string { return outputIdentity(path) }
+
 type Options struct {
 	Durable              bool
 	InputFingerprint     string
