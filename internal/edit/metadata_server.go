@@ -36,6 +36,9 @@ func (s *Server) serveEditorAsset(w http.ResponseWriter, r *http.Request, name, 
 		http.Error(w, "editor asset unavailable", http.StatusInternalServerError)
 		return
 	}
+	if name == "web/editor.bundle.js" {
+		data = injectEditorBasePath(data, s.static.BasePath())
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(data)

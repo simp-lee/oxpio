@@ -259,7 +259,9 @@ func (snapshot Snapshot) directoryVisible(relPath string) bool {
 
 // NormalizeDirectoryPath validates a Vault-relative POSIX directory path.
 func NormalizeDirectoryPath(value string) (string, error) {
-	value = strings.TrimSpace(value)
+	if value != strings.TrimSpace(value) {
+		return "", errors.New("path must be a normalized Vault-relative POSIX path")
+	}
 	if value == "" {
 		return ".", nil
 	}

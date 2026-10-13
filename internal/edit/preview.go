@@ -32,7 +32,7 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	controlPath := strings.TrimPrefix(r.URL.Path, controlPrefix)
+	controlPath := strings.TrimPrefix(r.URL.Path, s.controlPrefix())
 	if controlPath == "preview" && r.Method == http.MethodPost {
 		s.createPreview(w, r)
 		return
@@ -72,7 +72,7 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 	body := append([]byte(nil), recorder.Body.Bytes()...)
 	contentType := strings.ToLower(recorder.Header().Get("Content-Type"))
 	if strings.Contains(contentType, "text/html") && recorder.Code >= 200 && recorder.Code < 300 {
-		body = rewritePreviewHTML(body, "/_oxpio/preview/"+token)
+		body = rewritePreviewHTML(body, s.controlPrefix()+"preview/"+token)
 	}
 	for name, values := range recorder.Header() {
 		w.Header()[name] = append([]string(nil), values...)
@@ -222,14 +222,14 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 	if built.Catalog != nil {
 		basePath = strings.TrimSuffix(built.Catalog.BasePath, "/")
 	}
-	fullURL := "/_oxpio/preview/" + token + basePath + previewEntry.Route
+	fullURL := s.controlPrefix() + "preview/" + token + basePath + previewEntry.Route
 	fullPage, err := renderPreviewPage(static, previewSitePath(basePath, previewEntry.Route))
 	if err != nil {
 		cleanupErr := s.discardUnpublishedPreview(static, root)
 		http.Error(w, previewFailureMessage("could not render preview page", cleanupErr), http.StatusInternalServerError)
 		return
 	}
-	contentHTML := rewritePreviewHTML(fullPage, "/_oxpio/preview/"+token)
+	contentHTML := rewritePreviewHTML(fullPage, s.controlPrefix()+"preview/"+token)
 	s.previewMu.Lock()
 	if s.closed {
 		s.previewMu.Unlock()
@@ -249,7 +249,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 	response := map[string]any{
 		"url":          fullURL,
 		"fullURL":      fullURL,
-		"contentURL":   "/_oxpio/preview/" + token + "/content",
+		"contentURL":   s.controlPrefix() + "preview/" + token + "/content",
 		"warningCount": built.WarningCount,
 		"diagnostics":  s.editorDiagnostics(built.Diagnostics),
 	}

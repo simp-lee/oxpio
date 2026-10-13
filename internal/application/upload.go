@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internaldiag "github.com/simp-lee/oxpio/internal/diag"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
@@ -299,6 +300,10 @@ func recheckUploadBeforeCommit(boundary internalfsutil.VaultOutputBoundary, targ
 }
 
 func validateUploadAttachment(name string, data []byte) error {
+	switch strings.ToLower(path.Ext(name)) {
+	case ".png", ".jpg", ".jpeg", ".webp", ".svg":
+		return internalasset.ValidateUploadImage(name, data)
+	}
 	ext := strings.ToLower(path.Ext(name))
 	switch ext {
 	case ".md", ".markdown", ".html", ".htm", ".css", ".js", ".mjs", ".cjs", ".ts", ".tsx", ".jsx", ".sh", ".bash", ".zsh", ".fish", ".bat", ".cmd", ".ps1", ".exe", ".com", ".dll", ".so", ".dylib":

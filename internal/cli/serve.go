@@ -984,33 +984,43 @@ func fixedServeWatchInputs(vaultPath string) []string {
 
 func fixedServeWatchInputsForOutput(vaultPath, outputPath string) []string {
 	inputs := fixedServeWatchInputs(vaultPath)
-	cfg, err := internalconfig.LoadForBuildWithOutput(vaultPath, outputPath)
-	if err != nil {
-		cfg, err = internalconfig.LoadForThemePreview(vaultPath, outputPath)
+	themeID := configuredWatchThemeID(vaultPath)
+	if themeID == "" {
+		cfg, err := internalconfig.LoadForBuildWithOutput(vaultPath, outputPath)
+		if err != nil {
+			cfg, err = internalconfig.LoadForThemePreview(vaultPath, outputPath)
+		}
+		if err == nil {
+			themeID = cfg.Theme
+		}
 	}
-	if err == nil && cfg.Theme != internaltheme.BaseID {
-		inputs = append(inputs, filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath), cfg.Theme))
+	if themeID != "" && themeID != internaltheme.BaseID {
+		inputs = append(inputs, filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath), themeID))
 	}
 	return inputs
 }
 
-func themeDiscoveryOnlyForWatch(vaultPath, outputPath string) bool {
-	// A Vault with an explicit theme selection has an authoritative active
-	// theme. The discovery root is then control-only so malformed or
-	// unselected local themes never enter the selected build or trigger a
-	// reload. Keep the historical broad discovery behavior when the selection
-	// is omitted, because older Vaults do not declare a theme field.
+func configuredWatchThemeID(vaultPath string) string {
 	data, err := os.ReadFile(filepath.Join(vaultPath, defaultConfigFilename))
 	if err != nil {
-		return false
+		return ""
 	}
 	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "theme:") {
-			return true
+			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "theme:")), "\"'")
 		}
 	}
-	return false
+	return ""
+}
+
+func themeDiscoveryOnlyForWatch(vaultPath, outputPath string) bool {
+	// The normalized configuration always has one authoritative theme: an
+	// omitted selection resolves to embedded base. The local theme root is
+	// therefore control-only in every configured Vault; it must not make
+	// unselected themes rebuild the site.
+	_, err := os.Stat(filepath.Join(vaultPath, defaultConfigFilename))
+	return err == nil
 }
 
 func (loop *serveWatchLoop) isThemeDiscoveryRoot(pathValue string) bool {
@@ -1033,6 +1043,9 @@ func plannedWatchFiles(vaultPath, outputPath string) map[string]struct{} {
 		files[filepath.Clean(filepath.Join(vaultPath, filepath.FromSlash(value)))] = struct{}{}
 	}
 	add(defaultConfigFilename)
+	// custom.css is an optional input, so watch its absent path as well as
+	// the planner-resolved regular file. This lets creation trigger a retry.
+	add(internalconfig.CustomCSSFilename)
 	// Failed analyses can still carry a partial plan whose asset references
 	// must remain watchable so repairing those assets can trigger a retry.
 	result, _ := internalanalyze.AnalyzeWithOutput(vaultPath, outputPath)
@@ -1065,6 +1078,9 @@ func plannedWatchFiles(vaultPath, outputPath string) map[string]struct{} {
 		}
 	}
 	for source := range plan.CSSInputFiles {
+		add(source)
+	}
+	for source := range plan.VaultCSSAssets {
 		add(source)
 	}
 	return files

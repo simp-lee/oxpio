@@ -72,12 +72,12 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 		t.Fatal(err)
 	}
 	login := httptest.NewRecorder()
-	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/_oxpio/login", nil))
+	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/docs/_oxpio/login", nil))
 	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `href="/docs/"`) {
 		t.Fatalf("login = %d %s", login.Code, login.Body.String())
 	}
 	server.sessions["test-session"] = session{username: "admin", expires: time.Now().Add(time.Hour)}
-	request := httptest.NewRequest(http.MethodGet, "/_oxpio/editor", nil)
+	request := httptest.NewRequest(http.MethodGet, "/docs/_oxpio/editor", nil)
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 	editor := httptest.NewRecorder()
 	server.ServeHTTP(editor, request)

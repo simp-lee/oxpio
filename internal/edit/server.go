@@ -13,12 +13,14 @@ import (
 	"fmt"
 	stdhtml "html"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -68,6 +70,36 @@ type session struct {
 	username string
 	csrf     string
 	expires  time.Time
+}
+
+// Preflight validates the configured account and checks the requested
+// listener port before a caller performs any publication.
+func Preflight(vaultPath, outputPath string, port int, listenHost string) error {
+	if listenHost != "127.0.0.1" && listenHost != "0.0.0.0" {
+		return fmt.Errorf("editor listen host must be 127.0.0.1 or 0.0.0.0")
+	}
+	resolvedVault, err := internalfsutil.ResolveVaultPath(vaultPath)
+	if err != nil {
+		return err
+	}
+	cfg, err := internalconfig.LoadForBuildWithOutput(resolvedVault, outputPath)
+	if err != nil {
+		return err
+	}
+	if cfg.Editor == nil {
+		return fmt.Errorf("editor.username and editor.passwordHash must be configured before editor can listen")
+	}
+	if port == 0 {
+		port = internalserver.DefaultPort
+	}
+	if port < 1 || port > 65535 {
+		return fmt.Errorf("editor port must be between 1 and 65535")
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort(listenHost, strconv.Itoa(port)))
+	if err != nil {
+		return fmt.Errorf("editor listener preflight: %w", err)
+	}
+	return listener.Close()
 }
 
 // New validates the configured account and generated output before returning a
@@ -199,11 +231,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "edit server is unavailable", http.StatusInternalServerError)
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, controlPrefix) {
+	controlPath := s.controlPrefix()
+	if strings.HasPrefix(r.URL.Path, controlPath) {
 		s.serveControl(w, r)
 		return
 	}
-	if r.URL.Path == strings.TrimSuffix(controlPrefix, "/") {
+	if r.URL.Path == strings.TrimSuffix(controlPath, "/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -217,7 +250,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, controlPrefix)
+	path := strings.TrimPrefix(r.URL.Path, s.controlPrefix())
 	switch path {
 	case "login":
 		s.serveLogin(w, r)
@@ -611,7 +644,7 @@ func (s *Server) serveDecoratedStatic(w http.ResponseWriter, r *http.Request, en
 	body := append([]byte(nil), recorder.Body.Bytes()...)
 	contentType := strings.ToLower(recorder.Header().Get("Content-Type"))
 	if r.Method != http.MethodHead && status >= 200 && status < 300 && strings.Contains(contentType, "text/html") {
-		link := `<a class="edit-page-link" href="/_oxpio/editor?path=` + url.QueryEscape(entry.RelPath) + `">Edit</a>`
+		link := `<a class="edit-page-link" href="` + s.controlPrefix() + `editor?path=` + url.QueryEscape(entry.RelPath) + `">Edit</a>`
 		lower := strings.ToLower(string(body))
 		if index := strings.LastIndex(lower, "</body>"); index >= 0 {
 			body = append(append(append([]byte(nil), body[:index]...), []byte(link)...), body[index:]...)
@@ -631,11 +664,28 @@ func (s *Server) serveDecoratedStatic(w http.ResponseWriter, r *http.Request, en
 	}
 }
 
+func (s *Server) controlPrefix() string {
+	basePath := "/"
+	if s != nil && s.static != nil {
+		basePath = s.static.BasePath()
+	}
+	basePath = strings.TrimSuffix(strings.TrimSpace(basePath), "/")
+	if basePath == "" {
+		return controlPrefix
+	}
+	return basePath + controlPrefix
+}
+
 func injectEditorBasePath(data []byte, basePath string) []byte {
 	if strings.TrimSpace(basePath) == "" {
 		basePath = "/"
 	}
-	return bytes.ReplaceAll(data, []byte("__OXPIO_BASE_PATH__"), []byte(stdhtml.EscapeString(basePath)))
+	control := strings.TrimSuffix(basePath, "/") + controlPrefix
+	if strings.HasPrefix(control, "//") {
+		control = control[1:]
+	}
+	data = bytes.ReplaceAll(data, []byte("__OXPIO_BASE_PATH__"), []byte(stdhtml.EscapeString(basePath)))
+	return bytes.ReplaceAll(data, []byte(`"/_oxpio/`), []byte(`"`+control))
 }
 
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {

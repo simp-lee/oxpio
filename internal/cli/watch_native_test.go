@@ -19,7 +19,7 @@ func TestFSNotifyWatchLoopRebuildsFixedInputsAndExcludesOutput(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	writeNativeWatchFile(t, filepath.Join(vault, defaultConfigFilename), "title: Garden\nbaseURL: https://example.com/\n")
+	writeNativeWatchFile(t, filepath.Join(vault, defaultConfigFilename), "title: Garden\nbaseURL: https://example.com/\ntheme: selected\n")
 	writeNativeWatchFile(t, filepath.Join(vault, "custom.css"), "body{}")
 	writeNativeWatchFile(t, filepath.Join(themeDir, "theme.css"), ":root{}")
 	writeNativeWatchFile(t, filepath.Join(vault, ".obsidian", "app.json"), "{}")
@@ -94,7 +94,7 @@ func TestFSNotifyWatchLoopRebuildsFixedInputsAndExcludesOutput(t *testing.T) {
 	})
 	for filePath, content := range map[string]string{
 		filepath.Join(vault, "image.png"):           "asset",
-		filepath.Join(vault, defaultConfigFilename): "title: Changed\nbaseURL: https://example.com/\n",
+		filepath.Join(vault, defaultConfigFilename): "title: Changed\nbaseURL: https://example.com/\ntheme: selected\n",
 		filepath.Join(vault, "custom.css"):          "body{color:red}",
 		filepath.Join(themeDir, "theme.css"):        ":root{color:red}",
 	} {

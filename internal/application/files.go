@@ -194,7 +194,7 @@ func normalizeMutationDirectory(value string) (string, error) {
 		return "", errors.New("directory path must not be the Vault root")
 	}
 	for _, segment := range strings.Split(cleaned, "/") {
-		if segment == "" || segment == "." || segment == ".." || strings.HasPrefix(segment, ".") || strings.EqualFold(segment, "public") || strings.EqualFold(segment, "oxpio.yaml") {
+		if segment == "" || segment == "." || segment == ".." || strings.HasPrefix(segment, ".") || strings.EqualFold(segment, "node_modules") || strings.EqualFold(segment, "public") || strings.EqualFold(segment, "oxpio.yaml") {
 			return "", errors.New("directory path contains a reserved segment")
 		}
 	}

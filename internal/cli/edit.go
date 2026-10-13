@@ -65,6 +65,9 @@ func newEditorCommand(deps commandDependencies) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if err := internaledit.Preflight(boundary.VaultPath, boundary.OutputPath, port, listen); err != nil {
+				return err
+			}
 			published, err := publishWithDependencies(deps, boundary.VaultPath, boundary.OutputPath, internalapplication.PublishOptions{DiagnosticsWriter: cmd.ErrOrStderr()})
 			if err != nil {
 				return fmt.Errorf("publish site: %w", err)

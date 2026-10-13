@@ -1,11 +1,7 @@
 package edit
 
 import (
-	"bytes"
 	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"io/fs"
 	"net/http"
@@ -18,13 +14,11 @@ import (
 
 	internalasset "github.com/simp-lee/oxpio/internal/asset"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
-	_ "golang.org/x/image/webp"
 )
 
 const (
 	maxUploadBytes    = 10 << 20
 	maxUploadMarkdown = 1 << 20
-	maxUploadSVG      = 1 << 20
 )
 
 type mediaItem struct {
@@ -89,7 +83,7 @@ func (s *Server) serveMediaList(w http.ResponseWriter) {
 		if infoErr != nil {
 			return infoErr
 		}
-		items = append(items, mediaItem{Path: rel, Name: filepath.Base(rel), Size: info.Size(), URL: "/_oxpio/media?path=" + url.QueryEscape(rel)})
+		items = append(items, mediaItem{Path: rel, Name: filepath.Base(rel), Size: info.Size(), URL: s.controlPrefix() + "media?path=" + url.QueryEscape(rel)})
 		return nil
 	})
 	if err != nil {
@@ -212,33 +206,7 @@ func validateMediaPath(relPath string) error {
 }
 
 func validateUploadImage(name string, data []byte) error {
-	ext := strings.ToLower(filepath.Ext(name))
-	switch ext {
-	case ".svg":
-		if len(data) > maxUploadSVG {
-			return fmt.Errorf("SVG upload exceeds 1 MiB")
-		}
-		if err := internalasset.ValidateLocalSVG(data); err != nil {
-			return fmt.Errorf("invalid SVG image: %w", err)
-		}
-	case ".png", ".jpg", ".jpeg", ".webp":
-		if len(data) > maxUploadBytes {
-			return fmt.Errorf("image upload exceeds 10 MiB")
-		}
-		_, format, err := image.DecodeConfig(bytes.NewReader(data))
-		if err != nil {
-			return fmt.Errorf("invalid image data: %w", err)
-		}
-		if (ext == ".png" && format != "png") || ((ext == ".jpg" || ext == ".jpeg") && format != "jpeg") || (ext == ".webp" && format != "webp") {
-			return fmt.Errorf("image content does not match extension")
-		}
-		if _, _, err := image.Decode(bytes.NewReader(data)); err != nil {
-			return fmt.Errorf("invalid image data: %w", err)
-		}
-	default:
-		return fmt.Errorf("only PNG, JPEG, WebP, or SVG uploads are supported")
-	}
-	return nil
+	return internalasset.ValidateUploadImage(name, data)
 }
 
 func normalizeMediaUploadName(name string) string {
