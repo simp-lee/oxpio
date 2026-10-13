@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -30,14 +31,29 @@ func newEditorCommand(deps commandDependencies) *cobra.Command {
 				if cmd.Flags().Changed("output") || cmd.Flags().Changed("port") || cmd.Flags().Changed("listen") {
 					return fmt.Errorf("editor setup/reset accepts only --vault")
 				}
-				if resetPassword {
-					return fmt.Errorf("editor password reset is not available")
-				}
 				resolvedVault, err := resolveVaultPath(vaultPath)
 				if err != nil {
 					return err
 				}
-				return internaledit.Setup(resolvedVault, cmd.InOrStdin(), cmd.OutOrStdout())
+				interactiveOutput := cmd.OutOrStdout()
+				if formatOf(cmd) == "json" {
+					interactiveOutput = cmd.ErrOrStderr()
+				}
+				if resetPassword {
+					if err := internaledit.ResetPassword(resolvedVault, cmd.InOrStdin(), interactiveOutput); err != nil {
+						return err
+					}
+				} else if err := internaledit.Setup(resolvedVault, cmd.InOrStdin(), interactiveOutput); err != nil {
+					return err
+				}
+				if formatOf(cmd) == "json" {
+					data, err := json.Marshal(map[string]any{"configured": true})
+					if err != nil {
+						return err
+					}
+					return writeCommandData(cmd, data, nil)
+				}
+				return nil
 			}
 			if listen != "" && listen != "127.0.0.1" && listen != "0.0.0.0" {
 				return fmt.Errorf("editor listen address must be 127.0.0.1 or 0.0.0.0")

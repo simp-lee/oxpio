@@ -173,8 +173,11 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 	}
 	stageOutput := filepath.Join(root, "public")
 	built, buildErr := internalbuild.BuildWithOptions(s.vault, stageOutput, internalbuild.Options{
-		SourceOverlay:    overlay,
-		SourceOutputPath: s.output,
+		Strict:            true,
+		Ephemeral:         true,
+		SourceOverlay:     overlay,
+		SourceOutputPath:  s.output,
+		PreviewSourcePath: entry.RelPath,
 	})
 	if buildErr != nil {
 		cleanupErr := s.discardUnpublishedPreview(nil, root)
@@ -254,25 +257,12 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) previewOverlay(relPath string, source []byte) (map[string][]byte, error) {
-	result := map[string][]byte{}
-	forcePublish := func(pathValue string, content []byte) error {
-		updated, err := forceEditorPublish(content)
-		if err != nil {
-			return fmt.Errorf("preview %q: %w", pathValue, err)
-		}
-		result[pathValue] = updated
-		return nil
-	}
-	if err := forcePublish(relPath, source); err != nil {
-		return nil, err
-	}
+	result := map[string][]byte{relPath: append([]byte(nil), source...)}
 	directory := path.Dir(strings.ReplaceAll(relPath, "\\", "/"))
 	for {
 		sectionPath := path.Join(directory, "_index.md")
 		if data, exists, err := readSource(s.vault, sectionPath); err == nil && exists {
-			if err := forcePublish(sectionPath, data); err != nil {
-				return nil, err
-			}
+			result[sectionPath] = append([]byte(nil), data...)
 		}
 		if directory == "." {
 			break
@@ -280,21 +270,6 @@ func (s *Server) previewOverlay(relPath string, source []byte) (map[string][]byt
 		directory = path.Dir(directory)
 	}
 	return result, nil
-}
-
-func forceEditorPublish(content []byte) ([]byte, error) {
-	document, err := parseEditorDocument(content)
-	if err != nil {
-		return nil, err
-	}
-	if !document.HasBlock {
-		return nil, fmt.Errorf("frontmatter is required")
-	}
-	block, err := replaceEditorField(content[document.BodyStart:document.CloseStart], "publish", editorYAMLField("publish", true))
-	if err != nil {
-		return nil, err
-	}
-	return append(append(append([]byte(nil), content[:document.BodyStart]...), block...), content[document.CloseStart:]...), nil
 }
 
 func (s *Server) trackPreviewRoot(root string) error {

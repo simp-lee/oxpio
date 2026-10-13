@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path"
 	"path/filepath"
 	"strings"
@@ -117,6 +118,81 @@ func newDeleteCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
 	_ = cmd.MarkFlagRequired("if-hash")
 	return cmd
+}
+
+func newUploadCommand() *cobra.Command {
+	var vault, file, name, kind, expected string
+	var includeUnpublished, dryRun bool
+	cmd := &cobra.Command{Use: "upload DIR", Short: "Create one Markdown or attachment file", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		if kind != internalapplication.UploadArticle && kind != internalapplication.UploadSectionIndex && kind != internalapplication.UploadAttachment {
+			return errors.New("--kind must be article, section-index, or attachment")
+		}
+		if file == "" {
+			return errors.New("--file is required")
+		}
+		var data []byte
+		var err error
+		if file == "-" {
+			if name == "" {
+				return errors.New("--name is required when --file is -")
+			}
+			data, err = io.ReadAll(io.LimitReader(cmd.InOrStdin(), (64<<20)+1))
+			if err == nil && len(data) > 64<<20 {
+				err = errors.New("upload exceeds 64 MiB")
+			}
+		} else {
+			if name != "" {
+				return errors.New("--name is only valid with --file -")
+			}
+			name = path.Base(file)
+			data, err = readUploadInput(vault, file)
+		}
+		if err != nil {
+			return err
+		}
+		result, mutationErr := internalapplication.MutateUpload(vault, "", internalapplication.UploadMutationRequest{
+			Directory: args[0], Name: name, Kind: kind, ExpectedHash: expected,
+			Content: data, IncludeUnpublished: includeUnpublished, DryRun: dryRun,
+		})
+		return writeMutationCommandResult(cmd, result, mutationErr)
+	}}
+	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&file, "file", "", "Input file or -")
+	cmd.Flags().StringVar(&name, "name", "", "Safe destination basename for stdin")
+	cmd.Flags().StringVar(&kind, "kind", "", "Upload kind: article, section-index, or attachment")
+	cmd.Flags().StringVar(&expected, "if-hash", "", "Must be absent")
+	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Allow unpublished Markdown source")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
+	_ = cmd.MarkFlagRequired("file")
+	_ = cmd.MarkFlagRequired("kind")
+	_ = cmd.MarkFlagRequired("if-hash")
+	return cmd
+}
+
+func readUploadInput(vaultPath, value string) ([]byte, error) {
+	vault, err := resolveVaultPath(vaultPath)
+	if err != nil {
+		return nil, err
+	}
+	if filepath.IsAbs(value) || strings.Contains(value, `\`) || path.Clean(value) != value || strings.HasPrefix(value, ".") || strings.ContainsAny(value, "?#\x00") {
+		return nil, errors.New("upload input must be a Vault-relative POSIX path")
+	}
+	_, file, info, err := internalfsutil.OpenContainedRegularFile(vault, value)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return nil, errors.New("upload input must be a regular non-symlink file")
+	}
+	data, err := io.ReadAll(io.LimitReader(file, (64<<20)+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > 64<<20 {
+		return nil, errors.New("upload exceeds 64 MiB")
+	}
+	return data, nil
 }
 
 func newMkdirCommand() *cobra.Command {

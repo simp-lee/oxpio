@@ -71,6 +71,13 @@ func BuildForOutput(vaultPath, outputPath string) (*Result, error) {
 // BuildForOutputWithOverlay analyzes a candidate Markdown overlay without
 // replacing any source file. It is the planning handoff used by edit CAS.
 func BuildForOutputWithOverlay(vaultPath, outputPath string, overlay map[string][]byte, deleted map[string]bool, concurrency int) (*Result, error) {
+	return BuildForOutputWithOverlayPreview(vaultPath, outputPath, overlay, deleted, "", concurrency)
+}
+
+// BuildForOutputWithOverlayPreview additionally makes one overlaid source
+// renderable without changing its publish state in the source model. It is
+// reserved for isolated editor previews.
+func BuildForOutputWithOverlayPreview(vaultPath, outputPath string, overlay map[string][]byte, deleted map[string]bool, previewPath string, concurrency int) (*Result, error) {
 	boundary, err := internalfsutil.ResolveVaultOutput(vaultPath, outputPath)
 	if err != nil {
 		return nil, err
@@ -79,7 +86,7 @@ func BuildForOutputWithOverlay(vaultPath, outputPath string, overlay map[string]
 	if err != nil {
 		return nil, err
 	}
-	return buildWithConfigAndOutputAndOverlay(boundary.VaultPath, cfg, boundary.OutputPath, overlay, deleted, concurrency)
+	return buildWithConfigAndOutputAndOverlay(boundary.VaultPath, cfg, boundary.OutputPath, overlay, deleted, previewPath, concurrency)
 }
 
 // BuildForOutputWithConcurrency creates a strict plan with an optional bound
@@ -116,10 +123,10 @@ func BuildForOutputWithConfig(vaultPath, outputPath string, cfg model.SiteConfig
 }
 
 func buildWithConfigAndOutput(vaultPath string, cfg model.SiteConfig, outputPath string, concurrency int) (*Result, error) {
-	return buildWithConfigAndOutputAndOverlay(vaultPath, cfg, outputPath, nil, nil, concurrency)
+	return buildWithConfigAndOutputAndOverlay(vaultPath, cfg, outputPath, nil, nil, "", concurrency)
 }
 
-func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, outputPath string, overlay map[string][]byte, deleted map[string]bool, concurrency int) (*Result, error) {
+func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, outputPath string, overlay map[string][]byte, deleted map[string]bool, previewPath string, concurrency int) (*Result, error) {
 	collector := diag.NewCollector()
 	cfg, err := internalconfig.NormalizeSiteConfig(cfg)
 	if err != nil {
@@ -206,8 +213,8 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 		}
 	}
 	computeEffectivePublish(sections, versions, collector)
-	assignSectionRoutes(plan, sections, versions, cfg.Versions, collector)
-	assignArticles(plan, sections, versions, cfg.Versions, sources.AllArticles, collector)
+	assignSectionRoutes(plan, sections, versions, cfg.Versions, previewPath, collector)
+	assignArticles(plan, sections, versions, cfg.Versions, sources.AllArticles, previewPath, collector)
 	validateNavigation(sections, cfg.Navigation, cfg.BaseURL, cfg.FieldLines, collector)
 	frontmatterAssets, assetOwners := validatePlannedAssets(resolvedVault, outputPath, plan, sections, sources, scan.ResourceFiles, collector)
 	buildVersionCorrespondence(versions, collector)
@@ -647,7 +654,7 @@ func computeEffectivePublish(sections map[string]*model.Section, versions []*mod
 	}
 }
 
-func assignSectionRoutes(plan *model.SitePlan, sections map[string]*model.Section, versions []*model.Version, versionConfig *model.VersionsConfig, collector *diag.Collector) {
+func assignSectionRoutes(plan *model.SitePlan, sections map[string]*model.Section, versions []*model.Version, versionConfig *model.VersionsConfig, previewPath string, collector *diag.Collector) {
 	sectionPaths := make([]string, 0, len(sections))
 	for sectionPath := range sections {
 		sectionPaths = append(sectionPaths, sectionPath)
@@ -655,7 +662,7 @@ func assignSectionRoutes(plan *model.SitePlan, sections map[string]*model.Sectio
 	sort.Strings(sectionPaths)
 	for _, sectionPath := range sectionPaths {
 		section := sections[sectionPath]
-		if section == nil || !section.EffectivePublish {
+		if section == nil || (!section.EffectivePublish && !previewIncludesSection(section, previewPath)) {
 			continue
 		}
 		var route string
@@ -681,7 +688,21 @@ func assignSectionRoutes(plan *model.SitePlan, sections map[string]*model.Sectio
 	}
 }
 
-func assignArticles(plan *model.SitePlan, sections map[string]*model.Section, versions []*model.Version, versionConfig *model.VersionsConfig, articles []*model.Note, collector *diag.Collector) {
+func previewIncludesSection(section *model.Section, previewPath string) bool {
+	if section == nil || previewPath == "" {
+		return false
+	}
+	if section.SourcePath == previewPath {
+		return true
+	}
+	targetSection := path.Dir(previewPath)
+	if section.RelPath == "." || targetSection == section.RelPath {
+		return true
+	}
+	return strings.HasPrefix(targetSection, section.RelPath+"/")
+}
+
+func assignArticles(plan *model.SitePlan, sections map[string]*model.Section, versions []*model.Version, versionConfig *model.VersionsConfig, articles []*model.Note, previewPath string, collector *diag.Collector) {
 	for _, article := range articles {
 		if article == nil {
 			continue
@@ -698,10 +719,11 @@ func assignArticles(plan *model.SitePlan, sections map[string]*model.Section, ve
 			record(collector, diag.KindOrder, article.RelPath, "%v", prefixErr)
 			continue
 		}
-		if article.Frontmatter.Publish == nil || !*article.Frontmatter.Publish {
+		previewArticle := article.RelPath == previewPath
+		if !previewArticle && (article.Frontmatter.Publish == nil || !*article.Frontmatter.Publish) {
 			continue
 		}
-		if !section.EffectivePublish {
+		if !section.EffectivePublish && !previewArticle {
 			// A published article below an unpublished section remains a valid
 			// source, but its effective visibility is false. Only a section
 			// trying to override an unpublished ancestor is a structural error.

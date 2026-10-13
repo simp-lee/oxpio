@@ -21,7 +21,11 @@ import (
 	_ "golang.org/x/image/webp"
 )
 
-const maxUploadBytes = 16 << 20
+const (
+	maxUploadBytes    = 10 << 20
+	maxUploadMarkdown = 1 << 20
+	maxUploadSVG      = 1 << 20
+)
 
 type mediaItem struct {
 	Path string `json:"path"`
@@ -120,7 +124,7 @@ func (s *Server) serveMediaFile(w http.ResponseWriter, r *http.Request, relPath 
 }
 
 func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+1<<20)
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadBytes+(1<<20))
 	if err := r.ParseMultipartForm(maxUploadBytes); err != nil {
 		http.Error(w, "invalid or oversized upload", http.StatusBadRequest)
 		return
@@ -135,14 +139,15 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer func() { _ = file.Close() }()
-	name := path.Base(strings.ReplaceAll(header.Filename, "\\", "/"))
-	if name == "." || name == "" || !internalfsutil.IsPortableSitePath(name) {
+	name := header.Filename
+	if name == "." || name == "" || strings.ContainsAny(name, `/\\`) || !internalfsutil.IsPortableSitePath(name) {
 		http.Error(w, "only portable filenames are accepted", http.StatusBadRequest)
 		return
 	}
+	name = normalizeMediaUploadName(name)
 	data, err := io.ReadAll(io.LimitReader(file, maxUploadBytes+1))
 	if err != nil || len(data) > maxUploadBytes {
-		http.Error(w, "upload exceeds 16 MiB", http.StatusRequestEntityTooLarge)
+		http.Error(w, "upload exceeds 10 MiB", http.StatusRequestEntityTooLarge)
 		return
 	}
 	folder := strings.TrimSpace(r.FormValue("folder"))
@@ -161,13 +166,17 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 		relPath = path.Join(folder, name)
 	}
 	if strings.EqualFold(path.Ext(name), ".md") {
-		kind := strings.ToLower(strings.TrimSpace(r.FormValue("kind")))
-		if path.Base(name) == "_index.md" && kind != "section" {
-			http.Error(w, "_index.md uploads require section kind", http.StatusBadRequest)
+		if len(data) > maxUploadMarkdown {
+			http.Error(w, "Markdown upload exceeds 1 MiB", http.StatusRequestEntityTooLarge)
 			return
 		}
-		if path.Base(name) != "_index.md" && kind == "section" {
-			http.Error(w, "section uploads must be named _index.md", http.StatusBadRequest)
+		kind := strings.ToLower(strings.TrimSpace(r.FormValue("kind")))
+		if strings.EqualFold(path.Base(name), "_index.md") && kind != "section-index" {
+			http.Error(w, "_index.md uploads require section-index kind", http.StatusBadRequest)
+			return
+		}
+		if !strings.EqualFold(path.Base(name), "_index.md") && kind != "article" {
+			http.Error(w, "ordinary Markdown uploads require article kind", http.StatusBadRequest)
 			return
 		}
 	} else if err := validateUploadImage(name, data); err != nil {
@@ -206,10 +215,16 @@ func validateUploadImage(name string, data []byte) error {
 	ext := strings.ToLower(filepath.Ext(name))
 	switch ext {
 	case ".svg":
+		if len(data) > maxUploadSVG {
+			return fmt.Errorf("SVG upload exceeds 1 MiB")
+		}
 		if err := internalasset.ValidateLocalSVG(data); err != nil {
 			return fmt.Errorf("invalid SVG image: %w", err)
 		}
 	case ".png", ".jpg", ".jpeg", ".webp":
+		if len(data) > maxUploadBytes {
+			return fmt.Errorf("image upload exceeds 10 MiB")
+		}
 		_, format, err := image.DecodeConfig(bytes.NewReader(data))
 		if err != nil {
 			return fmt.Errorf("invalid image data: %w", err)
@@ -224,6 +239,16 @@ func validateUploadImage(name string, data []byte) error {
 		return fmt.Errorf("only PNG, JPEG, WebP, or SVG uploads are supported")
 	}
 	return nil
+}
+
+func normalizeMediaUploadName(name string) string {
+	ext := filepath.Ext(name)
+	switch strings.ToLower(ext) {
+	case ".md", ".png", ".jpg", ".jpeg", ".webp", ".svg":
+		return strings.TrimSuffix(name, ext) + strings.ToLower(ext)
+	default:
+		return name
+	}
 }
 
 func isSameOrChildPath(candidate, root string) bool {

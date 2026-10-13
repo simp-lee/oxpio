@@ -37,6 +37,7 @@ const (
 	MutationRenameDir   = "rename-dir"
 	MutationConfigWrite = "config write"
 	MutationConfigEdit  = "config edit"
+	MutationUpload      = "upload"
 )
 
 const AbsentHash = "absent"
@@ -449,7 +450,7 @@ func sourceMutationChanges(operation, source, destination, before string, candid
 		return []MutationChange{{Kind: "delete", Domain: "source", Path: source, BeforeHash: beforeValue, AfterHash: nil}, {Kind: "create", Domain: "source", Path: destination, BeforeHash: nil, AfterHash: afterValue}}
 	case MutationDelete:
 		return []MutationChange{{Kind: "delete", Domain: "source", Path: source, BeforeHash: beforeValue, AfterHash: nil}}
-	case MutationWrite, MutationEdit:
+	case MutationWrite, MutationEdit, MutationUpload:
 		kind := "update"
 		if !existed {
 			kind = "create"
@@ -526,6 +527,8 @@ func applySourceMutation(vault, operation, source, destination string, candidate
 	switch operation {
 	case MutationWrite, MutationEdit:
 		return workspace.AtomicWriteFile(sourcePath, candidate, 0o644)
+	case MutationUpload:
+		return workspace.AtomicCreateFile(sourcePath, candidate, 0o644)
 	case MutationMove:
 		destinationPath := filepath.Join(vault, filepath.FromSlash(destination))
 		if err := internalfsutil.RenameNoReplace(sourcePath, destinationPath); err != nil {

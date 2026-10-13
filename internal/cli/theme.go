@@ -19,9 +19,9 @@ import (
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internaldiag "github.com/simp-lee/oxpio/internal/diag"
-	internaledit "github.com/simp-lee/oxpio/internal/edit"
 	internalsiteplan "github.com/simp-lee/oxpio/internal/siteplan"
 	internaltheme "github.com/simp-lee/oxpio/internal/theme"
+	"github.com/simp-lee/oxpio/internal/workspace"
 	"github.com/spf13/cobra"
 )
 
@@ -67,9 +67,23 @@ func newThemeInitCommand() *cobra.Command {
 		}
 		changes := themeInitChanges(name, files)
 		if dryRun {
-			return writeThemeData(cmd, map[string]any{"theme": name, "dryRun": true, "files": sortedThemeNames(files), "changes": changes})
+			if err := workspace.CheckDryRun(vault); err != nil {
+				return err
+			}
+			start, fingerprintErr := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+			if fingerprintErr != nil {
+				return fingerprintErr
+			}
+			end, fingerprintErr := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+			if fingerprintErr != nil {
+				return fingerprintErr
+			}
+			if start != end {
+				return errors.New("CONCURRENT_INPUT: Vault inputs changed during dry-run")
+			}
+			return writeThemeData(cmd, map[string]any{"theme": name, "dryRun": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": 0, "artifacts": map[string]int{"themeFiles": len(files)}, "next": "theme validate then explicitly publish"})
 		}
-		if err := internaledit.WithWorkspaceMutation(vault, "theme-init", []string{filepath.ToSlash(filepath.Join(".oxpio", "themes", name))}, func() error {
+		if err := workspace.WithLock(vault, func() error {
 			if err := checkTarget(); err != nil {
 				return err
 			}
@@ -77,7 +91,7 @@ func newThemeInitCommand() *cobra.Command {
 		}); err != nil {
 			return err
 		}
-		return writeThemeData(cmd, map[string]any{"theme": name, "created": true, "files": sortedThemeNames(files), "changes": changes})
+		return writeThemeData(cmd, map[string]any{"theme": name, "created": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": 0, "artifacts": map[string]int{"themeFiles": len(files)}, "next": "theme validate then explicitly publish"})
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
@@ -168,9 +182,10 @@ func newThemeValidateCommand() *cobra.Command {
 
 func themeDiagnosticCounts(items []internaldiag.Diagnostic) (warnings, errors int) {
 	for _, item := range items {
-		if item.Severity == internaldiag.SeverityError {
+		switch item.Severity {
+		case internaldiag.SeverityError:
 			errors++
-		} else if item.Severity == internaldiag.SeverityWarning {
+		case internaldiag.SeverityWarning:
 			warnings++
 		}
 	}
@@ -300,7 +315,7 @@ func newThemeWriteCommand() *cobra.Command {
 		if kindErr != nil {
 			return kindErr
 		}
-		data, err := readThemeCLIContent(vault, contentFile)
+		data, err := readThemeCLIContent(cmd, vault, contentFile)
 		if err != nil {
 			return err
 		}
@@ -340,7 +355,7 @@ func newThemeEditCommand() *cobra.Command {
 		if kind == "binary" {
 			return fmt.Errorf("theme edit requires a text file")
 		}
-		patch, err := readThemeCLIContent(vault, editsFile)
+		patch, err := readThemeCLIContent(cmd, vault, editsFile)
 		if err != nil {
 			return err
 		}
@@ -355,7 +370,7 @@ func newThemeEditCommand() *cobra.Command {
 			}
 			return mutateThemeFile(cmd, vault, candidate, args[0], next, expected, true)
 		}
-		return internaledit.WithWorkspaceMutation(vault, "theme-edit", []string{args[0]}, func() error {
+		return workspace.WithLock(vault, func() error {
 			old, err := readThemeFile(vault, candidate)
 			if err != nil {
 				return err
@@ -389,7 +404,7 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 		}
 		var previewSource internaltheme.Source
 		var previewBaseURL string
-		previewAssets := map[string]string{}
+		var previewAssets map[string]string
 		if themeID != "" {
 			if themeID == internaltheme.BaseID {
 				previewSource, err = internaltheme.BaseSource()
@@ -407,7 +422,7 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer os.RemoveAll(temporary)
+		defer func() { _ = os.RemoveAll(temporary) }()
 		var previewBuild *internalbuild.BuildResult
 		if themeID != "" {
 			cfg, cfgErr := internalconfig.LoadForThemePreview(boundary.VaultPath, boundary.OutputPath)
@@ -463,7 +478,7 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 		if err != nil {
 			return err
 		}
-		defer closePreviewServer(server)
+		defer func() { _ = closePreviewServer(server) }()
 		announce := func() error {
 			return writeThemeData(cmd, map[string]any{"preview": true, "address": fmt.Sprintf("127.0.0.1:%d", port), "port": port})
 		}
@@ -595,16 +610,17 @@ func createThemeFiles(root string, files map[string][]byte) error {
 	if err != nil {
 		return err
 	}
-	defer os.RemoveAll(stage)
+	defer func() { _ = os.RemoveAll(stage) }()
 	for _, name := range sortedThemeNames(files) {
 		target := filepath.Join(stage, filepath.FromSlash(name))
 		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
 			return err
 		}
-		if err := internaledit.AtomicWriteFile(target, files[name], 0o644); err != nil {
+		if err := workspace.AtomicWriteFile(target, files[name], 0o644); err != nil {
 			return err
 		}
 	}
+	backup := ""
 	if info, statErr := os.Lstat(root); statErr == nil {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return fmt.Errorf("theme target must be a regular directory")
@@ -616,13 +632,29 @@ func createThemeFiles(root string, files map[string][]byte) error {
 		if len(entries) != 0 {
 			return fmt.Errorf("theme target must be absent or empty")
 		}
-		if err := os.Remove(root); err != nil {
+		backup, err = os.MkdirTemp(filepath.Dir(root), ".oxpio-theme-backup-*")
+		if err != nil {
 			return err
 		}
-	} else if !errors.Is(statErr, os.ErrNotExist) {
-		return statErr
+		if err := os.Remove(backup); err != nil {
+			return err
+		}
+		if err := os.Rename(root, backup); err != nil {
+			return err
+		}
 	}
-	return os.Rename(stage, root)
+	if err := os.Rename(stage, root); err != nil {
+		if backup != "" {
+			_ = os.Rename(backup, root)
+		}
+		return err
+	}
+	if backup != "" {
+		if err := os.Remove(backup); err != nil {
+			return fmt.Errorf("remove empty theme backup: %w", err)
+		}
+	}
+	return nil
 }
 
 func resolveThemeFile(vault, value string) (string, string, error) {
@@ -694,12 +726,15 @@ func themeFileKind(name string) string {
 	return kind
 }
 
-func readThemeCLIContent(vault, name string) ([]byte, error) {
+func readThemeCLIContent(cmd *cobra.Command, vault, name string) ([]byte, error) {
 	if name == "-" {
-		return io.ReadAll(os.Stdin)
+		return io.ReadAll(cmd.InOrStdin())
 	}
 	if name == "" {
 		return nil, fmt.Errorf("content input is required")
+	}
+	if strings.HasPrefix(name, ".oxpio/") || name == ".oxpio" || strings.HasPrefix(name, ".obsidian/") || name == ".obsidian" {
+		return nil, fmt.Errorf("theme input is outside the theme source boundary")
 	}
 	if !internaltheme.ValidRelativePath(name) {
 		return nil, fmt.Errorf("input path %q must be a Vault-relative path", name)
@@ -709,14 +744,25 @@ func readThemeCLIContent(vault, name string) ([]byte, error) {
 
 func mutateThemeFile(cmd *cobra.Command, vault, candidate, rel string, data []byte, expected string, dryRun bool) error {
 	if !dryRun {
-		return internaledit.WithWorkspaceMutation(vault, "theme-write", []string{rel}, func() error {
+		return workspace.WithLock(vault, func() error {
 			return mutateThemeFileLocked(cmd, vault, candidate, rel, data, expected, false)
 		})
+	}
+	if err := workspace.CheckDryRun(vault); err != nil {
+		return err
 	}
 	return mutateThemeFileLocked(cmd, vault, candidate, rel, data, expected, true)
 }
 
 func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, data []byte, expected string, dryRun bool) error {
+	var startFingerprint string
+	if dryRun {
+		var err error
+		startFingerprint, err = workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+		if err != nil {
+			return err
+		}
+	}
 	if err := internaltheme.ValidateFileData(rel, data); err != nil {
 		return err
 	}
@@ -740,7 +786,7 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 		before = fmt.Sprintf("%x", digest)
 	}
 	if expected != before {
-		return fmt.Errorf("theme file hash mismatch")
+		return fmt.Errorf("CONFLICT: theme file hash mismatch")
 	}
 	latest, latestErr := readThemeFile(vault, candidate)
 	latestHash := "absent"
@@ -751,7 +797,7 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 		return latestErr
 	}
 	if latestHash != before {
-		return fmt.Errorf("theme file changed during mutation")
+		return fmt.Errorf("CONCURRENT_INPUT: theme file changed during mutation")
 	}
 	digest := sha256.Sum256(data)
 	change := map[string]any{"kind": "update", "domain": "theme", "path": rel, "beforeHash": nil, "afterHash": fmt.Sprintf("%x", digest)}
@@ -761,20 +807,36 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 		change["beforeHash"] = before
 	}
 	if dryRun {
-		return writeThemeData(cmd, map[string]any{"dryRun": true, "changes": []any{change}})
+		end, fingerprintErr := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+		if fingerprintErr != nil {
+			return fingerprintErr
+		}
+		if end != startFingerprint {
+			return errors.New("CONCURRENT_INPUT: Vault inputs changed during dry-run")
+		}
+		return writeThemeData(cmd, map[string]any{"dryRun": true, "changes": []any{change}, "impactedPages": 0, "artifacts": map[string]int{"themeFiles": 1}, "next": "theme validate then explicitly publish"})
 	}
 	if err := os.MkdirAll(filepath.Dir(candidate), 0o755); err != nil {
 		return err
 	}
-	if err := internaledit.AtomicWriteFile(candidate, data, 0o644); err != nil {
-		return err
+	var writeErr error
+	if exists {
+		writeErr = workspace.AtomicWriteFile(candidate, data, 0o644)
+	} else {
+		writeErr = workspace.AtomicCreateFile(candidate, data, 0o644)
 	}
-	return writeThemeData(cmd, map[string]any{"changes": []any{change}, "path": rel})
+	if writeErr != nil {
+		if !exists && errors.Is(writeErr, os.ErrExist) {
+			return fmt.Errorf("CONFLICT: theme file appeared during mutation")
+		}
+		return writeErr
+	}
+	return writeThemeData(cmd, map[string]any{"changes": []any{change}, "path": rel, "impactedPages": 0, "artifacts": map[string]int{"themeFiles": 1}, "next": "theme validate then explicitly publish"})
 }
 
 type themeEdit struct {
-	OldText string `json:"oldText"`
-	NewText string `json:"newText"`
+	OldText *string `json:"oldText"`
+	NewText *string `json:"newText"`
 }
 type themeEditRequest struct {
 	Edits []themeEdit `json:"edits"`
@@ -859,15 +921,18 @@ func applyThemeEdits(source, data []byte) ([]byte, error) {
 	}
 	locatedEdits := make([]located, 0, len(request.Edits))
 	for _, edit := range request.Edits {
-		if edit.OldText == "" {
+		if edit.OldText == nil || edit.NewText == nil {
+			return nil, fmt.Errorf("oldText and newText must be strings")
+		}
+		if *edit.OldText == "" {
 			return nil, fmt.Errorf("oldText must not be empty")
 		}
-		old := []byte(edit.OldText)
+		old := []byte(*edit.OldText)
 		start := bytes.Index(source, old)
-		if start < 0 || bytes.Index(source[start+1:], old) >= 0 {
+		if start < 0 || bytes.Contains(source[start+1:], old) {
 			return nil, fmt.Errorf("oldText must match exactly once")
 		}
-		locatedEdits = append(locatedEdits, located{start: start, end: start + len(old), replacement: []byte(edit.NewText)})
+		locatedEdits = append(locatedEdits, located{start: start, end: start + len(old), replacement: []byte(*edit.NewText)})
 	}
 	sort.Slice(locatedEdits, func(i, j int) bool { return locatedEdits[i].start < locatedEdits[j].start })
 	for index := 1; index < len(locatedEdits); index++ {

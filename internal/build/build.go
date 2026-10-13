@@ -50,6 +50,9 @@ type Options struct {
 	// SourceOutputPath is the formal output boundary to exclude from source
 	// discovery when it differs from the temporary publication path.
 	SourceOutputPath string
+	// PreviewSourcePath makes one overlaid source renderable in an isolated
+	// preview without changing its source publish state.
+	PreviewSourcePath string
 	// Ephemeral disables durable journals and is used only by dry-run paths.
 	Ephemeral bool
 	// InputFingerprint and ValidateInput let the shared publish service reject
@@ -66,7 +69,7 @@ func BuildWithOptions(vaultPath, outputPath string, options Options) (*BuildResu
 	if options.SourceOutputPath != "" {
 		sourceOutputPath = options.SourceOutputPath
 	}
-	analysis, analyzeErr := internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlay(vaultPath, sourceOutputPath, options.Concurrency, options.SourceOverlay, options.SourceDeleted)
+	analysis, analyzeErr := internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlayPreview(vaultPath, sourceOutputPath, options.Concurrency, options.SourceOverlay, options.SourceDeleted, options.PreviewSourcePath)
 	if writeErr := internalanalyze.WriteDiagnostics(options.DiagnosticsWriter, analysis.Diagnostics); writeErr != nil {
 		return nil, fmt.Errorf("write diagnostics: %w", writeErr)
 	}
@@ -175,7 +178,11 @@ func sourceCatalog(planned *siteplan.Result) *model.SourceCatalog {
 			SectionPath: path.Dir(source.RelPath),
 		}
 		if article := articles[source.RelPath]; article != nil {
-			entry.Route, entry.EffectivePublish, entry.SectionPath, entry.VersionID = article.Route, true, article.SectionPath, article.VersionID
+			entry.Route, entry.SectionPath, entry.VersionID = article.Route, article.SectionPath, article.VersionID
+			entry.EffectivePublish = source.Publish
+			if section := sections[article.SectionPath]; section != nil {
+				entry.EffectivePublish = entry.EffectivePublish && section.EffectivePublish
+			}
 		}
 		entries = append(entries, entry)
 	}

@@ -169,6 +169,9 @@ func executeWithDeps(args []string, deps commandDependencies, stdout io.Writer, 
 				return writeErr
 			}
 		}
+		if stderr != nil && commandErrors.Len() != 0 {
+			_, _ = (&sanitizingWriter{output: stderr, args: args}).Write(commandErrors.Bytes())
+		}
 		if err != nil {
 			return silentError{err: err, exitCode: classifyCLIError(err)}
 		}
@@ -492,6 +495,8 @@ func commandForSpec(spec internalapplication.CommandSpec, deps commandDependenci
 		return newMoveCommand()
 	case "delete":
 		return newDeleteCommand()
+	case "upload":
+		return newUploadCommand()
 	case "mkdir":
 		return newMkdirCommand()
 	case "rename-dir":
@@ -881,7 +886,7 @@ func classifyCLIError(err error) int {
 
 func isCLIParameterError(err error) bool {
 	message := strings.ToLower(err.Error())
-	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "mutually exclusive", "output path", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between", "invalid edits json", "publish override conflicts", "passwordhash", "duplicate json key", "unknown field", "oldtext", "edit patches", "input file must"} {
+	for _, marker := range []string{"invalid argument", "invalid value", "invalid syntax", "flag needs an argument", "unknown shorthand", "unknown flag", "unknown command", "parsing error", "required flag", "accepts ", "requires ", "at least one arg", "exactly one arg", "mutually exclusive", "output path", "path must be", "outside the content source boundary", "non-portable path", "must name a markdown", "offset must", "limit must", "--kind must", "must be between", "invalid edits json", "publish override conflicts", "passwordhash", "duplicate json key", "unknown field", "oldtext", "edit patches", "input file must", "markdown upload", "attachment type", "include-unpublished is only valid"} {
 		if strings.Contains(message, marker) {
 			return true
 		}

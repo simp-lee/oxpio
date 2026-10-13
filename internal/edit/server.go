@@ -18,6 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +29,7 @@ import (
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
+	"github.com/simp-lee/oxpio/internal/workspace"
 	"golang.org/x/term"
 )
 
@@ -926,6 +928,82 @@ func Setup(vaultPath string, input io.Reader, output io.Writer) error {
 	return nil
 }
 
+// ResetPassword interactively replaces only the configured password hash.
+// It preserves the existing username and all unrelated YAML bytes.
+func ResetPassword(vaultPath string, input io.Reader, output io.Writer) error {
+	setupMu.Lock()
+	defer setupMu.Unlock()
+	cfg, err := internalconfig.LoadForBuild(vaultPath)
+	if err != nil {
+		return err
+	}
+	if cfg.Editor == nil {
+		return fmt.Errorf("editor account is not configured")
+	}
+	file, ok := input.(*os.File)
+	if !ok || !term.IsTerminal(int(file.Fd())) {
+		return fmt.Errorf("editor password reset requires an interactive terminal")
+	}
+	if output == nil {
+		output = io.Discard
+	}
+	resolvedVault, err := internalfsutil.ResolveVaultPath(vaultPath)
+	if err != nil {
+		return err
+	}
+	_, original, _, err := internalfsutil.ReadContainedRegularFile(resolvedVault, internalconfig.Filename)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	_, _ = io.WriteString(output, "New password: ")
+	password, err := term.ReadPassword(int(file.Fd()))
+	_, _ = io.WriteString(output, "\n")
+	if err != nil {
+		return fmt.Errorf("read password: %w", err)
+	}
+	if len(password) == 0 {
+		return fmt.Errorf("password must be non-empty")
+	}
+	hash, err := internalconfig.HashArgon2idPassword(string(password))
+	if err != nil {
+		return err
+	}
+	if err := internalconfig.ValidateArgon2idPasswordHash(hash); err != nil {
+		return err
+	}
+	updated, err := replaceEditorPasswordHash(original, hash)
+	if err != nil {
+		return err
+	}
+	if _, err := internalconfig.ValidateConfigBytes(updated); err != nil {
+		return fmt.Errorf("validate generated editor config: %w", err)
+	}
+	configPath := filepath.Join(resolvedVault, internalconfig.Filename)
+	if err := atomicReplaceConfig(resolvedVault, configPath, original, updated); err != nil {
+		return err
+	}
+	_, _ = io.WriteString(output, "Editor password reset.\n")
+	return nil
+}
+
+var editorPasswordHashLine = regexp.MustCompile(`(?m)^([ \t]*passwordHash[ \t]*:[ \t]*)([^#\r\n]*)([ \t]*(?:#.*)?(?:\r?\n|$))`)
+
+func replaceEditorPasswordHash(source []byte, hash string) ([]byte, error) {
+	matches := editorPasswordHashLine.FindAllIndex(source, -1)
+	if len(matches) != 1 {
+		return nil, fmt.Errorf("editor passwordHash must have exactly one configured scalar")
+	}
+	match := editorPasswordHashLine.FindSubmatchIndex(source)
+	if len(match) < 8 {
+		return nil, fmt.Errorf("editor passwordHash could not be located")
+	}
+	result := make([]byte, 0, len(source)+len(hash))
+	result = append(result, source[:match[4]]...)
+	result = append(result, hash...)
+	result = append(result, source[match[5]:]...)
+	return result, nil
+}
+
 func readTerminalLine(file *os.File) (string, error) {
 	var data []byte
 	one := []byte{0}
@@ -958,6 +1036,11 @@ func appendEditorConfig(original []byte, username, hash string) []byte {
 // the final rename, so another cooperating config writer cannot change the
 // file between the last check and commit.
 func atomicReplaceConfig(vaultRoot, configPath string, expected, updated []byte) error {
+	lease, err := workspace.Acquire(vaultRoot)
+	if err != nil {
+		return fmt.Errorf("acquire workspace lock before config setup: %w", err)
+	}
+	defer func() { _ = lease.Release() }()
 	releaseConfigLock, err := acquireConfigLock(vaultRoot)
 	if err != nil {
 		return fmt.Errorf("acquire config lock before setup: %w", err)
@@ -974,27 +1057,6 @@ func atomicReplaceConfig(vaultRoot, configPath string, expected, updated []byte)
 	if _, _, err := internalfsutil.InspectContainedRegularFile(vaultRoot, configPath); err != nil {
 		return fmt.Errorf("inspect config before setup: %w", err)
 	}
-	temporary, err := os.CreateTemp(filepath.Dir(configPath), ".oxpio-config-*")
-	if err != nil {
-		return fmt.Errorf("create atomic config file: %w", err)
-	}
-	temporaryName := temporary.Name()
-	defer func() { _ = os.Remove(temporaryName) }()
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("set atomic config permissions: %w", err)
-	}
-	if _, err := temporary.Write(updated); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("write atomic config: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("sync atomic config: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("close atomic config: %w", err)
-	}
 	_, current, _, err = internalfsutil.ReadContainedRegularFile(vaultRoot, internalconfig.Filename)
 	if err != nil {
 		return fmt.Errorf("recheck config before commit: %w", err)
@@ -1002,7 +1064,7 @@ func atomicReplaceConfig(vaultRoot, configPath string, expected, updated []byte)
 	if subtle.ConstantTimeCompare(current, expected) != 1 {
 		return errors.New("config changed during edit setup; retry without overwriting the external change")
 	}
-	if err := os.Rename(temporaryName, configPath); err != nil {
+	if err := workspace.AtomicWriteFile(configPath, updated, 0o600); err != nil {
 		return fmt.Errorf("replace config atomically: %w", err)
 	}
 	return nil

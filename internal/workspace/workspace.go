@@ -738,6 +738,42 @@ func AtomicWriteFile(name string, data []byte, mode os.FileMode) error {
 	return SyncDirectory(parent)
 }
 
+// AtomicCreateFile writes a new regular file without replacing an existing
+// destination. The temporary file and destination share a directory so the
+// final no-replace rename is atomic on supported local filesystems.
+func AtomicCreateFile(name string, data []byte, mode os.FileMode) error {
+	parent := filepath.Dir(name)
+	info, err := os.Lstat(parent)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("atomic file parent is not a regular directory: %w", err)
+	}
+	temporary, err := os.CreateTemp(parent, ".oxpio-create-*")
+	if err != nil {
+		return err
+	}
+	temporaryName := temporary.Name()
+	defer func() { _ = os.Remove(temporaryName) }()
+	if err := temporary.Chmod(mode); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return err
+	}
+	if err := temporary.Close(); err != nil {
+		return err
+	}
+	if err := internalfsutil.RenameNoReplace(temporaryName, name); err != nil {
+		return err
+	}
+	return SyncDirectory(parent)
+}
+
 // SyncDirectory flushes directory entry changes on supported filesystems.
 func SyncDirectory(path string) error {
 	directory, err := os.Open(path)

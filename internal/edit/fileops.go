@@ -116,6 +116,9 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	}
 	if mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationUpload {
 		if mutation.operation == fileMutationMarkdown || strings.EqualFold(path.Ext(mutation.path), ".md") {
+			if len(mutation.content) > 1<<20 {
+				return TransactionResult{}, fmt.Errorf("markdown upload exceeds 1 MiB")
+			}
 			if !utf8.Valid(mutation.content) {
 				return TransactionResult{}, fmt.Errorf("markdown upload %q must contain valid UTF-8", mutation.path)
 			}

@@ -1094,7 +1094,7 @@ async function uploadMedia(file) {
     if (/\.md$/iu.test(file.name)) {
       const kind = $("#upload-kind").value;
       const isSectionFile = /^_index\.md$/iu.test(file.name);
-      if (isSectionFile !== (kind === "section")) throw new Error(isSectionFile ? "Choose Section index for _index.md uploads." : "Choose Article for ordinary Markdown uploads.");
+      if (isSectionFile !== (kind === "section-index")) throw new Error(isSectionFile ? "Choose Section index for _index.md uploads." : "Choose Article for ordinary Markdown uploads.");
       form.append("kind", kind);
     }
     const result = await mutation("POST", "/_oxpio/media", form, {"X-OXPIO-File-Hash": "absent"});

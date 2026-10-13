@@ -17,6 +17,7 @@ import (
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
+	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	"github.com/simp-lee/oxpio/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -53,6 +54,8 @@ type serveWatchLoop struct {
 	watchedDirs            map[string]struct{}
 	vaultWatchDirs         map[string]struct{}
 	fixedWatchDirs         map[string]struct{}
+	themeDiscoveryOnly     bool
+	strictWatchInputs      bool
 	done                   chan error
 }
 
@@ -152,6 +155,7 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 		outputTransactionPaths: outputTransactionPaths,
 		relevantWatchFiles:     refreshInputs(),
 		refreshRelevantInputs:  refreshInputs,
+		strictWatchInputs:      true,
 		debounce:               defaultWatchDebounce,
 		done:                   done,
 		rebuild:                build,
@@ -255,7 +259,8 @@ func startServeWatchLoop(ctx context.Context, loop serveWatchLoop) error {
 	if loop.debounce <= 0 {
 		loop.debounce = defaultWatchDebounce
 	}
-	loop.fixedWatchInputs = fixedServeWatchInputs(loop.vaultPath)
+	loop.fixedWatchInputs = fixedServeWatchInputsForOutput(loop.vaultPath, loop.outputPath)
+	loop.themeDiscoveryOnly = themeDiscoveryOnlyForWatch(loop.vaultPath, loop.outputPath)
 	if err := workspace.ClearCompleted(loop.vaultPath); err != nil {
 		return closeServeWatchLoopWatcher(err, loop.watcher)
 	}
@@ -357,7 +362,8 @@ func (loop *serveWatchLoop) run(ctx context.Context) {
 			if outputTransaction || suppressed {
 				continue
 			}
-			if !recoveredFixedInput && !loop.shouldTrigger(cleanPath, effectiveOp, wasWatchedDir) {
+			trigger := loop.shouldTrigger(cleanPath, effectiveOp, wasWatchedDir)
+			if !recoveredFixedInput && !trigger {
 				delete(pendingWatchPaths, cleanPath)
 				continue
 			}
@@ -400,6 +406,8 @@ func (loop *serveWatchLoop) run(ctx context.Context) {
 			}
 			pendingWatchPaths = make(map[string]struct{})
 			rebuildErr := loop.rebuild()
+			loop.fixedWatchInputs = fixedServeWatchInputsForOutput(loop.vaultPath, loop.outputPath)
+			loop.themeDiscoveryOnly = themeDiscoveryOnlyForWatch(loop.vaultPath, loop.outputPath)
 			if err := loop.syncFixedWatchInputs(loop.fixedWatchInputs); err != nil {
 				loop.reportError(err)
 			}
@@ -499,6 +507,17 @@ func (loop *serveWatchLoop) watchDirsForInputs(inputs []string) (map[string]stru
 	watchDirs := make(map[string]struct{}, len(inputs))
 	for _, input := range inputs {
 		targetWatchDir := filepath.Clean(input)
+		if loop.isThemeDiscoveryRoot(targetWatchDir) {
+			if info, statErr := os.Stat(targetWatchDir); statErr == nil && info.IsDir() {
+				watchDirs[targetWatchDir] = struct{}{}
+			} else if errors.Is(statErr, os.ErrNotExist) {
+				parent := nearestExistingWatchDir(filepath.Dir(targetWatchDir))
+				if parent != "" && loop.pathWithinVault(parent) && !loop.pathIsOutput(parent) {
+					watchDirs[parent] = struct{}{}
+				}
+			}
+			continue
+		}
 		if !loop.pathWithinVault(targetWatchDir) {
 			return nil, fmt.Errorf("watch input %q must stay inside the vault", targetWatchDir)
 		}
@@ -558,7 +577,7 @@ func (loop *serveWatchLoop) addNewDirectoryWatch(path string) error {
 	if !info.IsDir() {
 		return nil
 	}
-	if loop.isFixedDirectoryInput(cleanPath) {
+	if loop.isFixedDirectoryInput(cleanPath) && !loop.isThemeDiscoveryRoot(cleanPath) {
 		return loop.addRecursiveWatchTree(cleanPath)
 	}
 	if loop.shouldDirectlyWatchDirectory(cleanPath) {
@@ -648,6 +667,9 @@ func (loop *serveWatchLoop) shouldDirectlyWatchDirectory(path string) bool {
 	cleanPath := filepath.Clean(path)
 	for _, input := range loop.fixedWatchInputs {
 		targetWatchDir := filepath.Clean(input)
+		if loop.isThemeDiscoveryRoot(targetWatchDir) {
+			continue
+		}
 		if internalfsutil.SamePath(targetWatchDir, cleanPath) || pathWithinRoot(cleanPath, targetWatchDir) {
 			return true
 		}
@@ -733,7 +755,7 @@ func (loop *serveWatchLoop) shouldTrigger(path string, op fsnotify.Op, wasWatche
 		return false
 	}
 	if isWatchableDirectoryEvent(cleanPath, op, wasWatchedDir) {
-		return true
+		return !loop.strictWatchInputs
 	}
 
 	if filepath.Clean(relPath) == filepath.Clean(filepath.Base(loop.configPath)) {
@@ -742,7 +764,7 @@ func (loop *serveWatchLoop) shouldTrigger(path string, op fsnotify.Op, wasWatche
 	if loop.relevantWatchFiles == nil {
 		return isWatchableVaultFile(relPath)
 	}
-	if op&fsnotify.Create != 0 {
+	if op&fsnotify.Create != 0 && !loop.strictWatchInputs {
 		return true
 	}
 	if strings.HasSuffix(strings.ToLower(relPath), ".md") {
@@ -761,6 +783,19 @@ func (loop *serveWatchLoop) matchesFixedWatchInput(path string, op fsnotify.Op) 
 		}
 
 		cleanInput := filepath.Clean(trimmedInput)
+		if loop.isThemeDiscoveryRoot(cleanInput) {
+			if hasDirectoryLifecycleOp(op) && filepath.Dir(cleanPath) == cleanInput {
+				for _, activeInput := range loop.fixedWatchInputs {
+					if loop.isThemeDiscoveryRoot(filepath.Clean(activeInput)) {
+						continue
+					}
+					if filepath.Clean(activeInput) == cleanPath {
+						return true
+					}
+				}
+			}
+			continue
+		}
 		if pathWithinRoot(cleanInput, cleanPath) {
 			return true
 		}
@@ -834,8 +869,11 @@ func (loop *serveWatchLoop) shouldWatchVaultDirectory(path string) bool {
 		return false
 	}
 	relPath = filepath.Clean(relPath)
-	if relPath == "." || relPath == ".obsidian" {
+	if relPath == "." {
 		return true
+	}
+	if relPath == ".obsidian" {
+		return false
 	}
 	if loop.pathIsOutputTransaction(path) {
 		return false
@@ -941,8 +979,42 @@ func normalizeServeWatchInputs(inputs []string) []string {
 }
 
 func fixedServeWatchInputs(vaultPath string) []string {
-	themeDir := filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath))
-	return []string{themeDir}
+	return []string{filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath))}
+}
+
+func fixedServeWatchInputsForOutput(vaultPath, outputPath string) []string {
+	inputs := fixedServeWatchInputs(vaultPath)
+	cfg, err := internalconfig.LoadForBuildWithOutput(vaultPath, outputPath)
+	if err != nil {
+		cfg, err = internalconfig.LoadForThemePreview(vaultPath, outputPath)
+	}
+	if err == nil && cfg.Theme != internaltheme.BaseID {
+		inputs = append(inputs, filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath), cfg.Theme))
+	}
+	return inputs
+}
+
+func themeDiscoveryOnlyForWatch(vaultPath, outputPath string) bool {
+	// A Vault with an explicit theme selection has an authoritative active
+	// theme. The discovery root is then control-only so malformed or
+	// unselected local themes never enter the selected build or trigger a
+	// reload. Keep the historical broad discovery behavior when the selection
+	// is omitted, because older Vaults do not declare a theme field.
+	data, err := os.ReadFile(filepath.Join(vaultPath, defaultConfigFilename))
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "theme:") {
+			return true
+		}
+	}
+	return false
+}
+
+func (loop *serveWatchLoop) isThemeDiscoveryRoot(pathValue string) bool {
+	return loop.themeDiscoveryOnly && filepath.Clean(pathValue) == filepath.Clean(filepath.Join(loop.vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath)))
 }
 
 // plannedWatchFiles is the watch-side input signature. Markdown/config files

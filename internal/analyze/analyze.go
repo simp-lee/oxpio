@@ -42,6 +42,12 @@ func AnalyzeWithOutputAndConcurrency(vaultPath, outputPath string, concurrency i
 // AnalyzeWithOutputAndConcurrencyAndOverlay shares the normal analyzer while
 // reading candidate Markdown bytes from an immutable edit overlay.
 func AnalyzeWithOutputAndConcurrencyAndOverlay(vaultPath, outputPath string, concurrency int, overlay map[string][]byte, deleted map[string]bool) (Result, error) {
+	return AnalyzeWithOutputAndConcurrencyAndOverlayPreview(vaultPath, outputPath, concurrency, overlay, deleted, "")
+}
+
+// AnalyzeWithOutputAndConcurrencyAndOverlayPreview makes one overlaid source
+// renderable for an isolated preview while retaining its source publish state.
+func AnalyzeWithOutputAndConcurrencyAndOverlayPreview(vaultPath, outputPath string, concurrency int, overlay map[string][]byte, deleted map[string]bool, previewPath string) (Result, error) {
 	var planned *siteplan.Result
 	var err error
 	if len(overlay) == 0 && len(deleted) == 0 && outputPath == "" {
@@ -51,9 +57,9 @@ func AnalyzeWithOutputAndConcurrencyAndOverlay(vaultPath, outputPath string, con
 	} else if outputPath == "" {
 		// Overlay builds always use an explicit output boundary so the
 		// candidate cannot accidentally scan generated output.
-		planned, err = siteplan.BuildForOutputWithOverlay(vaultPath, filepath.Join(vaultPath, "public"), overlay, deleted, concurrency)
+		planned, err = siteplan.BuildForOutputWithOverlayPreview(vaultPath, filepath.Join(vaultPath, "public"), overlay, deleted, previewPath, concurrency)
 	} else {
-		planned, err = siteplan.BuildForOutputWithOverlay(vaultPath, outputPath, overlay, deleted, concurrency)
+		planned, err = siteplan.BuildForOutputWithOverlayPreview(vaultPath, outputPath, overlay, deleted, previewPath, concurrency)
 	}
 	if planned == nil {
 		collector := diagnostic.NewCollector()
