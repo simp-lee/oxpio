@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func TestApplyEditorFrontmatterPreservesUnknownFieldsAndReplacesBody(t *testing.T) {
-	source := []byte("---\n# keep this comment\ntitle: Old\npublish: false\ntype: doc\ncustom: keep\n---\n\nOld body\n")
+func TestApplyEditorFrontmatterPreservesCommentsAndReplacesBody(t *testing.T) {
+	source := []byte("---\n# keep this comment\ntitle: Old\npublish: false\ntype: doc\n---\n\nOld body\n")
 	order := 2
 	updated, err := applyEditorFrontmatter(source, []byte("\nNew body\n"), editorFrontmatter{
 		Title:       "New title",
@@ -20,12 +20,12 @@ func TestApplyEditorFrontmatterPreservesUnknownFieldsAndReplacesBody(t *testing.
 		t.Fatal(err)
 	}
 	text := string(updated)
-	for _, want := range []string{"# keep this comment", "custom: keep", "title: New title", "publish: true", "description: Description", "New body"} {
+	for _, want := range []string{"# keep this comment", "title: New title", "publish: true", "description: Description", "New body"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("updated source missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "Old body") || strings.Count(text, "---") != 2 {
+	if strings.Contains(text, "custom: keep") || strings.Contains(text, "Old body") || strings.Count(text, "---") != 2 {
 		t.Fatalf("old body or duplicate frontmatter remained:\n%s", text)
 	}
 }
@@ -58,24 +58,24 @@ func TestApplyEditorFrontmatterUpdatesOnlyChangedFields(t *testing.T) {
 }
 
 func TestApplyEditorFrontmatterReplacesMultilineYAMLFields(t *testing.T) {
-	source := []byte("---\ndescription: |\n  first\n\n  second\npublish: false\n---\nBody\n")
+	source := []byte("---\ntitle: Page\npublish: false\ntype: doc\ndescription: |\n  first\n\n  second\n---\nBody\n")
 	updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Description: "New"}, "article", []string{"description"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "---\ndescription: New\npublish: false\n---\nBody\n"
+	want := "---\ntitle: Page\npublish: false\ntype: doc\ndescription: New\n---\nBody\n"
 	if string(updated) != want {
 		t.Fatalf("updated = %q, want %q", updated, want)
 	}
 }
 
 func TestApplyEditorFrontmatterPreservesBlankFieldSeparators(t *testing.T) {
-	source := []byte("---\ntitle: Old\n\npublish: false\n---\nBody\n")
+	source := []byte("---\ntitle: Old\npublish: false\ntype: doc\n\n---\nBody\n")
 	updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Title: "New"}, "article", []string{"title"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "---\ntitle: New\n\npublish: false\n---\nBody\n"
+	want := "---\ntitle: New\npublish: false\ntype: doc\n\n---\nBody\n"
 	if string(updated) != want {
 		t.Fatalf("updated = %q, want %q", updated, want)
 	}
@@ -91,12 +91,12 @@ func TestApplyEditorFrontmatterPreservesLineEndings(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			separator := tt.separator
-			source := []byte("---" + separator + "title: Old" + separator + "publish: false" + separator + "---" + separator + "Body" + separator)
+			source := []byte("---" + separator + "title: Old" + separator + "publish: false" + separator + "type: doc" + separator + "---" + separator + "Body" + separator)
 			updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Description: "New"}, "article", []string{"description"})
 			if err != nil {
 				t.Fatal(err)
 			}
-			want := "---" + separator + "title: Old" + separator + "publish: false" + separator + "description: New" + separator + "---" + separator + "Body" + separator
+			want := "---" + separator + "title: Old" + separator + "publish: false" + separator + "type: doc" + separator + "description: New" + separator + "---" + separator + "Body" + separator
 			if string(updated) != want {
 				t.Fatalf("updated = %q, want %q", updated, want)
 			}
@@ -115,7 +115,7 @@ func TestApplyEditorFrontmatterCreatesBlockForBodyOnlySource(t *testing.T) {
 }
 
 func TestApplyEditorFrontmatterReplacesIndentlessSequences(t *testing.T) {
-	source := []byte("---\ntitle: Guide\ntags:\n- one\n- two\naliases:\n- old\n---\nBody\n")
+	source := []byte("---\ntitle: Guide\npublish: false\ntype: doc\ntags:\n- one\n- two\naliases:\n- old\n---\nBody\n")
 	updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Tags: []string{"three"}, Aliases: []string{"new"}}, "article", []string{"tags", "aliases"})
 	if err != nil {
 		t.Fatal(err)
@@ -132,7 +132,7 @@ func TestApplyEditorFrontmatterReplacesIndentlessSequences(t *testing.T) {
 }
 
 func TestApplyEditorFrontmatterUpdatesQuotedAndFlowFields(t *testing.T) {
-	source := []byte("---\n\"title\": \"Old title\"\ntags: [one, two] # keep this comment\n---\nBody\n")
+	source := []byte("---\n\"title\": \"Old title\"\npublish: true\ntype: doc\ntags: [one, two] # keep this comment\n---\nBody\n")
 	updated, err := applyEditorFrontmatter(source, nil, editorFrontmatter{Title: "New title", Tags: []string{"three"}}, "article", []string{"title", "tags"})
 	if err != nil {
 		t.Fatal(err)

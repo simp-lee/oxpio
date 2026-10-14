@@ -251,7 +251,8 @@ function showForm(metadata) {
   }
   state.formBaseline = formValues();
   $("#metadata-title").textContent = metadata.title || state.path || "Current source";
-  const published = metadata.publish === true;
+  const catalogSource = state.catalogSources.find(source => source.relPath === state.path);
+  const published = catalogSource ? catalogSource.effectivePublish === true : metadata.publish === true;
   $("#publish-badge").textContent = published ? "Published" : "Draft";
   $("#publish-badge").className = `state-badge ${published ? "published" : "draft"}`;
   const labels = {doc: "Document", post: "Post", page: "Page"};
@@ -539,9 +540,9 @@ function updateMode() {
   $(".editor-preview-grid").dataset.mode = state.surface;
   $(".editor-preview-grid").setAttribute("aria-labelledby", activeTab?.id || "write-mode");
   $(".workspace").dataset.mode = state.surface;
-  $("#editor-pane-title").textContent = state.surface === "write" ? "Live preview" : "Markdown";
+  $("#editor-pane-title").textContent = state.surface === "write" ? "Write" : "Markdown";
   $("#preview-refresh").hidden = state.surface !== "read";
-  if (state.surface !== "diff") $("#preview-title").textContent = state.surface === "write" ? "Live preview" : "Preview";
+  if (state.surface !== "diff") $("#preview-title").textContent = state.surface === "write" ? "Write" : "Preview";
 }
 function originalOffsetForNormalized(value, target) {
   let normalized = 0;
@@ -757,7 +758,7 @@ function bindPreviewFrame() {
 function showPreviewSurface() {
   $("#diff-editor").hidden = true;
   $("#diff-wrap").hidden = true;
-  $("#preview-title").textContent = state.surface === "write" ? "Live preview" : "Preview";
+  $("#preview-title").textContent = state.surface === "write" ? "Write" : "Preview";
   $("#preview-title-icon").setAttribute("href", "#icon-eye");
   if (!$("#preview-frame").src) $("#preview-empty").hidden = false;
   else $("#preview-frame").hidden = false;

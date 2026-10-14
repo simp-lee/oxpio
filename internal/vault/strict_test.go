@@ -32,6 +32,33 @@ func TestParseStrictFrontmatterSeparatesSectionsAndRequiresExplicitArticleFields
 	}
 }
 
+func TestParseStrictSourceUsesCanonicalBoundaries(t *testing.T) {
+	raw := []byte("\ufeff---\r\ntitle: Guide\r\npublish: true\r\ntype: doc\r\n---\r\nBody\r\n")
+	document, err := ParseStrictSource("guide.md", raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !document.HasFrontmatter || document.Source.Article == nil || document.Source.Article.Frontmatter.Title != "Guide" {
+		t.Fatalf("document = %#v", document)
+	}
+	if string(document.Body) != "Body\r\n" || string(raw[document.CloseEnd:]) != string(document.Body) {
+		t.Fatalf("body = %q, closeEnd = %d", document.Body, document.CloseEnd)
+	}
+	if document.BodyStart != len("\ufeff---\r\n") || document.CloseStart <= document.BodyStart || document.CloseEnd < document.CloseStart {
+		t.Fatalf("invalid source boundaries = %#v", document)
+	}
+	absent, err := IsFrontmatterAbsent([]byte("Body\n"))
+	if err != nil || !absent {
+		t.Fatalf("body-only status = %v, %v", absent, err)
+	}
+	if _, err := ParseStrictSource("guide.md", []byte("Body\n")); err == nil {
+		t.Fatal("body-only source unexpectedly passed strict parsing")
+	}
+	if absent, err := IsFrontmatterAbsent([]byte("---\ntitle: Guide\n")); err == nil || absent {
+		t.Fatalf("incomplete frontmatter status = %v, %v", absent, err)
+	}
+}
+
 func TestParseStrictFrontmatterRejectsUnknownDuplicateNullAndInvalidMetadata(t *testing.T) {
 	tests := map[string]string{
 		"unknown":        "title: A\npublish: true\ntype: doc\nlayout: old\n",

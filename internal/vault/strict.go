@@ -61,6 +61,67 @@ type StrictFrontmatterResult struct {
 	Unpublished []*model.Note
 }
 
+// StrictSourceDocument is the canonical parsed form of one source file. It
+// also exposes byte boundaries so editors can preserve the original source
+// while using the same frontmatter parser as strict builds.
+type StrictSourceDocument struct {
+	Source         model.PlannedSource
+	Body           []byte
+	HasFrontmatter bool
+	BodyStart      int
+	CloseStart     int
+	CloseEnd       int
+}
+
+// IsFrontmatterAbsent reports whether a source is plain body text rather than
+// a malformed or incomplete frontmatter block. Editor creation uses this
+// explicit exception before invoking ParseStrictSource.
+func IsFrontmatterAbsent(content []byte) (bool, error) {
+	parts, err := parseFrontmatterDocument(content)
+	if err != nil {
+		return false, err
+	}
+	return !parts.opened, nil
+}
+
+// ParseStrictSource parses one source according to the same contract used by
+// ParseStrictFrontmatter. Callers must not maintain a second frontmatter
+// decoder for editor or preview behavior.
+func ParseStrictSource(relPath string, content []byte) (StrictSourceDocument, error) {
+	parts, err := parseFrontmatterDocument(content)
+	if err != nil {
+		return StrictSourceDocument{}, err
+	}
+	mapping, err := strictMapping(parts.block, parts.present)
+	if err != nil {
+		return StrictSourceDocument{}, frontmatterSourceError(err)
+	}
+	if strings.EqualFold(path.Base(relPath), "_index.md") && path.Base(relPath) != "_index.md" {
+		return StrictSourceDocument{}, fmt.Errorf("section source %q must use the exact filename _index.md", relPath)
+	}
+	result := StrictSourceDocument{
+		Body:           append([]byte(nil), parts.body...),
+		HasFrontmatter: parts.present,
+		BodyStart:      parts.blockStart,
+		CloseStart:     parts.closeStart,
+		CloseEnd:       parts.closeEnd,
+	}
+	if path.Base(relPath) == "_index.md" {
+		section, err := decodeSectionSource(relPath, parts.body, parts.bodyStartLine, overlayFileInfo{}, mapping)
+		if err != nil {
+			return StrictSourceDocument{}, frontmatterSourceError(err)
+		}
+		result.Source = model.PlannedSource{RelPath: relPath, Section: section, Publish: section.Frontmatter.Publish != nil && *section.Frontmatter.Publish}
+		return result, nil
+	}
+	note, err := decodeStrictArticle(relPath, parts.body, parts.bodyStartLine, overlayFileInfo{}, mapping)
+	if err != nil {
+		return StrictSourceDocument{}, frontmatterSourceError(err)
+	}
+	result.Source = model.PlannedSource{RelPath: relPath, Article: note, Publish: note.Frontmatter.Publish != nil && *note.Frontmatter.Publish}
+	return result, nil
+}
+
 // ParseStrictFrontmatter parses the complete vault source set according to the
 // revised section/article contract.
 func ParseStrictFrontmatter(scanResult ScanResult) (StrictFrontmatterResult, error) {
@@ -131,39 +192,63 @@ func readStrictSource(scanResult ScanResult, relPath string) ([]byte, interface{
 	return data, info, nil
 }
 
-func splitFrontmatter(content []byte) ([]byte, []byte, int, bool, error) {
+type frontmatterDocument struct {
+	block         []byte
+	body          []byte
+	opened        bool
+	present       bool
+	bodyStart     int
+	blockStart    int
+	closeStart    int
+	closeEnd      int
+	bodyStartLine int
+}
+
+func parseFrontmatterDocument(content []byte) (frontmatterDocument, error) {
 	start := 0
 	if bytes.HasPrefix(content, utf8BOM) {
 		start = len(utf8BOM)
 	}
 	firstLine, next, ok := readLine(content, start)
 	if !ok || !isFrontmatterDelimiter(firstLine) {
-		return nil, content[start:], 1, false, nil
+		return frontmatterDocument{body: content[start:], bodyStart: start, bodyStartLine: 1}, nil
 	}
 	frontmatterStart, lineStart, lineNumber := next, next, 2
 	for {
 		line, nextLine, lineOK := readLine(content, lineStart)
 		if !lineOK {
 			if isLikelyFrontmatterBlock(content[frontmatterStart:], false) {
-				return nil, nil, 0, false, errMissingClosingFrontmatterDelimiter
+				return frontmatterDocument{}, errMissingClosingFrontmatterDelimiter
 			}
-			return nil, content[start:], 1, false, nil
+			return frontmatterDocument{opened: true, body: content[start:], bodyStart: start, bodyStartLine: 1}, nil
 		}
 		if isFrontmatterClosingDelimiter(line) {
 			block := content[frontmatterStart:lineStart]
 			if isLikelyFrontmatterBlock(block, true) {
-				return block, content[nextLine:], lineNumber + 1, true, nil
+				return frontmatterDocument{
+					block: block, body: content[nextLine:], opened: true, present: true,
+					bodyStart: nextLine, blockStart: frontmatterStart, closeStart: lineStart, closeEnd: nextLine,
+					bodyStartLine: lineNumber + 1,
+				}, nil
 			}
-			return nil, content[start:], 1, false, nil
+			return frontmatterDocument{opened: true, body: content[start:], bodyStart: start, bodyStartLine: 1}, nil
 		}
 		if nextLine >= len(content) {
 			if isLikelyFrontmatterBlock(content[frontmatterStart:], false) {
-				return nil, nil, 0, false, errMissingClosingFrontmatterDelimiter
+				return frontmatterDocument{}, errMissingClosingFrontmatterDelimiter
 			}
-			return nil, content[start:], 1, false, nil
+			return frontmatterDocument{opened: true, body: content[start:], bodyStart: start, bodyStartLine: 1}, nil
 		}
 		lineStart, lineNumber = nextLine, lineNumber+1
 	}
+}
+
+func splitFrontmatter(content []byte) ([]byte, []byte, int, bool, error) {
+	parts, err := parseFrontmatterDocument(content)
+	if err != nil {
+		return nil, nil, 0, false, err
+	}
+	return parts.block, parts.body, parts.bodyStartLine, parts.present, nil
 }
 
 func readLine(content []byte, start int) ([]byte, int, bool) {
@@ -171,14 +256,17 @@ func readLine(content []byte, start int) ([]byte, int, bool) {
 		return nil, start, false
 	}
 	lineEnd := start
-	for lineEnd < len(content) && content[lineEnd] != '\n' {
+	for lineEnd < len(content) && content[lineEnd] != '\r' && content[lineEnd] != '\n' {
 		lineEnd++
 	}
 	next := lineEnd
 	if next < len(content) {
 		next++
+		if content[lineEnd] == '\r' && next < len(content) && content[next] == '\n' {
+			next++
+		}
 	}
-	return bytes.TrimSuffix(content[start:lineEnd], []byte{'\r'}), next, true
+	return content[start:lineEnd], next, true
 }
 
 func isFrontmatterDelimiter(line []byte) bool { return bytes.Equal(line, []byte("---")) }

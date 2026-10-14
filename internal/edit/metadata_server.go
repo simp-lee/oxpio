@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"net/http"
 
-	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/vault"
 )
 
 type sourceMetaResponse struct {
@@ -59,11 +59,7 @@ func (s *Server) serveSourceMeta(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	_, content, _, err := internalfsutil.ReadContainedRegularFile(s.vault, entry.RelPath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
+	content := append([]byte(nil), entry.RawSource...)
 	response := makeEditorMetaResponse(entry, content)
 	writeJSON(w, response)
 }
@@ -97,17 +93,13 @@ func (s *Server) serveFrontmatter(w http.ResponseWriter, r *http.Request) {
 	case request.Source != nil:
 		source = []byte(*request.Source)
 	default:
-		_, source, _, err = internalfsutil.ReadContainedRegularFile(s.vault, entry.RelPath)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
+		source = append([]byte(nil), entry.RawSource...)
 	}
 	var updated []byte
 	if request.Fields != nil {
 		updated, err = applyEditorFrontmatter(source, optionalEditorBody(request.Body), *request.Fields, entry.Kind, request.Changed)
 	} else if request.Body != nil {
-		updated, err = replaceEditorBody(source, []byte(*request.Body))
+		updated, err = replaceEditorBody(source, []byte(*request.Body), entry.RelPath)
 	} else {
 		updated = source
 	}
@@ -134,19 +126,23 @@ func optionalEditorBody(body *string) []byte {
 	return []byte(*body)
 }
 
-func replaceEditorBody(source, body []byte) ([]byte, error) {
-	document, err := parseEditorDocument(source)
+func replaceEditorBody(source, body []byte, sourcePath ...string) ([]byte, error) {
+	absent, err := vault.IsFrontmatterAbsent(source)
 	if err != nil {
 		return nil, err
 	}
-	if !document.HasBlock {
+	if absent {
 		return normalizeEditorBody(body), nil
+	}
+	document, err := parseEditorDocument(source, sourcePath...)
+	if err != nil {
+		return nil, err
 	}
 	return append(append([]byte(nil), source[:document.CloseEnd]...), normalizeEditorBody(body)...), nil
 }
 
 func makeEditorMetaResponse(entry *model.SourceCatalogEntry, content []byte) sourceMetaResponse {
-	document, err := parseEditorDocument(content)
+	document, err := parseEditorDocument(content, entry.RelPath)
 	response := sourceMetaResponse{Path: entry.RelPath, Kind: entry.Kind, Source: string(content), Body: string(document.Body)}
 	hash := sha256.Sum256(content)
 	response.SourceHash = hex.EncodeToString(hash[:])

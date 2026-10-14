@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
 )
@@ -34,7 +35,11 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	controlPath := strings.TrimPrefix(r.URL.Path, s.controlPrefix())
+	requestPath := r.URL.EscapedPath()
+	if requestPath == "" {
+		requestPath = r.URL.Path
+	}
+	controlPath := strings.TrimPrefix(requestPath, s.controlPrefix())
 	if controlPath == "preview" && r.Method == http.MethodPost {
 		s.createPreview(w, r)
 		return
@@ -203,8 +208,9 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	previewEntry := catalogEntry(built.Catalog, entry.RelPath)
-	if previewEntry == nil || previewEntry.Route == "" {
+	previewCatalog := internalapplication.NewCatalog(built.Catalog)
+	previewEntry, previewEntryErr := previewCatalog.EntryByRelPath(entry.RelPath, true)
+	if previewEntryErr != nil || previewEntry.Route == "" {
 		cleanupErr := s.discardUnpublishedPreview(nil, root)
 		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": previewFailureMessage("source has no preview route; publish its parent section or repair its frontmatter", cleanupErr)})
 		return
@@ -276,8 +282,8 @@ func (s *Server) previewOverlay(relPath string, source []byte) (map[string][]byt
 	for {
 		sectionPath := path.Join(directory, "_index.md")
 		if _, alreadyOverlaid := result[sectionPath]; !alreadyOverlaid {
-			if data, exists, err := readSource(s.vault, sectionPath); err == nil && exists {
-				result[sectionPath] = append([]byte(nil), data...)
+			if entry := s.catalogEntryByRelPath(sectionPath); entry != nil && entry.Kind == "section" {
+				result[sectionPath] = append([]byte(nil), entry.RawSource...)
 			}
 		}
 		if directory == "." {

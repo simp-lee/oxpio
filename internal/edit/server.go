@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	"github.com/simp-lee/oxpio/internal/branding"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	"github.com/simp-lee/oxpio/internal/diag"
@@ -50,7 +51,7 @@ type Server struct {
 	listenHost  string
 	vault       string
 	output      string
-	catalog     *model.SourceCatalog
+	catalog     *internalapplication.Catalog
 	coordinator *Coordinator
 	username    string
 	hash        string
@@ -132,11 +133,12 @@ func NewWithListen(vaultPath, outputPath string, port int, listenHost string, ca
 	if err != nil {
 		return nil, err
 	}
-	var catalog *model.SourceCatalog
+	var sourceCatalog *model.SourceCatalog
 	if len(catalogs) > 0 {
-		catalog = catalogs[0]
+		sourceCatalog = catalogs[0]
 	}
-	coordinator, err := NewCoordinator(resolvedVault, outputPath, catalog)
+	catalog := internalapplication.NewCatalog(sourceCatalog)
+	coordinator, err := NewCoordinator(resolvedVault, outputPath, sourceCatalog)
 	if err != nil {
 		return nil, errors.Join(err, static.Close())
 	}
@@ -232,11 +234,15 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	controlPath := s.controlPrefix()
-	if strings.HasPrefix(r.URL.Path, controlPath) {
+	requestPath := r.URL.EscapedPath()
+	if requestPath == "" {
+		requestPath = r.URL.Path
+	}
+	if strings.HasPrefix(requestPath, controlPath) {
 		s.serveControl(w, r)
 		return
 	}
-	if r.URL.Path == strings.TrimSuffix(controlPath, "/") {
+	if requestPath == strings.TrimSuffix(controlPath, "/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -250,7 +256,11 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
-	path := strings.TrimPrefix(r.URL.Path, s.controlPrefix())
+	requestPath := r.URL.EscapedPath()
+	if requestPath == "" {
+		requestPath = r.URL.Path
+	}
+	path := strings.TrimPrefix(requestPath, s.controlPrefix())
 	switch path {
 	case "login":
 		s.serveLogin(w, r)
@@ -341,13 +351,10 @@ func (s *Server) serveSources(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	catalog := s.sourceCatalog()
-	response := make([]sourceCatalogResponse, 0)
-	if catalog != nil {
-		response = make([]sourceCatalogResponse, 0, len(catalog.Entries))
-		for _, entry := range catalog.Entries {
-			response = append(response, sourceCatalogResponse{RelPath: entry.RelPath, Route: entry.Route, Title: entry.Title, Kind: entry.Kind, Type: entry.Type, Publish: entry.Publish, EffectivePublish: entry.EffectivePublish, SectionPath: entry.SectionPath, VersionID: entry.VersionID})
-		}
+	entries := s.applicationCatalog().Entries(true)
+	response := make([]sourceCatalogResponse, 0, len(entries))
+	for _, entry := range entries {
+		response = append(response, sourceCatalogResponse{RelPath: entry.RelPath, Route: entry.Route, Title: entry.Title, Kind: entry.Kind, Type: entry.Type, Publish: entry.Publish, EffectivePublish: entry.EffectivePublish, SectionPath: entry.SectionPath, VersionID: entry.VersionID})
 	}
 	writeJSON(w, map[string]any{"sources": response})
 }
@@ -378,11 +385,7 @@ func (s *Server) serveSourceRead(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	_, data, _, err := internalfsutil.ReadContainedRegularFile(s.vault, entry.RelPath)
-	if err != nil {
-		http.NotFound(w, r)
-		return
-	}
+	data := append([]byte(nil), entry.RawSource...)
 	hash := sha256.Sum256(data)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-OXPIO-Source-Hash", hex.EncodeToString(hash[:]))
@@ -588,53 +591,39 @@ func (s *Server) sourceCatalog() *model.SourceCatalog {
 	if s.coordinator != nil {
 		return s.coordinator.CatalogSnapshot()
 	}
-	return cloneCatalog(s.catalog)
+	if s.catalog != nil {
+		return s.catalog.Snapshot()
+	}
+	return nil
+}
+
+func (s *Server) applicationCatalog() *internalapplication.Catalog {
+	if s == nil {
+		return nil
+	}
+	if s.coordinator != nil {
+		return internalapplication.NewCatalog(s.coordinator.CatalogSnapshot())
+	}
+	return s.catalog
 }
 
 func (s *Server) catalogEntryByRelPath(relPath string) *model.SourceCatalogEntry {
-	catalog := s.sourceCatalog()
-	if catalog == nil || relPath == "" {
+	entry, err := s.applicationCatalog().EntryByRelPath(relPath, true)
+	if err != nil {
 		return nil
 	}
-	for index := range catalog.Entries {
-		if catalog.Entries[index].RelPath == relPath {
-			entry := catalog.Entries[index]
-			return &entry
-		}
-	}
-	return nil
+	return &entry
 }
 
 func (s *Server) catalogEntryForRequest(r *http.Request) *model.SourceCatalogEntry {
-	catalog := s.sourceCatalog()
-	if catalog == nil || r == nil {
+	if r == nil {
 		return nil
 	}
-	route := r.URL.EscapedPath()
-	base := catalog.BasePath
-	if base == "" {
-		base = "/"
+	entry, ok := s.applicationCatalog().EntryForPublicRequest(r.URL.EscapedPath())
+	if !ok {
+		return nil
 	}
-	if base != "/" {
-		baseRoot := strings.TrimSuffix(base, "/")
-		if route == baseRoot {
-			route = "/"
-		} else if strings.HasPrefix(route, base) {
-			route = strings.TrimPrefix(route, baseRoot)
-		} else {
-			return nil
-		}
-	}
-	if route == "" {
-		route = "/"
-	}
-	for index := range catalog.Entries {
-		entry := &catalog.Entries[index]
-		if entry.Route == route && entry.EffectivePublish {
-			return entry
-		}
-	}
-	return nil
+	return &entry
 }
 
 func (s *Server) serveDecoratedStatic(w http.ResponseWriter, r *http.Request, entry *model.SourceCatalogEntry) {

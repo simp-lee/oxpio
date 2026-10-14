@@ -3,6 +3,7 @@ package application
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/slug"
 )
 
 var (
@@ -20,6 +22,149 @@ var (
 	ErrInvalidSource  = errors.New("source is not valid UTF-8 Markdown")
 	ErrSourceNotFound = errors.New("source was not found")
 )
+
+// Catalog is the application-owned source mapping for one normalized site
+// plan. HTTP/editor code consumes this index instead of reconstructing source
+// identities from public URLs, slugs, or filesystem scans.
+type Catalog struct {
+	snapshot *model.SourceCatalog
+	byPath   map[string]model.SourceCatalogEntry
+	byRoute  map[string]model.SourceCatalogEntry
+}
+
+// NewCatalog creates an immutable application view over a normalized source
+// catalog. Raw source bytes and entries are copied so callers cannot mutate
+// the plan handed to another service.
+func NewCatalog(source *model.SourceCatalog) *Catalog {
+	if source == nil {
+		return nil
+	}
+	copyCatalog := cloneSourceCatalog(source)
+	catalog := &Catalog{
+		snapshot: copyCatalog,
+		byPath:   make(map[string]model.SourceCatalogEntry, len(copyCatalog.Entries)),
+		byRoute:  make(map[string]model.SourceCatalogEntry),
+	}
+	for _, entry := range copyCatalog.Entries {
+		catalog.byPath[entry.RelPath] = cloneSourceCatalogEntry(entry)
+		if entry.Route != "" && entry.EffectivePublish {
+			catalog.byRoute[entry.Route] = cloneSourceCatalogEntry(entry)
+		}
+	}
+	return catalog
+}
+
+// Snapshot returns a deep copy suitable for the coordinator or another
+// application service.
+func (catalog *Catalog) Snapshot() *model.SourceCatalog {
+	if catalog == nil {
+		return nil
+	}
+	return cloneSourceCatalog(catalog.snapshot)
+}
+
+// Entries returns entries visible to an authenticated editor scope. Public
+// callers should pass false; editor management passes true only after session
+// authorization.
+func (catalog *Catalog) Entries(includeUnpublished bool) []model.SourceCatalogEntry {
+	if catalog == nil {
+		return nil
+	}
+	entries := make([]model.SourceCatalogEntry, 0, len(catalog.byPath))
+	for _, entry := range catalog.byPath {
+		if !includeUnpublished && !entry.EffectivePublish {
+			continue
+		}
+		entries = append(entries, cloneSourceCatalogEntry(entry))
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].RelPath < entries[j].RelPath })
+	return entries
+}
+
+// EntryByRelPath resolves the exact Vault-relative source identity from the
+// normalized plan and applies the requested publication scope.
+func (catalog *Catalog) EntryByRelPath(relPath string, includeUnpublished bool) (model.SourceCatalogEntry, error) {
+	if catalog == nil {
+		return model.SourceCatalogEntry{}, ErrSourceNotFound
+	}
+	normalized, err := NormalizeSourcePath(relPath)
+	if err != nil {
+		return model.SourceCatalogEntry{}, err
+	}
+	entry, ok := catalog.byPath[normalized]
+	if !ok {
+		return model.SourceCatalogEntry{}, fmt.Errorf("%w: %q", ErrSourceNotFound, normalized)
+	}
+	if !includeUnpublished && !entry.EffectivePublish {
+		return model.SourceCatalogEntry{}, ErrHiddenSource
+	}
+	return cloneSourceCatalogEntry(entry), nil
+}
+
+// EntryForPublicRequest maps an already parsed, escaped request path through
+// the planned base path and route index. Only effective-public pages can be
+// returned, so this method is safe for authenticated page decoration.
+func (catalog *Catalog) EntryForPublicRequest(escapedPath string) (model.SourceCatalogEntry, bool) {
+	if catalog == nil {
+		return model.SourceCatalogEntry{}, false
+	}
+	route, ok := canonicalRequestRoute(escapedPath)
+	if !ok {
+		return model.SourceCatalogEntry{}, false
+	}
+	base, ok := canonicalRequestRoute(catalog.snapshot.BasePath)
+	if !ok || base == "" {
+		base = "/"
+	}
+	if base != "/" {
+		baseRoot := strings.TrimSuffix(base, "/")
+		switch {
+		case route == baseRoot:
+			route = "/"
+		case strings.HasPrefix(route, base):
+			route = strings.TrimPrefix(route, baseRoot)
+		default:
+			return model.SourceCatalogEntry{}, false
+		}
+	}
+	if route == "" {
+		route = "/"
+	}
+	entry, ok := catalog.byRoute[route]
+	if !ok {
+		return model.SourceCatalogEntry{}, false
+	}
+	return cloneSourceCatalogEntry(entry), true
+}
+
+func canonicalRequestRoute(value string) (string, bool) {
+	if value == "" {
+		value = "/"
+	}
+	for _, segment := range strings.Split(strings.TrimPrefix(value, "/"), "/") {
+		decoded, err := url.PathUnescape(segment)
+		if err != nil || strings.ContainsAny(decoded, `/\\`) || decoded == "." || decoded == ".." {
+			return "", false
+		}
+	}
+	return slug.CanonicalRoute(value), true
+}
+
+func cloneSourceCatalog(source *model.SourceCatalog) *model.SourceCatalog {
+	if source == nil {
+		return nil
+	}
+	clone := &model.SourceCatalog{BasePath: source.BasePath, Entries: make([]model.SourceCatalogEntry, 0, len(source.Entries))}
+	for _, entry := range source.Entries {
+		clone.Entries = append(clone.Entries, cloneSourceCatalogEntry(entry))
+	}
+	return clone
+}
+
+func cloneSourceCatalogEntry(entry model.SourceCatalogEntry) model.SourceCatalogEntry {
+	entry.RawSource = append([]byte(nil), entry.RawSource...)
+	return entry
+}
 
 // Snapshot is the immutable normalized source handoff shared by read-only
 // Agent queries. It contains no filesystem handles and never writes output.
@@ -87,7 +232,7 @@ func (snapshot Snapshot) Entries(includeUnpublished bool) []model.SourceCatalogE
 		if !includeUnpublished && !entry.EffectivePublish {
 			continue
 		}
-		entries = append(entries, entry)
+		entries = append(entries, cloneSourceCatalogEntry(entry))
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].RelPath < entries[j].RelPath })
 	return entries
@@ -106,7 +251,7 @@ func (snapshot Snapshot) Entry(relPath string, includeUnpublished bool) (model.S
 		if !includeUnpublished && !entry.EffectivePublish {
 			return model.SourceCatalogEntry{}, ErrHiddenSource
 		}
-		return entry, nil
+		return cloneSourceCatalogEntry(entry), nil
 	}
 	return model.SourceCatalogEntry{}, fmt.Errorf("%w: %q", ErrSourceNotFound, normalized)
 }
@@ -144,9 +289,9 @@ func (snapshot Snapshot) ListDirectory(relPath string, includeUnpublished bool) 
 		} else {
 			relPath = normalized
 		}
-		if !includeUnpublished && !snapshot.directoryAllowed(relPath) {
-			return nil, ErrHiddenSource
-		}
+	}
+	if !includeUnpublished && !snapshot.directoryAllowed(relPath) {
+		return nil, ErrHiddenSource
 	}
 	absolute := snapshot.VaultPath
 	if relPath != "." {
@@ -221,13 +366,11 @@ func (snapshot Snapshot) DirectoryVisibleForQuery(relPath string) bool {
 }
 
 func (snapshot Snapshot) directoryAllowed(relPath string) bool {
-	if relPath == "." || relPath == "" {
-		for _, entry := range snapshot.Catalog.Entries {
-			if entry.Kind == "section" && entry.SectionPath == "." {
-				return entry.EffectivePublish
-			}
-		}
-		return true
+	if relPath == "" {
+		relPath = "."
+	}
+	if !snapshot.directoryVisible(relPath) {
+		return false
 	}
 	for current := relPath; current != "." && current != ""; current = path.Dir(current) {
 		if !snapshot.directoryVisible(current) {
@@ -238,23 +381,26 @@ func (snapshot Snapshot) directoryAllowed(relPath string) bool {
 }
 
 func (snapshot Snapshot) directoryVisible(relPath string) bool {
-	prefix := relPath + "/"
-	seenHidden := false
-	seenVisible := false
-	for _, entry := range snapshot.Catalog.Entries {
-		if entry.RelPath != relPath && !strings.HasPrefix(entry.RelPath, prefix) {
-			continue
+	if snapshot.Catalog == nil {
+		return false
+	}
+	if relPath == "" {
+		relPath = "."
+	}
+	// Visibility belongs to the nearest normalized section, not to the
+	// mixture of published and draft files below it. A public section may
+	// contain drafts without making its directory itself hidden.
+	for current := relPath; ; current = path.Dir(current) {
+		for _, entry := range snapshot.Catalog.Entries {
+			if entry.Kind == "section" && entry.SectionPath == current {
+				return entry.EffectivePublish
+			}
 		}
-		if entry.EffectivePublish {
-			seenVisible = true
-		} else {
-			seenHidden = true
+		if current == "." || current == "" {
+			break
 		}
 	}
-	if !seenVisible && !seenHidden {
-		return true
-	}
-	return !seenHidden
+	return true
 }
 
 // NormalizeDirectoryPath validates a Vault-relative POSIX directory path.

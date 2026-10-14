@@ -6,7 +6,40 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/simp-lee/oxpio/internal/model"
 )
+
+func TestCatalogResolvesExactSourceAndPublicRouteIdentities(t *testing.T) {
+	raw := []byte("---\ntitle: 文章\npublish: true\ntype: doc\n---\nbody\n")
+	catalog := NewCatalog(&model.SourceCatalog{BasePath: "/docs/", Entries: []model.SourceCatalogEntry{
+		{RelPath: "guide/文章.md", Route: "/guide/%E6%96%87%E7%AB%A0/", Title: "文章", Kind: "article", Type: "doc", Publish: true, EffectivePublish: true, SectionPath: "guide", VersionID: "v2", RawSource: raw},
+		{RelPath: "guide/draft.md", Route: "", Title: "Draft", Kind: "article", Type: "doc", Publish: false, EffectivePublish: false, SectionPath: "guide", VersionID: "v2", RawSource: []byte("draft")},
+	}})
+	entry, err := catalog.EntryByRelPath("guide/文章.md", false)
+	if err != nil || entry.RelPath != "guide/文章.md" || entry.VersionID != "v2" || string(entry.RawSource) != string(raw) {
+		t.Fatalf("published source lookup = %#v, %v", entry, err)
+	}
+	entry.RawSource[0] = 'X'
+	fresh, err := catalog.EntryByRelPath("guide/文章.md", false)
+	if err != nil || string(fresh.RawSource) != string(raw) {
+		t.Fatalf("catalog source bytes were aliased: %#v, %v", fresh, err)
+	}
+	if _, err := catalog.EntryByRelPath("guide/draft.md", false); !errors.Is(err, ErrHiddenSource) {
+		t.Fatalf("hidden source lookup = %v, want ErrHiddenSource", err)
+	}
+	mapped, ok := catalog.EntryForPublicRequest("/docs/guide/%E6%96%87%E7%AB%A0/")
+	if !ok || mapped.RelPath != "guide/文章.md" {
+		t.Fatalf("base-path route mapping = %#v, %v", mapped, ok)
+	}
+	mapped, ok = catalog.EntryForPublicRequest("/docs/guide/%e6%96%87%e7%ab%a0/")
+	if !ok || mapped.RelPath != "guide/文章.md" {
+		t.Fatalf("non-canonical escaped route mapping = %#v, %v", mapped, ok)
+	}
+	if _, ok := catalog.EntryForPublicRequest("/docs/guide/draft/"); ok {
+		t.Fatal("hidden source unexpectedly mapped to a public route")
+	}
+}
 
 func TestSnapshotSharesNormalizedCatalogAndHiddenReadBoundary(t *testing.T) {
 	vault := t.TempDir()

@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	"github.com/simp-lee/oxpio/internal/model"
@@ -87,6 +88,27 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	}
 }
 
+func TestEditorControlRoutesUseEscapedSiteBasePath(t *testing.T) {
+	vault := t.TempDir()
+	output := t.TempDir()
+	hash, err := internalconfig.HashArgon2idPassword("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/docs%20x/\nnavigation: []\neditor:\n  username: admin\n  passwordHash: "+hash+"\n")
+	writeEditFile(t, output, "index.html", `<!doctype html><body data-oxpio-base-path="/docs%20x/">public</body></html>`)
+	server, err := New(vault, output, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "/docs%20x/_oxpio/login", nil)
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "Welcome back") {
+		t.Fatalf("escaped control route = %d %s", response.Code, response.Body.String())
+	}
+}
+
 func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	vault := t.TempDir()
 	output := t.TempDir()
@@ -110,7 +132,8 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
 	writeEditFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\nBody\n")
 	catalog := &model.SourceCatalog{BasePath: "/", Entries: []model.SourceCatalogEntry{
-		{RelPath: "article.md", Route: "/article/", Title: "Article", Kind: "article", Type: "doc", Publish: true, EffectivePublish: true},
+		{RelPath: "article.md", Route: "/article/", Title: "Article", Kind: "article", Type: "doc", Publish: true, EffectivePublish: true, RawSource: []byte("---\ntitle: Article\npublish: true\ntype: doc\n---\nBody\n")},
+
 		{RelPath: "draft.md", Route: "", Title: "Draft", Kind: "article", Type: "doc", Publish: false},
 	}}
 
@@ -334,7 +357,10 @@ func TestPreviewOverlayPreservesSectionCandidate(t *testing.T) {
 	vault := t.TempDir()
 	writeEditFile(t, vault, "_index.md", "root")
 	writeEditFile(t, vault, "section/_index.md", "original section")
-	server := &Server{vault: vault}
+	server := &Server{vault: vault, catalog: internalapplication.NewCatalog(&model.SourceCatalog{Entries: []model.SourceCatalogEntry{
+		{RelPath: "_index.md", Kind: "section", RawSource: []byte("root")},
+		{RelPath: "section/_index.md", Kind: "section", RawSource: []byte("original section")},
+	}})}
 	overlay, err := server.previewOverlay("section/_index.md", []byte("candidate section"))
 	if err != nil {
 		t.Fatal(err)

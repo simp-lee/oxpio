@@ -730,6 +730,10 @@ func cloneCatalog(catalog *model.SourceCatalog) *model.SourceCatalog {
 		return nil
 	}
 	clone := *catalog
-	clone.Entries = append([]model.SourceCatalogEntry(nil), catalog.Entries...)
+	clone.Entries = make([]model.SourceCatalogEntry, 0, len(catalog.Entries))
+	for _, entry := range catalog.Entries {
+		entry.RawSource = append([]byte(nil), entry.RawSource...)
+		clone.Entries = append(clone.Entries, entry)
+	}
 	return &clone
 }

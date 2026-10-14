@@ -144,11 +144,34 @@ func sourceCatalog(planned *siteplan.Result) *model.SourceCatalog {
 	if catalog.BasePath == "" {
 		catalog.BasePath = "/"
 	}
-	sections := make(map[string]*model.Section, len(planned.Plan.Sections))
-	for _, section := range planned.Plan.Sections {
-		if section != nil {
-			sections[section.SourcePath] = section
+	sections := make(map[string]*model.Section, len(planned.Plan.Sections)*2)
+	addSection := func(section *model.Section) {
+		if section == nil {
+			return
 		}
+		// Section.RelPath is the identity used by article.SectionPath;
+		// SourcePath is the exact _index.md identity exposed to editors.
+		sections[section.RelPath] = section
+		sections[section.SourcePath] = section
+	}
+	var visitSections func(*model.Section)
+	visitSections = func(section *model.Section) {
+		if section == nil {
+			return
+		}
+		addSection(section)
+		for _, child := range section.Children {
+			visitSections(child)
+		}
+	}
+	visitSections(planned.Plan.Root)
+	for _, version := range planned.Plan.Versions {
+		if version != nil {
+			visitSections(version.Root)
+		}
+	}
+	for _, section := range planned.Plan.Sections {
+		addSection(section)
 	}
 	articles := make(map[string]*model.Note, len(planned.Plan.Articles))
 	for _, article := range planned.Plan.Articles {
@@ -175,14 +198,21 @@ func sourceCatalog(planned *siteplan.Result) *model.SourceCatalog {
 		entry := model.SourceCatalogEntry{
 			RelPath: source.RelPath, Title: source.Article.Frontmatter.Title, Kind: "article", RawSource: append([]byte(nil), planned.Sources.RawSources[source.RelPath]...),
 			Type: source.Article.Frontmatter.Type, Publish: source.Publish,
-			SectionPath: path.Dir(source.RelPath),
+			SectionPath:      path.Dir(source.RelPath),
+			EffectivePublish: false,
 		}
+		// The source catalog includes drafts that the public SitePlan article
+		// collection intentionally omits. Resolve their section/version from
+		// the same normalized tree instead of inferring it from a route.
+		section := sections[path.Dir(source.RelPath)]
 		if article := articles[source.RelPath]; article != nil {
 			entry.Route, entry.SectionPath, entry.VersionID = article.Route, article.SectionPath, article.VersionID
-			entry.EffectivePublish = source.Publish
-			if section := sections[article.SectionPath]; section != nil {
-				entry.EffectivePublish = entry.EffectivePublish && section.EffectivePublish
-			}
+			section = sections[article.SectionPath]
+		}
+		if section != nil {
+			entry.SectionPath = section.RelPath
+			entry.VersionID = section.VersionID
+			entry.EffectivePublish = source.Publish && section.EffectivePublish
 		}
 		entries = append(entries, entry)
 	}

@@ -5,7 +5,10 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/vault"
 	"gopkg.in/yaml.v3"
 )
 
@@ -51,41 +54,75 @@ type editorDocument struct {
 	CloseEnd    int
 }
 
+func parseEditorDocument(content []byte, sourcePath ...string) (editorDocument, error) {
+	document := editorDocument{Body: append([]byte(nil), content...)}
+	path := "article.md"
+	if len(sourcePath) > 0 && sourcePath[0] != "" {
+		path = sourcePath[0]
+	}
+	parsed, err := vault.ParseStrictSource(path, content)
+	if err != nil {
+		return document, err
+	}
+	document.HasBlock = parsed.HasFrontmatter
+	document.BodyStart = parsed.BodyStart
+	document.CloseStart = parsed.CloseStart
+	document.CloseEnd = parsed.CloseEnd
+	document.Body = append([]byte(nil), parsed.Body...)
+	document.Frontmatter = editorFrontmatterFromSource(parsed.Source)
+	return document, nil
+}
+
+func editorFrontmatterFromSource(source model.PlannedSource) editorFrontmatter {
+	if source.Article != nil {
+		value := source.Article.Frontmatter
+		return editorFrontmatter{
+			Title: value.Title, Publish: value.Publish != nil && *value.Publish, Type: value.Type,
+			Description: value.Description, Date: editorTime(value.Date), Updated: editorTime(value.Updated),
+			Tags: append([]string(nil), value.Tags...), Aliases: append([]string(nil), value.Aliases...),
+			Slug: value.Slug, Order: cloneEditorInt(value.Order), Author: value.Author,
+			Reviewed: editorTime(value.Reviewed), Status: value.Status, Audience: value.Audience,
+			ProductVersion: value.ProductVersion, Series: value.Series, Cover: value.Cover,
+			Banner: value.Banner, BannerAlt: value.BannerAlt,
+		}
+	}
+	if source.Section != nil {
+		value := source.Section.Frontmatter
+		return editorFrontmatter{Title: value.Title, Publish: value.Publish != nil && *value.Publish, Description: value.Description, Order: cloneEditorInt(value.Order), Banner: value.Banner, BannerAlt: value.BannerAlt}
+	}
+	return editorFrontmatter{}
+}
+
+func cloneEditorInt(value *int) *int {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
+}
+
+func editorTime(value time.Time) string {
+	if value.IsZero() {
+		return ""
+	}
+	value = value.UTC()
+	if value.Hour() == 0 && value.Minute() == 0 && value.Second() == 0 && value.Nanosecond() == 0 {
+		return value.Format("2006-01-02")
+	}
+	return value.Format(time.RFC3339Nano)
+}
+
+func editorMetadataPath(kind string) string {
+	if kind == "section" {
+		return "_index.md"
+	}
+	return "article.md"
+}
+
 type editorLine struct {
 	start int
 	end   int
 	text  string
-}
-
-func parseEditorDocument(content []byte) (editorDocument, error) {
-	document := editorDocument{Body: append([]byte(nil), content...)}
-	lines := editorSourceLines(content)
-	if len(lines) == 0 {
-		return document, nil
-	}
-	first := strings.TrimPrefix(strings.TrimSuffix(lines[0].text, "\r"), "\ufeff")
-	if first != "---" {
-		return document, nil
-	}
-	for index := 1; index < len(lines); index++ {
-		line := strings.TrimSuffix(lines[index].text, "\r")
-		if line != "---" && line != "..." {
-			continue
-		}
-		document.HasBlock = true
-		document.BodyStart = lines[0].end
-		document.CloseStart = lines[index].start
-		document.CloseEnd = lines[index].end
-		document.Body = append([]byte(nil), content[document.CloseEnd:]...)
-		block := content[document.BodyStart:document.CloseStart]
-		frontmatter, err := parseEditorMapping(block)
-		if err != nil {
-			return document, err
-		}
-		document.Frontmatter = frontmatter
-		return document, nil
-	}
-	return document, fmt.Errorf("missing closing frontmatter delimiter")
 }
 
 func editorSourceLines(content []byte) []editorLine {
@@ -109,115 +146,27 @@ func editorSourceLines(content []byte) []editorLine {
 	return lines
 }
 
-func parseEditorMapping(block []byte) (editorFrontmatter, error) {
-	var document yaml.Node
-	if err := yaml.Unmarshal(block, &document); err != nil {
-		return editorFrontmatter{}, err
-	}
-	if len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
-		return editorFrontmatter{}, fmt.Errorf("frontmatter must be a YAML mapping")
-	}
-	result := editorFrontmatter{}
-	mapping := document.Content[0]
-	for index := 0; index+1 < len(mapping.Content); index += 2 {
-		key := mapping.Content[index].Value
-		value := mapping.Content[index+1]
-		switch key {
-		case "title":
-			result.Title = editorScalar(value)
-		case "publish":
-			parsed, err := strconv.ParseBool(editorScalar(value))
-			if err != nil {
-				return editorFrontmatter{}, fmt.Errorf("publish must be boolean")
-			}
-			result.Publish = parsed
-		case "type":
-			result.Type = editorScalar(value)
-		case "description":
-			result.Description = editorScalar(value)
-		case "date":
-			result.Date = editorScalar(value)
-		case "updated":
-			result.Updated = editorScalar(value)
-		case "reviewed":
-			result.Reviewed = editorScalar(value)
-		case "tags":
-			result.Tags = editorStringList(value)
-		case "aliases":
-			result.Aliases = editorStringList(value)
-		case "slug":
-			result.Slug = editorScalar(value)
-		case "order":
-			value := editorScalar(value)
-			parsed, err := strconv.Atoi(value)
-			if err != nil {
-				return editorFrontmatter{}, fmt.Errorf("order must be an integer")
-			}
-			result.Order = &parsed
-		case "author":
-			result.Author = editorScalar(value)
-		case "status":
-			result.Status = editorScalar(value)
-		case "audience":
-			result.Audience = editorScalar(value)
-		case "productVersion":
-			result.ProductVersion = editorScalar(value)
-		case "series":
-			result.Series = editorScalar(value)
-		case "cover":
-			result.Cover = editorScalar(value)
-		case "banner":
-			result.Banner = editorScalar(value)
-		case "bannerAlt":
-			result.BannerAlt = editorScalar(value)
-		}
-	}
-	return result, nil
-}
-
-func editorScalar(node *yaml.Node) string {
-	if node == nil || node.Tag == "!!null" {
-		return ""
-	}
-	return node.Value
-}
-
-func editorStringList(node *yaml.Node) []string {
-	if node == nil || node.Tag == "!!null" {
-		return nil
-	}
-	if node.Kind != yaml.SequenceNode {
-		if value := strings.TrimSpace(editorScalar(node)); value != "" {
-			return []string{value}
-		}
-		return nil
-	}
-	result := make([]string, 0, len(node.Content))
-	for _, item := range node.Content {
-		if value := strings.TrimSpace(editorScalar(item)); value != "" {
-			result = append(result, value)
-		}
-	}
-	return result
-}
-
 func applyEditorFrontmatter(content, body []byte, fields editorFrontmatter, kind string, changedFields ...[]string) ([]byte, error) {
-	document, err := parseEditorDocument(content)
+	absent, err := vault.IsFrontmatterAbsent(content)
 	if err != nil {
 		return nil, err
 	}
-	if !document.HasBlock {
+	if absent {
 		block, err := editorFrontmatterBlock(fields, kind)
 		if err != nil {
 			return nil, err
 		}
 		return append(block, normalizeEditorBody(body)...), nil
 	}
+	document, err := parseEditorDocument(content, editorMetadataPath(kind))
+	if err != nil {
+		return nil, err
+	}
 	updated := append([]byte(nil), content...)
 	if body != nil {
 		normalizedBody := normalizeEditorBody(body)
 		updated = append(append([]byte(nil), content[:document.CloseEnd]...), normalizedBody...)
-		document, err = parseEditorDocument(updated)
+		document, err = parseEditorDocument(updated, editorMetadataPath(kind))
 		if err != nil {
 			return nil, err
 		}

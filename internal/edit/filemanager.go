@@ -183,10 +183,9 @@ func decodeFileManagerRequest(r *http.Request, request *fileManagerMutationReque
 }
 
 func (s *Server) fileManagerEntries() ([]fileManagerEntryResponse, error) {
-	catalog := s.sourceCatalog()
 	sourceKinds := make(map[string]string)
-	if catalog != nil {
-		for _, entry := range catalog.Entries {
+	if catalog := s.applicationCatalog(); catalog != nil {
+		for _, entry := range catalog.Entries(true) {
 			sourceKinds[entry.RelPath] = entry.Kind
 		}
 	}
