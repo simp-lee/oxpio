@@ -96,18 +96,22 @@ func (s *Server) serveFileMarkdown(w http.ResponseWriter, r *http.Request) {
 		err     error
 	)
 	kind := strings.ToLower(strings.TrimSpace(request.Kind))
-	if kind == "section" {
+	switch kind {
+	case "section-index":
 		if path.Base(request.Path) != "_index.md" {
-			http.Error(w, "section Markdown files must be named _index.md", http.StatusBadRequest)
+			http.Error(w, "section-index Markdown files must be named _index.md", http.StatusBadRequest)
 			return
 		}
 		content, err = NewSectionSource(request.Title)
-	} else {
+	case "article":
 		if path.Base(request.Path) == "_index.md" {
-			http.Error(w, "_index.md is a section source", http.StatusBadRequest)
+			http.Error(w, "_index.md uploads require section-index kind", http.StatusBadRequest)
 			return
 		}
 		content, err = NewArticleSource(request.Title, request.Type, request.Date)
+	default:
+		http.Error(w, "kind must be article or section-index", http.StatusBadRequest)
+		return
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

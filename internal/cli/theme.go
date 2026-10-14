@@ -66,6 +66,8 @@ func newThemeInitCommand() *cobra.Command {
 			return err
 		}
 		changes := themeInitChanges(name, files)
+		impactedPages, artifacts := themeMutationSummary(vault, filepath.ToSlash(filepath.Join(".oxpio", "themes", name, "theme.yaml")))
+		artifacts["themeFiles"] = len(files)
 		if dryRun {
 			if err := workspace.CheckDryRun(vault); err != nil {
 				return err
@@ -81,7 +83,7 @@ func newThemeInitCommand() *cobra.Command {
 			if start != end {
 				return errors.New("CONCURRENT_INPUT: Vault inputs changed during dry-run")
 			}
-			return writeThemeData(cmd, map[string]any{"theme": name, "dryRun": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": 0, "artifacts": map[string]int{"themeFiles": len(files)}, "next": "theme validate then explicitly publish"})
+			return writeThemeData(cmd, map[string]any{"theme": name, "dryRun": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": impactedPages, "artifacts": artifacts, "next": "theme validate then explicitly publish"})
 		}
 		if err := workspace.WithLock(vault, func() error {
 			if err := checkTarget(); err != nil {
@@ -91,7 +93,7 @@ func newThemeInitCommand() *cobra.Command {
 		}); err != nil {
 			return err
 		}
-		return writeThemeData(cmd, map[string]any{"theme": name, "created": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": 0, "artifacts": map[string]int{"themeFiles": len(files)}, "next": "theme validate then explicitly publish"})
+		return writeThemeData(cmd, map[string]any{"theme": name, "created": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": impactedPages, "artifacts": artifacts, "next": "theme validate then explicitly publish"})
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
@@ -490,7 +492,7 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 				return fmt.Errorf("theme preview server is not an HTTP handler")
 			}
 			previewHandler := http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-				if serveThemeSample(response, request, filepath.Join(temporary, "_oxpio", "theme", "sample")) {
+				if serveThemeSample(response, request, filepath.Join(temporary, "_oxpio", "theme", "sample"), previewBaseURL) {
 					return
 				}
 				handler.ServeHTTP(response, request)
@@ -522,8 +524,14 @@ func previewBaseURLForPort(base string, port int) (string, error) {
 	return parsed.String(), nil
 }
 
-func serveThemeSample(response http.ResponseWriter, request *http.Request, root string) bool {
+func serveThemeSample(response http.ResponseWriter, request *http.Request, root, baseURL string) bool {
 	prefix := "/_oxpio/theme/sample/"
+	if parsed, err := url.Parse(baseURL); err == nil {
+		sitePath := strings.TrimRight(parsed.Path, "/")
+		if sitePath != "" && sitePath != "/" {
+			prefix = sitePath + prefix
+		}
+	}
 	if request.Method != http.MethodGet || !strings.HasPrefix(request.URL.Path, prefix) {
 		return false
 	}
@@ -814,7 +822,8 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 		if end != startFingerprint {
 			return errors.New("CONCURRENT_INPUT: Vault inputs changed during dry-run")
 		}
-		return writeThemeData(cmd, map[string]any{"dryRun": true, "changes": []any{change}, "impactedPages": 0, "artifacts": map[string]int{"themeFiles": 1}, "next": "theme validate then explicitly publish"})
+		impactedPages, artifacts := themeMutationSummary(vault, rel)
+		return writeThemeData(cmd, map[string]any{"dryRun": true, "changes": []any{change}, "impactedPages": impactedPages, "artifacts": artifacts, "next": "theme validate then explicitly publish"})
 	}
 	if err := os.MkdirAll(filepath.Dir(candidate), 0o755); err != nil {
 		return err
@@ -831,7 +840,32 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 		}
 		return writeErr
 	}
-	return writeThemeData(cmd, map[string]any{"changes": []any{change}, "path": rel, "impactedPages": 0, "artifacts": map[string]int{"themeFiles": 1}, "next": "theme validate then explicitly publish"})
+	impactedPages, artifacts := themeMutationSummary(vault, rel)
+	return writeThemeData(cmd, map[string]any{"changes": []any{change}, "path": rel, "impactedPages": impactedPages, "artifacts": artifacts, "next": "theme validate then explicitly publish"})
+}
+
+func themeMutationSummary(vault, rel string) (int, map[string]int) {
+	artifacts := map[string]int{"themeFiles": 1}
+	output := filepath.Join(vault, "public")
+	cfg, err := internalconfig.LoadForThemePreview(vault, output)
+	if err != nil || !themePathSelected(cfg.Theme, rel) {
+		return 0, artifacts
+	}
+	planned, err := internalsiteplan.BuildForOutputWithConfig(vault, output, cfg)
+	if err != nil || planned == nil || planned.Plan == nil {
+		return 0, artifacts
+	}
+	impacted := len(planned.Plan.Pages)
+	artifacts["plannedPages"] = impacted
+	return impacted, artifacts
+}
+
+func themePathSelected(selected, rel string) bool {
+	if rel == "custom.css" {
+		return true
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	return len(parts) >= 4 && parts[0] == ".oxpio" && parts[1] == "themes" && selected != internalconfig.ThemeBaseID && parts[2] == selected
 }
 
 type themeEdit struct {

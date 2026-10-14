@@ -199,7 +199,7 @@ func newMkdirCommand() *cobra.Command {
 	var vault string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "mkdir PATH", Short: "Create one Vault directory", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := internalapplication.MutateDirectory(vault, "", internalapplication.DirectoryMutationRequest{Operation: internalapplication.MutationMkdir, Path: args[0], DryRun: dryRun})
+		result, err := internalapplication.MutateDirectory(vault, "", internalapplication.DirectoryMutationRequest{Operation: internalapplication.MutationMkdir, Path: args[0], ExpectedHash: internalapplication.AbsentHash, DryRun: dryRun})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")

@@ -95,6 +95,22 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	if got, err := os.ReadFile(filepath.Join(vault, "article.md")); err != nil || !strings.Contains(string(got), "Article") {
 		t.Fatalf("unrelated source changed: %q, err=%v", got, err)
 	}
+	if _, err := coordinator.CreateFolder("left", AbsentSourceHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.CreateFolder("right", AbsentSourceHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.CreateFolder("left/empty", AbsentSourceHash); err != nil {
+		t.Fatal(err)
+	}
+	leftState, err := inspectFileManagerState(vault, "left/empty")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.RenamePath("left/empty", "right/moved", leftState.hash); err == nil || !strings.Contains(err.Error(), "same parent") {
+		t.Fatalf("cross-parent directory rename error = %v", err)
+	}
 	if _, err := coordinator.CreateFolder("empty", AbsentSourceHash); err != nil {
 		t.Fatal(err)
 	}
@@ -198,6 +214,9 @@ func TestUploadFileUsesExistingFolderAndAbsentCAS(t *testing.T) {
 	}
 	if _, err := coordinator.UploadFile("docs/invalid.md", AbsentSourceHash, []byte{0xff}); err == nil {
 		t.Fatal("invalid UTF-8 Markdown upload succeeded")
+	}
+	if _, err := coordinator.UploadFile("docs/nul.md", AbsentSourceHash, []byte("---\ntitle: NUL\npublish: false\ntype: doc\n---\nNUL\x00\n")); err == nil {
+		t.Fatal("NUL Markdown upload succeeded")
 	}
 }
 

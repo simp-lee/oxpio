@@ -80,6 +80,8 @@ func mutateUploadLocked(boundary internalfsutil.VaultOutputBoundary, request Upl
 	}
 	if request.Kind == UploadArticle || request.Kind == UploadSectionIndex {
 		name = normalizeMarkdownUploadName(name)
+	} else {
+		name = normalizeAttachmentUploadName(name)
 	}
 	if request.Kind == UploadSectionIndex && name != "_index.md" {
 		return MutationResult{}, errors.New("section-index uploads must be named _index.md")
@@ -234,7 +236,7 @@ func normalizeUploadDirectory(value string) (string, error) {
 	}
 	if normalized != "." {
 		for _, segment := range strings.Split(normalized, "/") {
-			if segment == "" || segment == "." || segment == ".." || strings.EqualFold(segment, ".git") || strings.EqualFold(segment, "node_modules") {
+			if uploadReservedSegment(segment) {
 				return "", errors.New("upload directory contains a reserved segment")
 			}
 		}
@@ -243,10 +245,19 @@ func normalizeUploadDirectory(value string) (string, error) {
 }
 
 func normalizeUploadName(value string) (string, error) {
-	if value == "" || value == "." || value == ".." || strings.ContainsAny(value, `/\\`) || strings.ContainsRune(value, 0) || path.Clean(value) != value || !internalfsutil.IsPortableSitePath(value) {
+	if value == "" || value == "." || value == ".." || strings.ContainsAny(value, `/\\`) || strings.ContainsRune(value, 0) || path.Clean(value) != value || !internalfsutil.IsPortableSitePath(value) || uploadReservedSegment(value) {
 		return "", errors.New("upload name must be one safe path segment")
 	}
 	return value, nil
+}
+
+func uploadReservedSegment(value string) bool {
+	switch strings.ToLower(value) {
+	case ".oxpio", ".obsidian", ".git", "node_modules", "oxpio.yaml":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateUploadTarget(boundary internalfsutil.VaultOutputBoundary, directory, target string) error {
@@ -321,6 +332,16 @@ func normalizeMarkdownUploadName(name string) string {
 		return strings.TrimSuffix(name, ext) + ".md"
 	}
 	return name
+}
+
+func normalizeAttachmentUploadName(name string) string {
+	ext := path.Ext(name)
+	switch strings.ToLower(ext) {
+	case ".png", ".jpg", ".jpeg", ".webp", ".svg":
+		return strings.TrimSuffix(name, ext) + strings.ToLower(ext)
+	default:
+		return name
+	}
 }
 
 // filepathJoin keeps the upload implementation's paths rooted at the already

@@ -707,6 +707,9 @@ func FingerprintWithOverlay(vault, output string, overlay map[string][]byte, del
 // directory. It is shared by journals and source/config mutation adapters.
 func AtomicWriteFile(name string, data []byte, mode os.FileMode) error {
 	parent := filepath.Dir(name)
+	if err := internalfsutil.EnsureNoSymlinkComponents(parent); err != nil {
+		return fmt.Errorf("atomic file parent contains a symbolic link: %w", err)
+	}
 	info, err := os.Lstat(parent)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("atomic file parent is not a regular directory: %w", err)
@@ -743,6 +746,9 @@ func AtomicWriteFile(name string, data []byte, mode os.FileMode) error {
 // final no-replace rename is atomic on supported local filesystems.
 func AtomicCreateFile(name string, data []byte, mode os.FileMode) error {
 	parent := filepath.Dir(name)
+	if err := internalfsutil.EnsureNoSymlinkComponents(parent); err != nil {
+		return fmt.Errorf("atomic file parent contains a symbolic link: %w", err)
+	}
 	info, err := os.Lstat(parent)
 	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("atomic file parent is not a regular directory: %w", err)

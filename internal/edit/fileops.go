@@ -1,6 +1,7 @@
 package edit
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -15,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	internalpublish "github.com/simp-lee/oxpio/internal/publish"
 	"github.com/simp-lee/oxpio/internal/workspace"
@@ -119,8 +121,8 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 			if len(mutation.content) > 1<<20 {
 				return TransactionResult{}, fmt.Errorf("markdown upload exceeds 1 MiB")
 			}
-			if !utf8.Valid(mutation.content) {
-				return TransactionResult{}, fmt.Errorf("markdown upload %q must contain valid UTF-8", mutation.path)
+			if !utf8.Valid(mutation.content) || bytes.IndexByte(mutation.content, 0) >= 0 {
+				return TransactionResult{}, fmt.Errorf("markdown upload %q must contain valid UTF-8 without NUL bytes", mutation.path)
 			}
 			if err := validateManagedMarkdownPath(mutation.path); err != nil {
 				return TransactionResult{}, err
@@ -135,8 +137,16 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	if err := validateManagedBoundary(coordinator.vault, coordinator.output, mutation.path); err != nil {
 		return TransactionResult{}, err
 	}
+	if mutation.operation == fileMutationFolder {
+		if err := validateManagedDirectoryTarget(coordinator.vault, coordinator.output, mutation.path); err != nil {
+			return TransactionResult{}, err
+		}
+	}
 	if mutation.operation == fileMutationRename {
 		if err := validateManagedBoundary(coordinator.vault, coordinator.output, mutation.destination); err != nil {
+			return TransactionResult{}, err
+		}
+		if err := validateManagedDirectoryTarget(coordinator.vault, coordinator.output, mutation.destination); err != nil {
 			return TransactionResult{}, err
 		}
 	}
@@ -151,6 +161,9 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 
 	var destinationState fileManagerState
 	if mutation.operation == fileMutationRename {
+		if current.isDir && path.Dir(mutation.path) != path.Dir(mutation.destination) {
+			return TransactionResult{}, fmt.Errorf("directory rename requires source and destination in the same parent")
+		}
 		if current.isDir && (mutation.destination == mutation.path || strings.HasPrefix(mutation.destination, mutation.path+"/")) {
 			return TransactionResult{}, fmt.Errorf("cannot move a directory inside itself")
 		}
@@ -635,6 +648,10 @@ func copyFileManagerTree(source, destination, excludedPath string) error {
 	if excludedPath != "" {
 		excludedPath = filepath.Clean(excludedPath)
 	}
+	config, err := internalconfig.LoadForThemePreview(source, excludedPath)
+	if err != nil {
+		return err
+	}
 	return filepath.WalkDir(source, func(current string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
@@ -648,6 +665,12 @@ func copyFileManagerTree(source, destination, excludedPath string) error {
 		}
 		if excludedPath != "" && isSameOrChildPath(current, excludedPath) {
 			if filepath.Clean(current) == excludedPath && entry.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
+		}
+		if skipCandidateManagement(rel, config.Theme) {
+			if entry.IsDir() {
 				return fs.SkipDir
 			}
 			return nil
@@ -676,6 +699,23 @@ func copyFileManagerTree(source, destination, excludedPath string) error {
 		}
 		return copyFileManagerFile(current, target, info.Mode().Perm())
 	})
+}
+
+func skipCandidateManagement(rel, selectedTheme string) bool {
+	if rel == ".obsidian" || strings.HasPrefix(rel, ".obsidian/") {
+		return true
+	}
+	if rel == ".oxpio" {
+		return false
+	}
+	if rel == ".oxpio/themes" {
+		return selectedTheme == internalconfig.ThemeBaseID
+	}
+	if strings.HasPrefix(rel, ".oxpio/themes/") {
+		parts := strings.Split(rel, "/")
+		return selectedTheme == internalconfig.ThemeBaseID || len(parts) < 3 || parts[2] != selectedTheme
+	}
+	return strings.HasPrefix(rel, ".oxpio/")
 }
 
 func copyFileManagerFile(source, destination string, mode os.FileMode) error {
@@ -756,6 +796,9 @@ func restoreFileManagerBackup(backup, filename string) error {
 
 func createFileNoReplace(filename string, content []byte) error {
 	parent := filepath.Dir(filename)
+	if err := internalfsutil.EnsureNoSymlinkComponents(parent); err != nil {
+		return fmt.Errorf("file parent contains a symbolic link: %w", err)
+	}
 	temporary, err := os.CreateTemp(parent, ".oxpio-file-*")
 	if err != nil {
 		return fmt.Errorf("create file transaction: %w", err)
@@ -951,6 +994,24 @@ func validateManagedBoundary(vault, output, relPath string) error {
 	candidate := filepath.Join(vault, filepath.FromSlash(relPath))
 	if isSameOrChildPath(candidate, output) {
 		return fmt.Errorf("path %q is inside the generated output", relPath)
+	}
+	return nil
+}
+
+func validateManagedDirectoryTarget(vault, output, relPath string) error {
+	if err := validateManagedBoundary(vault, output, relPath); err != nil {
+		return err
+	}
+	if strings.EqualFold(relPath, internalconfig.Filename) || strings.EqualFold(relPath, internalconfig.CustomCSSFilename) {
+		return fmt.Errorf("path %q is reserved", relPath)
+	}
+	config, err := internalconfig.LoadForThemePreview(vault, output)
+	if err != nil {
+		return err
+	}
+	attachment := filepath.ToSlash(config.AttachmentDirectory)
+	if attachment != "" && (relPath == attachment || strings.HasPrefix(relPath, attachment+"/")) {
+		return fmt.Errorf("path %q is inside attachments.directory", relPath)
 	}
 	return nil
 }

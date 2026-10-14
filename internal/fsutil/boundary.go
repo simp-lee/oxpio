@@ -288,6 +288,12 @@ func rebasePhysicalDescendant(root string, candidate string) (string, bool) {
 	}
 }
 
+// EnsureNoSymlinkComponents rejects symbolic-link path components without
+// following them. Callers use it immediately before filesystem mutation.
+func EnsureNoSymlinkComponents(candidate string) error {
+	return rejectSymlinkComponents(candidate)
+}
+
 func rejectSymlinkComponents(candidate string) error {
 	current := filepath.Clean(candidate)
 	for {
