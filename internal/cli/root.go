@@ -236,7 +236,8 @@ func (w *streamingServiceJSONWriter) Write(p []byte) (int, error) {
 	if !json.Valid(trimmed) {
 		return 0, fmt.Errorf("service startup result is not JSON")
 	}
-	if err := internalagent.Write(w.output, internalagent.Success(w.command, trimmed)); err != nil {
+	data, changes := splitChangesData(trimmed)
+	if err := internalagent.Write(w.output, internalagent.SuccessWithDiagnosticsAndChanges(w.command, data, successWarnings(data), changes)); err != nil {
 		return 0, err
 	}
 	w.sent = true
@@ -262,6 +263,11 @@ func executeStreamingServiceJSON(effectiveArgs, originalArgs []string, root *cob
 	err := root.Execute()
 	if writer.sent {
 		if err != nil {
+			var warning *postCommitWarningError
+			if errors.As(err, &warning) {
+				_, _ = fmt.Fprintln(stderr, "POST_COMMIT_WARNING: "+sanitizeCLIError(warning.warning, originalArgs))
+				return nil
+			}
 			_, _ = fmt.Fprintln(stderr, sanitizeCLIError(err, originalArgs))
 			return silentError{err: err, exitCode: classifyCLIError(err)}
 		}

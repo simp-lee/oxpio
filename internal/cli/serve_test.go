@@ -1211,6 +1211,98 @@ func TestStartServeWatchLoopRebuildsForAttachmentsAndVaultCustomCSS(t *testing.T
 	}
 }
 
+func TestServeWatchWhitelistIncludesNormalizedSelectedThemeAndAttachments(t *testing.T) {
+	vaultPath := t.TempDir()
+	outputPath := filepath.Join(vaultPath, "public")
+	themePath := filepath.Join(vaultPath, ".oxpio", "themes", "selected", "theme.css")
+	attachmentPath := filepath.Join(vaultPath, "files", "manual.pdf")
+	for _, filePath := range []string{themePath, attachmentPath} {
+		if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filePath, []byte("initial"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.MkdirAll(outputPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeCLIConfig(t, vaultPath)
+	configPath := filepath.Join(vaultPath, defaultConfigFilename)
+	config := "title: Garden\nbaseURL: https://example.test/\nnavigation: []\ntheme: selected # inline comment\nattachments:\n  directory: files\n"
+	if err := os.WriteFile(configPath, []byte(config), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	inputs := fixedServeWatchInputsForOutput(vaultPath, outputPath)
+	contains := func(want string) bool {
+		for _, input := range inputs {
+			if filepath.Clean(input) == filepath.Clean(want) {
+				return true
+			}
+		}
+		return false
+	}
+	if !contains(filepath.Join(vaultPath, ".oxpio", "themes", "selected")) {
+		t.Fatalf("fixed watch inputs omit selected theme: %#v", inputs)
+	}
+	if !contains(filepath.Join(vaultPath, "files")) {
+		t.Fatalf("fixed watch inputs omit declared attachments directory: %#v", inputs)
+	}
+
+	watcher := newFakeFileWatcher()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rebuilds := make(chan struct{}, 4)
+	if err := startServeWatchLoop(ctx, serveWatchLoop{
+		watcher:    watcher,
+		vaultPath:  vaultPath,
+		outputPath: outputPath,
+		configPath: configPath,
+		debounce:   15 * time.Millisecond,
+		rebuild: func() error {
+			rebuilds <- struct{}{}
+			return nil
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if !watcher.isActiveForPath(themePath) || !watcher.isActiveForPath(attachmentPath) {
+		t.Fatal("selected theme or attachment directory was not registered")
+	}
+	watcher.send(fsnotify.Event{Name: themePath, Op: fsnotify.Write})
+	waitForServeWatchSignal(t, rebuilds, "selected theme rebuild")
+	watcher.send(fsnotify.Event{Name: attachmentPath, Op: fsnotify.Write})
+	waitForServeWatchSignal(t, rebuilds, "declared attachment rebuild")
+
+	unselected := filepath.Join(vaultPath, ".oxpio", "themes", "other", "theme.css")
+	if err := os.MkdirAll(filepath.Dir(unselected), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(unselected, []byte("other"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	watcher.send(fsnotify.Event{Name: unselected, Op: fsnotify.Write})
+	select {
+	case <-rebuilds:
+		t.Fatal("unselected theme write triggered rebuild")
+	case <-time.After(40 * time.Millisecond):
+	}
+}
+
+func TestServeWatchFallbackRejectsObsidianAttachmentPath(t *testing.T) {
+	vaultPath := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "public")
+	if err := os.WriteFile(filepath.Join(vaultPath, defaultConfigFilename), []byte("title: Broken\nbaseURL: https://example.test/\nnavigation: []\nunknown: true\nattachments:\n  directory: .obsidian\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range fixedServeWatchInputsForOutput(vaultPath, outputPath) {
+		if filepath.Clean(input) == filepath.Join(vaultPath, ".obsidian") || strings.Contains(filepath.Clean(input), string(filepath.Separator)+".obsidian"+string(filepath.Separator)) {
+			t.Fatalf("fallback watch inputs include .obsidian: %#v", input)
+		}
+	}
+}
+
 func TestStartServeWatchLoopReportsWatcherCloseErrors(t *testing.T) {
 	vaultPath := t.TempDir()
 	configPath := filepath.Join(vaultPath, defaultConfigFilename)
@@ -1353,6 +1445,18 @@ func (w *fakeFileWatcher) Errors() <-chan error {
 
 func (w *fakeFileWatcher) send(event fsnotify.Event) {
 	w.events <- event
+}
+
+func (w *fakeFileWatcher) isActiveForPath(path string) bool {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	cleanPath := filepath.Clean(path)
+	for watched := range w.active {
+		if cleanPath == watched || pathWithinRoot(watched, cleanPath) {
+			return true
+		}
+	}
+	return false
 }
 
 func (w *fakeFileWatcher) setRemoveErr(path string, err error) {

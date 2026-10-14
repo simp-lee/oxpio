@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -327,6 +328,184 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 		t.Fatalf("logout with csrf status = %d", response.StatusCode)
 	}
 	_ = response.Body.Close()
+}
+
+func TestPreviewOverlayPreservesSectionCandidate(t *testing.T) {
+	vault := t.TempDir()
+	writeEditFile(t, vault, "_index.md", "root")
+	writeEditFile(t, vault, "section/_index.md", "original section")
+	server := &Server{vault: vault}
+	overlay, err := server.previewOverlay("section/_index.md", []byte("candidate section"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(overlay["section/_index.md"]) != "candidate section" {
+		t.Fatalf("section overlay = %q, want candidate", overlay["section/_index.md"])
+	}
+	if string(overlay["_index.md"]) != "root" {
+		t.Fatalf("root overlay = %q, want original root", overlay["_index.md"])
+	}
+}
+
+func TestEditorPreviewPostUsesAuthenticatedCandidateOverlay(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	hash, err := internalconfig.HashArgon2idPassword("secret")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\neditor:\n  username: admin\n  passwordHash: "+hash+"\n")
+	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeEditFile(t, vault, "article.md", original)
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{Strict: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := New(vault, output, 0, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = server.Close() }()
+	ts := httptest.NewServer(server)
+	defer ts.Close()
+	client, err := cookiejar.New(nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	httpClient := ts.Client()
+	httpClient.Jar = client
+	candidate := strings.Replace(original, "Original", "Preview only", 1)
+	previewBody := `{"path":"article.md","source":` + strconv.Quote(candidate) + `}`
+
+	anonymousRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/_oxpio/preview", strings.NewReader(previewBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	anonymousRequest.Header.Set("Origin", ts.URL)
+	anonymousRequest.Header.Set("Content-Type", "application/json")
+	anonymousResponse, err := httpClient.Do(anonymousRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if anonymousResponse.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("anonymous preview status = %d, want %d", anonymousResponse.StatusCode, http.StatusUnauthorized)
+	}
+	_ = anonymousResponse.Body.Close()
+
+	loginRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/_oxpio/login", strings.NewReader("username=admin&password=secret"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRequest.Header.Set("Origin", ts.URL)
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginResponse, err := httpClient.Do(loginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loginResponse.StatusCode != http.StatusOK {
+		t.Fatalf("login status = %d", loginResponse.StatusCode)
+	}
+	_ = loginResponse.Body.Close()
+
+	sessionResponse, err := httpClient.Get(ts.URL + "/_oxpio/session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var sessionData struct {
+		CSRF string `json:"csrf"`
+	}
+	if err := json.NewDecoder(sessionResponse.Body).Decode(&sessionData); err != nil {
+		_ = sessionResponse.Body.Close()
+		t.Fatal(err)
+	}
+	_ = sessionResponse.Body.Close()
+	if sessionData.CSRF == "" {
+		t.Fatal("session returned no CSRF token")
+	}
+	for _, invalidBody := range []string{
+		`{"path":"article.md","path":"article.md","source":"candidate"}`,
+		`{"path":"article.md","source":null}`,
+		`{"path":"article.md","source":"candidate","extra":true}`,
+	} {
+		invalidRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/_oxpio/preview", strings.NewReader(invalidBody))
+		if err != nil {
+			t.Fatal(err)
+		}
+		invalidRequest.Header.Set("Origin", ts.URL)
+		invalidRequest.Header.Set(csrfHeaderName, sessionData.CSRF)
+		invalidRequest.Header.Set("Content-Type", "application/json")
+		invalidResponse, err := httpClient.Do(invalidRequest)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if invalidResponse.StatusCode != http.StatusBadRequest {
+			t.Fatalf("invalid preview status = %d for %s", invalidResponse.StatusCode, invalidBody)
+		}
+		_ = invalidResponse.Body.Close()
+	}
+
+	missingCSRF, err := http.NewRequest(http.MethodPost, ts.URL+"/_oxpio/preview", strings.NewReader(previewBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	missingCSRF.Header.Set("Origin", ts.URL)
+	missingCSRF.Header.Set("Content-Type", "application/json")
+	missingResponse, err := httpClient.Do(missingCSRF)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("missing CSRF preview status = %d, want %d", missingResponse.StatusCode, http.StatusForbidden)
+	}
+	_ = missingResponse.Body.Close()
+
+	request, err := http.NewRequest(http.MethodPost, ts.URL+"/_oxpio/preview", strings.NewReader(previewBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Origin", ts.URL)
+	request.Header.Set(csrfHeaderName, sessionData.CSRF)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := httpClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusOK || response.Header.Get("Cache-Control") != "no-store" {
+		body, _ := io.ReadAll(response.Body)
+		_ = response.Body.Close()
+		t.Fatalf("preview response = %d %s", response.StatusCode, body)
+	}
+	var preview struct {
+		ContentURL string `json:"contentURL"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&preview); err != nil {
+		_ = response.Body.Close()
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if preview.ContentURL == "" {
+		t.Fatal("preview response returned no contentURL")
+	}
+	if got, err := os.ReadFile(filepath.Join(vault, "article.md")); err != nil || string(got) != original {
+		t.Fatalf("preview changed source = %q, err=%v", got, err)
+	}
+	published, err := os.ReadFile(filepath.Join(output, "article", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(published), "Preview only") {
+		t.Fatal("preview candidate changed formal output")
+	}
+	contentResponse, err := httpClient.Get(ts.URL + preview.ContentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, _ := io.ReadAll(contentResponse.Body)
+	_ = contentResponse.Body.Close()
+	if contentResponse.StatusCode != http.StatusOK || !strings.Contains(string(content), "Preview only") || contentResponse.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("preview content = %d %s", contentResponse.StatusCode, content)
+	}
 }
 
 func sourceHashForTest(data []byte) string {

@@ -1,9 +1,11 @@
 package edit
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -152,6 +154,18 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid preview request", http.StatusBadRequest)
 		return
 	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil || fields == nil || len(fields) != 2 {
+		http.Error(w, "invalid preview request", http.StatusBadRequest)
+		return
+	}
+	for _, name := range []string{"path", "source"} {
+		value, ok := fields[name]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) || len(bytes.TrimSpace(value)) == 0 || bytes.TrimSpace(value)[0] != '"' {
+			http.Error(w, "invalid preview request", http.StatusBadRequest)
+			return
+		}
+	}
 	entry := s.catalogEntryByRelPath(request.Path)
 	if entry == nil || (entry.Kind != "article" && entry.Kind != "section") {
 		http.NotFound(w, r)
@@ -261,8 +275,10 @@ func (s *Server) previewOverlay(relPath string, source []byte) (map[string][]byt
 	directory := path.Dir(strings.ReplaceAll(relPath, "\\", "/"))
 	for {
 		sectionPath := path.Join(directory, "_index.md")
-		if data, exists, err := readSource(s.vault, sectionPath); err == nil && exists {
-			result[sectionPath] = append([]byte(nil), data...)
+		if _, alreadyOverlaid := result[sectionPath]; !alreadyOverlaid {
+			if data, exists, err := readSource(s.vault, sectionPath); err == nil && exists {
+				result[sectionPath] = append([]byte(nil), data...)
+			}
 		}
 		if directory == "." {
 			break
@@ -387,5 +403,77 @@ func rewritePreviewHTML(body []byte, prefix string) []byte {
 // jsonUnmarshal is kept local to the edit package so preview requests share
 // the same bounded source-body handling as source mutations.
 func jsonUnmarshal(data []byte, value any) error {
-	return json.Unmarshal(data, value)
+	if err := rejectDuplicateJSONKeys(data); err != nil {
+		return err
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(value); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("invalid JSON: trailing data")
+		}
+		return err
+	}
+	return nil
+}
+
+func rejectDuplicateJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var walk func() error
+	walk = func() error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		switch value := token.(type) {
+		case json.Delim:
+			switch value {
+			case '{':
+				seen := map[string]struct{}{}
+				for decoder.More() {
+					keyToken, keyErr := decoder.Token()
+					if keyErr != nil {
+						return keyErr
+					}
+					key, ok := keyToken.(string)
+					if !ok {
+						return errors.New("invalid JSON object key")
+					}
+					if _, exists := seen[key]; exists {
+						return fmt.Errorf("duplicate JSON key %q", key)
+					}
+					seen[key] = struct{}{}
+					if err := walk(); err != nil {
+						return err
+					}
+				}
+				_, err = decoder.Token()
+				return err
+			case '[':
+				for decoder.More() {
+					if err := walk(); err != nil {
+						return err
+					}
+				}
+				_, err = decoder.Token()
+				return err
+			}
+		}
+		return nil
+	}
+	if err := walk(); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return errors.New("invalid JSON: trailing data")
+		}
+		return err
+	}
+	return nil
 }

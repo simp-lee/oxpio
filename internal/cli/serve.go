@@ -20,6 +20,7 @@ import (
 	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	"github.com/simp-lee/oxpio/internal/workspace"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 const defaultWatchDebounce = 350 * time.Millisecond
@@ -187,18 +188,22 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 }
 
 func listenAndAnnounce(cmd *cobra.Command, srv previewServer, host string, port int) error {
+	return listenAndAnnounceWithData(cmd, srv, host, port, nil)
+}
+
+func listenAndAnnounceWithData(cmd *cobra.Command, srv previewServer, host string, port int, extra map[string]any) error {
 	if readyServer, ok := srv.(interface{ ListenAndServeWithReady(func() error) error }); ok {
 		return readyServer.ListenAndServeWithReady(func() error {
-			return announceService(cmd, host, port)
+			return announceServiceWithData(cmd, host, port, extra)
 		})
 	}
-	if err := announceService(cmd, host, port); err != nil {
+	if err := announceServiceWithData(cmd, host, port, extra); err != nil {
 		return err
 	}
 	return srv.ListenAndServe()
 }
 
-func announceService(cmd *cobra.Command, host string, port int) error {
+func announceServiceWithData(cmd *cobra.Command, host string, port int, extra map[string]any) error {
 	if strings.TrimSpace(host) == "" {
 		host = "127.0.0.1"
 	}
@@ -207,17 +212,25 @@ func announceService(cmd *cobra.Command, host string, port int) error {
 	}
 	address := fmt.Sprintf("http://%s:%d", host, port)
 	if formatOf(cmd) == "json" {
-		data, err := json.Marshal(struct {
-			Address string `json:"address"`
-		}{Address: address})
+		data := map[string]any{"address": address}
+		for key, value := range extra {
+			data[key] = value
+		}
+		encoded, err := json.Marshal(data)
 		if err != nil {
 			return err
 		}
-		_, err = cmd.OutOrStdout().Write(append(data, '\n'))
+		_, err = cmd.OutOrStdout().Write(append(encoded, '\n'))
 		return err
 	}
-	_, err := fmt.Fprintln(cmd.OutOrStdout(), address)
-	return err
+	if _, err := fmt.Fprintln(cmd.OutOrStdout(), address); err != nil {
+		return err
+	}
+	if warning, ok := extra["warning"].(string); ok && warning != "" {
+		_, err := fmt.Fprintf(cmd.ErrOrStderr(), "POST_COMMIT_WARNING: %s\n", warning)
+		return err
+	}
+	return nil
 }
 
 func newFSNotifyWatcher() (fileWatcher, error) {
@@ -984,31 +997,77 @@ func fixedServeWatchInputs(vaultPath string) []string {
 
 func fixedServeWatchInputsForOutput(vaultPath, outputPath string) []string {
 	inputs := fixedServeWatchInputs(vaultPath)
-	themeID := configuredWatchThemeID(vaultPath)
-	if themeID == "" {
-		cfg, err := internalconfig.LoadForBuildWithOutput(vaultPath, outputPath)
-		if err != nil {
-			cfg, err = internalconfig.LoadForThemePreview(vaultPath, outputPath)
-		}
-		if err == nil {
-			themeID = cfg.Theme
-		}
+	cfg, err := internalconfig.LoadForBuildWithOutput(vaultPath, outputPath)
+	if err != nil {
+		cfg, err = internalconfig.LoadForThemePreview(vaultPath, outputPath)
 	}
-	if themeID != "" && themeID != internaltheme.BaseID {
+	if err == nil {
+		if cfg.Theme != "" && cfg.Theme != internaltheme.BaseID {
+			inputs = append(inputs, filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath), cfg.Theme))
+		}
+		if cfg.AttachmentDirectory != "" {
+			inputs = append(inputs, filepath.Join(vaultPath, filepath.FromSlash(cfg.AttachmentDirectory)))
+		}
+		return inputs
+	}
+	// A syntactically valid but incomplete configuration can still identify the
+	// selected theme or attachment root while the initial strict publish is
+	// failing. Parse only those scalar controls for recovery watches; the next
+	// publish remains authoritative for all configuration validation.
+	if themeID := configuredWatchThemeID(vaultPath); validFallbackWatchPath(themeID) && themeID != internaltheme.BaseID && !strings.Contains(themeID, "/") {
 		inputs = append(inputs, filepath.Join(vaultPath, filepath.FromSlash(internalconfig.ThemeRootRelPath), themeID))
+	}
+	if attachmentDirectory := configuredWatchAttachmentDirectory(vaultPath); validFallbackWatchPath(attachmentDirectory) {
+		inputs = append(inputs, filepath.Join(vaultPath, filepath.FromSlash(attachmentDirectory)))
 	}
 	return inputs
 }
 
 func configuredWatchThemeID(vaultPath string) string {
+	return configuredWatchScalar(vaultPath, "theme")
+}
+
+func configuredWatchAttachmentDirectory(vaultPath string) string {
+	return configuredWatchScalar(vaultPath, "attachments.directory")
+}
+
+func validFallbackWatchPath(value string) bool {
+	value = strings.TrimSpace(value)
+	if value == "" || filepath.IsAbs(value) || strings.ContainsAny(value, `\\:`) {
+		return false
+	}
+	for _, part := range strings.Split(value, "/") {
+		if part == "" || part == "." || part == ".." || part == ".obsidian" || part == ".oxpio" || part == "node_modules" || strings.HasPrefix(part, ".oxpio-") {
+			return false
+		}
+	}
+	return true
+}
+
+func configuredWatchScalar(vaultPath, wanted string) string {
 	data, err := os.ReadFile(filepath.Join(vaultPath, defaultConfigFilename))
 	if err != nil {
 		return ""
 	}
-	for _, line := range strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n") {
-		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "theme:") {
-			return strings.Trim(strings.TrimSpace(strings.TrimPrefix(trimmed, "theme:")), "\"'")
+	var document yaml.Node
+	if err := yaml.Unmarshal(data, &document); err != nil || len(document.Content) != 1 {
+		return ""
+	}
+	root := document.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return ""
+	}
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		key, value := root.Content[index], root.Content[index+1]
+		if key.Value == wanted && value.Kind == yaml.ScalarNode && value.Tag == "!!str" {
+			return strings.TrimSpace(value.Value)
+		}
+		if wanted == "attachments.directory" && key.Value == "attachments" && value.Kind == yaml.MappingNode {
+			for nested := 0; nested+1 < len(value.Content); nested += 2 {
+				if value.Content[nested].Value == "directory" && value.Content[nested+1].Kind == yaml.ScalarNode && value.Content[nested+1].Tag == "!!str" {
+					return strings.TrimSpace(value.Content[nested+1].Value)
+				}
+			}
 		}
 	}
 	return ""
@@ -1061,6 +1120,18 @@ func plannedWatchFiles(vaultPath, outputPath string) map[string]struct{} {
 	plan := result.Plan.Plan
 	add(plan.Config.CustomCSS)
 	add(plan.Config.DefaultImg)
+	if plan.Config.AttachmentDirectory != "" {
+		attachmentRoot := filepath.Join(vaultPath, filepath.FromSlash(plan.Config.AttachmentDirectory))
+		_ = filepath.WalkDir(attachmentRoot, func(current string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			if entry != nil && entry.Type().IsRegular() {
+				add(current)
+			}
+			return nil
+		})
+	}
 	for _, section := range plan.Sections {
 		if section != nil {
 			add(section.Banner)
