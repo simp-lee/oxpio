@@ -26,6 +26,8 @@ type DirectoryMutationRequest struct {
 	DryRun       bool
 }
 
+var renameDirectoryNoReplace = internalfsutil.RenameNoReplace
+
 func MutateDirectory(vaultPath, outputPath string, request DirectoryMutationRequest) (MutationResult, error) {
 	boundary, err := mutationBoundary(vaultPath, outputPath)
 	if err != nil {
@@ -42,6 +44,9 @@ func MutateDirectory(vaultPath, outputPath string, request DirectoryMutationRequ
 			return MutationResult{}, err
 		}
 		return mutateDirectoryLocked(boundary, request)
+	}
+	if err := recoverPendingApplicationJournal(boundary.VaultPath); err != nil {
+		return MutationResult{}, err
 	}
 	lease, err := workspace.Acquire(boundary.VaultPath)
 	if err != nil {
@@ -112,11 +117,14 @@ func mutateDirectoryLocked(boundary internalfsutil.VaultOutputBoundary, request 
 		if err := verifyDirectoryMutationSnapshot(snapshot); err != nil {
 			return MutationResult{}, err
 		}
-		if err := os.Mkdir(sourceAbsolute, 0o755); err != nil {
-			return MutationResult{}, err
+		completedPaths := []workspace.CompletedPath{{Path: sourceAbsolute, AfterHash: directoryEmptyHash()}}
+		if err := workspace.RecordCompleted(boundary.VaultPath, completedPaths); err != nil {
+			cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+			return MutationResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), cleanupErr)
 		}
-		if err := workspace.RecordCompleted(boundary.VaultPath, []workspace.CompletedPath{{Path: sourceAbsolute, AfterHash: directoryEmptyHash()}}); err != nil {
-			result.Diagnostics = append(result.Diagnostics, directoryWarning("directory committed; watch suppression marker could not be recorded"))
+		if err := os.Mkdir(sourceAbsolute, 0o755); err != nil {
+			cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+			return MutationResult{}, errors.Join(err, cleanupErr)
 		}
 		return checkDirectoryCommit(boundary, startFingerprint, result)
 	}
@@ -174,14 +182,33 @@ func mutateDirectoryLocked(boundary internalfsutil.VaultOutputBoundary, request 
 	if latestHash != beforeHash {
 		return MutationResult{}, fmt.Errorf("CONCURRENT_INPUT: directory %q changed during mutation", pathValue)
 	}
-	if err := internalfsutil.RenameNoReplace(sourceAbsolute, destinationAbsolute); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return MutationResult{}, &ConflictError{Path: request.Destination, Expected: AbsentHash, Actual: "present"}
-		}
-		return MutationResult{}, err
+	completedPaths := []workspace.CompletedPath{{Path: sourceAbsolute, AfterHash: AbsentHash}, {Path: destinationAbsolute, AfterHash: beforeHash}}
+	if err := workspace.RecordCompleted(boundary.VaultPath, completedPaths); err != nil {
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		return MutationResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), cleanupErr)
 	}
-	if err := workspace.RecordCompleted(boundary.VaultPath, []workspace.CompletedPath{{Path: sourceAbsolute, AfterHash: AbsentHash}, {Path: destinationAbsolute, AfterHash: beforeHash}}); err != nil {
-		result.Diagnostics = append(result.Diagnostics, directoryWarning("directory committed; watch suppression marker could not be recorded"))
+	if err := renameDirectoryNoReplace(sourceAbsolute, destinationAbsolute); err != nil {
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		if errors.Is(err, os.ErrExist) {
+			return MutationResult{}, errors.Join(&ConflictError{Path: request.Destination, Expected: AbsentHash, Actual: "present"}, cleanupErr)
+		}
+		return MutationResult{}, errors.Join(err, cleanupErr)
+	}
+	if _, sourceErr := os.Lstat(sourceAbsolute); sourceErr != nil && !errors.Is(sourceErr, os.ErrNotExist) {
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		return MutationResult{}, errors.Join(fmt.Errorf("%w: renamed source state is unavailable", workspace.ErrRecovery), cleanupErr)
+	} else if sourceErr == nil {
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		return MutationResult{}, errors.Join(fmt.Errorf("%w: renamed source was recreated", workspace.ErrRecovery), cleanupErr)
+	}
+	afterHash, hashErr := directoryHash(destinationAbsolute)
+	if hashErr != nil {
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		return MutationResult{}, errors.Join(hashErr, fmt.Errorf("%w: renamed directory postcondition is unavailable", workspace.ErrRecovery), cleanupErr)
+	}
+	if afterHash != beforeHash {
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		return MutationResult{}, errors.Join(fmt.Errorf("%w: renamed directory postcondition changed", workspace.ErrRecovery), cleanupErr)
 	}
 	return checkDirectoryCommit(boundary, startFingerprint, result)
 }

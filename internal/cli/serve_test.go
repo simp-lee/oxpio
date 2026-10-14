@@ -3,6 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"image"
@@ -16,7 +18,196 @@ import (
 
 	"github.com/fsnotify/fsnotify"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
+	internaledit "github.com/simp-lee/oxpio/internal/edit"
+	"github.com/simp-lee/oxpio/internal/workspace"
 )
+
+func TestStartServeWatchLoopSuppressesEditorMarkerEvents(t *testing.T) {
+	vaultPath := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(outputPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(vaultPath, "article.md")
+	content := []byte("updated")
+	if err := os.WriteFile(notePath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	watcher := newFakeFileWatcher()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	rebuilds := make(chan struct{}, 1)
+	reloads := make(chan struct{}, 1)
+	if err := startServeWatchLoop(ctx, serveWatchLoop{
+		watcher:    watcher,
+		vaultPath:  vaultPath,
+		outputPath: outputPath,
+		configPath: filepath.Join(vaultPath, defaultConfigFilename),
+		debounce:   15 * time.Millisecond,
+		done:       done,
+		rebuild: func() error {
+			rebuilds <- struct{}{}
+			return nil
+		},
+		notifyReload: func() { reloads <- struct{}{} },
+	}); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(content)
+	if err := workspace.RecordCompleted(vaultPath, []workspace.CompletedPath{{Path: notePath, AfterHash: hex.EncodeToString(hash[:])}}); err != nil {
+		cancel()
+		<-done
+		t.Fatal(err)
+	}
+	watcher.send(fsnotify.Event{Name: notePath, Op: fsnotify.Write})
+	watcher.send(fsnotify.Event{Name: notePath, Op: fsnotify.Write})
+	select {
+	case <-rebuilds:
+		t.Fatal("editor marker events triggered a rebuild")
+	case <-reloads:
+		t.Fatal("editor marker events triggered a reload")
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStartServeWatchLoopSuppressesPendingSourceOnlyJournal(t *testing.T) {
+	vaultPath := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "public")
+	if err := os.MkdirAll(outputPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	notePath := filepath.Join(vaultPath, "article.md")
+	content := []byte("updated")
+	if err := os.WriteFile(notePath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	watcher := newFakeFileWatcher()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	rebuilds := make(chan struct{}, 1)
+	reloads := make(chan struct{}, 1)
+	if err := startServeWatchLoop(ctx, serveWatchLoop{
+		watcher:    watcher,
+		vaultPath:  vaultPath,
+		outputPath: outputPath,
+		configPath: filepath.Join(vaultPath, defaultConfigFilename),
+		debounce:   15 * time.Millisecond,
+		done:       done,
+		rebuild: func() error {
+			rebuilds <- struct{}{}
+			return nil
+		},
+		notifyReload: func() { reloads <- struct{}{} },
+	}); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	hash := sha256.Sum256(content)
+	if err := workspace.RecordCompleted(vaultPath, []workspace.CompletedPath{{Path: notePath, AfterHash: hex.EncodeToString(hash[:])}}); err != nil {
+		cancel()
+		<-done
+		t.Fatal(err)
+	}
+	if err := workspace.WriteJournal(vaultPath, workspace.Journal{
+		Version: workspace.JournalVersion, CommitKind: "source-only", Phase: "source-committed",
+		InputFingerprint: "input", TargetPath: outputPath, OutputPath: outputPath,
+		SourcePath: notePath, SourceBeforePath: notePath, SourceAfterHash: hex.EncodeToString(hash[:]),
+	}); err != nil {
+		cancel()
+		<-done
+		t.Fatal(err)
+	}
+	watcher.send(fsnotify.Event{Name: notePath, Op: fsnotify.Write})
+	select {
+	case <-rebuilds:
+		t.Fatal("pending source-only journal triggered a rebuild")
+	case <-reloads:
+		t.Fatal("pending source-only journal triggered a reload")
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCoordinatorSaveAndServeWatchSuppressesDuplicateReload(t *testing.T) {
+	vaultPath := t.TempDir()
+	outputPath := filepath.Join(t.TempDir(), "public")
+	writeValidateFile(t, vaultPath, defaultConfigFilename, "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vaultPath, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
+	writeValidateFile(t, vaultPath, "article.md", original)
+	built, err := internalbuild.BuildWithOptions(vaultPath, outputPath, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := internaledit.NewCoordinator(vaultPath, outputPath, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	watcher := newFakeFileWatcher()
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	rebuilds := make(chan struct{}, 1)
+	reloads := make(chan struct{}, 10)
+	if err := startServeWatchLoop(ctx, serveWatchLoop{
+		watcher:    watcher,
+		vaultPath:  vaultPath,
+		outputPath: outputPath,
+		configPath: filepath.Join(vaultPath, defaultConfigFilename),
+		debounce:   15 * time.Millisecond,
+		done:       done,
+		rebuild: func() error {
+			rebuilds <- struct{}{}
+			return nil
+		},
+		notifyReload: func() { reloads <- struct{}{} },
+	}); err != nil {
+		cancel()
+		t.Fatal(err)
+	}
+	updated := "---\ntitle: Article\npublish: true\ntype: doc\n---\nUpdated\n"
+	if _, err := coordinator.Save("article.md", sourceHashForServeTest([]byte(original)), []byte(updated)); err != nil {
+		cancel()
+		<-done
+		t.Fatal(err)
+	}
+	// The editor handler notifies connected pages after the successful
+	// coordinator commit. The source events from that same commit must not
+	// produce a second reload through the watch loop.
+	reloads <- struct{}{}
+	articlePath := filepath.Join(vaultPath, "article.md")
+	watcher.send(fsnotify.Event{Name: articlePath, Op: fsnotify.Write})
+	watcher.send(fsnotify.Event{Name: articlePath, Op: fsnotify.Write})
+	select {
+	case <-rebuilds:
+		t.Fatal("coordinator save triggered a duplicate watch rebuild")
+	case <-reloads:
+		// Consume the direct post-commit notification.
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("successful coordinator save did not notify reload")
+	}
+	select {
+	case <-reloads:
+		t.Fatal("coordinator save triggered a duplicate watch reload")
+	case <-time.After(100 * time.Millisecond):
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func sourceHashForServeTest(data []byte) string {
+	hash := sha256.Sum256(data)
+	return hex.EncodeToString(hash[:])
+}
 
 func TestServeCommandDefaultsToCurrentVaultPublicOutput(t *testing.T) {
 	vaultPath := t.TempDir()

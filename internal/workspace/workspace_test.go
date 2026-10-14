@@ -23,6 +23,35 @@ func TestProbeAtomicReplaceLocalFilesystem(t *testing.T) {
 	}
 }
 
+func TestCASFileMutationsPreserveExternalContent(t *testing.T) {
+	root := t.TempDir()
+	filename := filepath.Join(root, "article.md")
+	if err := os.WriteFile(filename, []byte("original"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := AtomicWriteFileCAS(filename, hashBytes([]byte("original")), []byte("updated"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte("external"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := AtomicWriteFileCAS(filename, hashBytes([]byte("updated")), []byte("lost"), 0o644); !errors.Is(err, ErrCASConflict) {
+		t.Fatalf("AtomicWriteFileCAS() error = %v, want CAS conflict", err)
+	}
+	if data, err := os.ReadFile(filename); err != nil || string(data) != "external" {
+		t.Fatalf("external source = %q, err=%v; want preserved bytes", data, err)
+	}
+	if err := RenameFileCAS(filename, filepath.Join(root, "moved.md"), hashBytes([]byte("external"))); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveFileCAS(filepath.Join(root, "moved.md"), hashBytes([]byte("external"))); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "moved.md")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("moved source stat error = %v, want absent", err)
+	}
+}
+
 func TestJournalIntegrityAndRecoveryPreflight(t *testing.T) {
 	vault := t.TempDir()
 	journal := Journal{Version: JournalVersion, CommitKind: "source+output", Phase: "prepared", TargetPath: filepath.Join(vault, "public"), TemporaryPath: filepath.Join(vault, ".stage")}

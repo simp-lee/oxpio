@@ -100,6 +100,9 @@ func Publish(vaultPath, outputPath string, options PublishOptions) (*PublishResu
 	if err := internalfsutil.ValidateOutputParent(boundary); err != nil {
 		return result, err
 	}
+	if err := recoverPendingApplicationJournal(boundary.VaultPath); err != nil {
+		return result, err
+	}
 
 	err = workspace.WithLock(boundary.VaultPath, func() error {
 		before, snapshotErr := snapshotOutput(boundary.OutputPath)

@@ -171,12 +171,27 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	entry := s.catalogEntryByRelPath(request.Path)
-	if entry == nil || (entry.Kind != "article" && entry.Kind != "section") {
+	previewPath, err := internalapplication.NormalizeSourcePath(request.Path)
+	if err != nil {
 		http.NotFound(w, r)
 		return
 	}
-	overlay, err := s.previewOverlay(entry.RelPath, []byte(request.Source))
+	entry := s.catalogEntryByRelPath(previewPath)
+	if entry == nil {
+		if !strings.EqualFold(path.Ext(previewPath), ".md") || strings.EqualFold(path.Base(previewPath), "_index.md") {
+			http.NotFound(w, r)
+			return
+		}
+		parent := s.catalogEntryByRelPath(path.Join(path.Dir(previewPath), "_index.md"))
+		if parent == nil || parent.Kind != "section" {
+			http.NotFound(w, r)
+			return
+		}
+	} else if entry.Kind != "article" && entry.Kind != "section" {
+		http.NotFound(w, r)
+		return
+	}
+	overlay, err := s.previewOverlay(previewPath, []byte(request.Source))
 	if err != nil {
 		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
@@ -196,7 +211,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		Ephemeral:         true,
 		SourceOverlay:     overlay,
 		SourceOutputPath:  s.output,
-		PreviewSourcePath: entry.RelPath,
+		PreviewSourcePath: previewPath,
 	})
 	if buildErr != nil {
 		cleanupErr := s.discardUnpublishedPreview(nil, root)
@@ -209,7 +224,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	previewCatalog := internalapplication.NewCatalog(built.Catalog)
-	previewEntry, previewEntryErr := previewCatalog.EntryByRelPath(entry.RelPath, true)
+	previewEntry, previewEntryErr := previewCatalog.EntryByRelPath(previewPath, true)
 	if previewEntryErr != nil || previewEntry.Route == "" {
 		cleanupErr := s.discardUnpublishedPreview(nil, root)
 		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": previewFailureMessage("source has no preview route; publish its parent section or repair its frontmatter", cleanupErr)})

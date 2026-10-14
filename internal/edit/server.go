@@ -506,6 +506,11 @@ func (s *Server) writeMutationError(w http.ResponseWriter, err error) {
 		writeJSONStatus(w, status, map[string]any{"ok": false, "path": buildErr.Path, "error": s.editorDiagnosticText(err.Error()), "diagnostics": s.editorDiagnostics(buildErr.Result.Diagnostics)})
 		return
 	}
+	var mutationErr *internalapplication.MutationError
+	if errors.As(err, &mutationErr) {
+		writeJSONStatus(w, status, map[string]any{"ok": false, "error": s.editorDiagnosticText(err.Error()), "diagnostics": s.editorDiagnostics(mutationErr.AnalysisDiagnostics())})
+		return
+	}
 	writeJSONStatus(w, status, map[string]any{"ok": false, "error": s.editorDiagnosticText(err.Error())})
 }
 

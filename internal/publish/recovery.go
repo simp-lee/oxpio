@@ -25,28 +25,18 @@ type RecoveryResult struct {
 // identities still prove the documented transaction matrix. dryRun performs
 // the same state inspection without taking a lock or changing any path.
 func Recover(vault string, dryRun bool) (RecoveryResult, error) {
-	journal, err := workspace.LoadJournal(vault)
-	if errors.Is(err, os.ErrNotExist) {
-		if dryRun {
+	if dryRun {
+		journal, err := workspace.LoadJournal(vault)
+		if errors.Is(err, os.ErrNotExist) {
 			if err := workspace.CheckDryRun(vault); err != nil {
 				return RecoveryResult{}, err
 			}
-		} else {
-			lease, lockErr := workspace.AcquireForRecovery(vault)
-			if lockErr != nil {
-				return RecoveryResult{}, lockErr
-			}
-			if releaseErr := lease.Release(); releaseErr != nil {
-				return RecoveryResult{}, releaseErr
-			}
+			return RecoveryResult{Action: "none"}, nil
 		}
-		return RecoveryResult{Action: "none"}, nil
-	}
-	if err != nil {
-		return RecoveryResult{}, err
-	}
-	result := RecoveryResult{Found: true, Phase: journal.Phase}
-	if dryRun {
+		if err != nil {
+			return RecoveryResult{}, err
+		}
+		result := RecoveryResult{Found: true, Phase: journal.Phase}
 		if err := inspectRecoveryJournal(vault, journal); err != nil {
 			return result, err
 		}
@@ -56,14 +46,23 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		result.Action = recoveryAction(journal)
 		return result, nil
 	}
+
+	lease, err := workspace.AcquireForRecovery(vault)
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	defer func() { _ = lease.Release() }()
+	journal, err := workspace.LoadJournal(vault)
+	if errors.Is(err, os.ErrNotExist) {
+		return RecoveryResult{Action: "none"}, nil
+	}
+	if err != nil {
+		return RecoveryResult{}, err
+	}
+	result := RecoveryResult{Found: true, Phase: journal.Phase}
 	if err := inspectRecoveryJournal(vault, journal); err != nil {
 		return result, err
 	}
-	lease, err := workspace.AcquireForRecovery(vault)
-	if err != nil {
-		return result, err
-	}
-	defer func() { _ = lease.Release() }()
 	lockedTarget := filepath.Clean(journal.TargetPath)
 	outputLease, _, err := acquireOutputLease(vault, lockedTarget)
 	if err != nil {
@@ -140,8 +139,25 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 			if !sourceOnlyBefore(journal) {
 				return result, fmt.Errorf("%w: prepared source-only mutation has an unknown source state", workspace.ErrRecovery)
 			}
+			if err := workspace.RemoveCompleted(vault, sourceOnlyCompletedPaths(journal)); err != nil {
+				return result, err
+			}
 		}
 		if journal.CommitKind == "source+output" && journal.SourcePath != "" {
+			if sourceCommittedAfterPrepared(journal) {
+				journal.Phase = "source-committed"
+				if err := workspace.WriteJournal(vault, journal); err != nil {
+					return result, fmt.Errorf("%w: finalize source commit after prepared phase: %v", workspace.ErrRecovery, err)
+				}
+				if err := continueOutputCommit(vault, journal); err != nil {
+					return result, err
+				}
+				if err := workspace.ClearJournal(vault); err != nil {
+					return result, err
+				}
+				result.Action, result.Changed = "complete-output", true
+				break
+			}
 			if err := validatePreparedSource(journal); err != nil {
 				return result, err
 			}
@@ -166,6 +182,9 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 			if fileHash(sourcePath) != sourceAfterHash {
 				return result, fmt.Errorf("%w: source after hash does not match", workspace.ErrRecovery)
 			}
+			if journal.SourceBeforePath != "" && filepath.Clean(journal.SourceBeforePath) != filepath.Clean(sourcePath) && fileHash(journal.SourceBeforePath) != "absent" {
+				return result, fmt.Errorf("%w: source-only destination was recreated", workspace.ErrRecovery)
+			}
 			if journal.OutputPath != "" {
 				if journal.OutputBeforeHash != "" && directoryHash(journal.OutputPath) != journal.OutputBeforeHash {
 					return result, fmt.Errorf("%w: source-only output changed", workspace.ErrRecovery)
@@ -189,6 +208,9 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 				beforePath = journal.SourcePath
 			}
 			if fileHash(beforePath) == journal.SourceBeforeHash {
+				if filepath.Clean(beforePath) != filepath.Clean(journal.SourcePath) && fileHash(journal.SourcePath) != "absent" {
+					return result, fmt.Errorf("%w: source-committed destination was recreated", workspace.ErrRecovery)
+				}
 				if journal.OutputBeforeHash != "" && directoryHash(journal.TargetPath) != journal.OutputBeforeHash {
 					return result, fmt.Errorf("%w: source-committed output changed", workspace.ErrRecovery)
 				}
@@ -220,8 +242,14 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		if want == "" {
 			want = journal.AfterHash
 		}
-		if want != "" && directoryHash(journal.TargetPath) != want {
+		if !validOutputProof(want, journal.OutputAfterIdentity) {
+			return result, fmt.Errorf("%w: committed output proof is unavailable", workspace.ErrRecovery)
+		}
+		if directoryHash(journal.TargetPath) != want {
 			return result, fmt.Errorf("%w: committed output hash does not match", workspace.ErrRecovery)
+		}
+		if outputIdentity(journal.TargetPath) != journal.OutputAfterIdentity {
+			return result, fmt.Errorf("%w: committed output postcondition identity does not match", workspace.ErrRecovery)
 		}
 		if journal.OutputIdentity != "" && outputIdentity(journal.TargetPath) != journal.OutputIdentity {
 			return result, fmt.Errorf("%w: committed output identity does not match", workspace.ErrRecovery)
@@ -255,6 +283,21 @@ func sourceOnlyAfter(journal workspace.Journal) bool {
 		return fileHash(journal.SourceBeforePath) == "absent"
 	}
 	return true
+}
+
+func sourceOnlyCompletedPaths(journal workspace.Journal) []workspace.CompletedPath {
+	paths := make([]workspace.CompletedPath, 0, 2)
+	after := journal.SourceAfterHash
+	if after == "" {
+		after = journal.AfterHash
+	}
+	if journal.SourcePath != "" && after != "" {
+		paths = append(paths, workspace.CompletedPath{Path: journal.SourcePath, AfterHash: after})
+	}
+	if journal.SourceBeforePath != "" && filepath.Clean(journal.SourceBeforePath) != filepath.Clean(journal.SourcePath) {
+		paths = append(paths, workspace.CompletedPath{Path: journal.SourceBeforePath, AfterHash: "absent"})
+	}
+	return paths
 }
 
 func sourceOnlyBefore(journal workspace.Journal) bool {
@@ -429,6 +472,7 @@ func validateJournalCompleteness(journal workspace.Journal) error {
 		}{
 			{journal.OutputIdentity, "outputIdentity"},
 			{journal.OutputAfterHash, "outputAfterHash"},
+			{journal.OutputAfterIdentity, "outputAfterIdentity"},
 		} {
 			if err := require(field.value, field.name); err != nil {
 				return err
@@ -470,6 +514,11 @@ func validateTransactionPath(vault, target, path string) error {
 }
 
 func continueOutputCommit(vault string, journal workspace.Journal) error {
+	expectedHash := journal.OutputAfterHash
+	expectedIdentity := journal.OutputAfterIdentity
+	if !validOutputProof(expectedHash, expectedIdentity) {
+		return fmt.Errorf("%w: recovered output proof is unavailable", workspace.ErrRecovery)
+	}
 	if err := validateAlreadySwappedOutput(vault, journal); err == nil {
 		journal.Phase = "output-committed"
 		journal.OutputIdentity = outputIdentity(journal.TargetPath)
@@ -496,14 +545,22 @@ func continueOutputCommit(vault string, journal workspace.Journal) error {
 	} else {
 		return fmt.Errorf("%w: inspect output: %v", workspace.ErrRecovery, err)
 	}
+	committedHash := directoryHash(journal.TargetPath)
+	committedIdentity := outputIdentity(journal.TargetPath)
+	journal.Phase = "output-committed"
+	journal.OutputAfterHash = expectedHash
+	journal.OutputIdentity = committedIdentity
+	journal.OutputAfterIdentity = expectedIdentity
+	journal.AfterHash = expectedHash
+	if committedHash != expectedHash || committedIdentity != expectedIdentity {
+		if err := workspace.WriteJournal(vault, journal); err != nil {
+			return fmt.Errorf("%w: persist recovered output postcondition: %v", workspace.ErrRecovery, err)
+		}
+		return fmt.Errorf("%w: recovered output postcondition mismatch: expected hash %s and identity %s, found hash %s and identity %s", workspace.ErrRecovery, expectedHash, expectedIdentity, committedHash, committedIdentity)
+	}
 	if err := removeTransactionPath(journal.TemporaryPath); err != nil {
 		return err
 	}
-	journal.Phase = "output-committed"
-	journal.OutputAfterHash = directoryHash(journal.TargetPath)
-	journal.OutputIdentity = outputIdentity(journal.TargetPath)
-	journal.OutputAfterIdentity = journal.OutputIdentity
-	journal.AfterHash = journal.OutputAfterHash
 	if err := workspace.WriteJournal(vault, journal); err != nil {
 		return fmt.Errorf("%w: persist recovery phase: %v", workspace.ErrRecovery, err)
 	}
@@ -511,6 +568,17 @@ func continueOutputCommit(vault string, journal workspace.Journal) error {
 		return err
 	}
 	return nil
+}
+
+func sourceCommittedAfterPrepared(journal workspace.Journal) bool {
+	if journal.SourcePath == "" || journal.SourceAfterHash == "" || fileHash(journal.SourcePath) != journal.SourceAfterHash {
+		return false
+	}
+	beforePath := journal.SourceBeforePath
+	if beforePath == "" || filepath.Clean(beforePath) == filepath.Clean(journal.SourcePath) {
+		return true
+	}
+	return fileHash(beforePath) == "absent"
 }
 
 func validatePreparedSource(journal workspace.Journal) error {
@@ -562,7 +630,7 @@ func validateSourceAfter(journal workspace.Journal) error {
 }
 
 func validateAlreadySwappedOutput(vault string, journal workspace.Journal) error {
-	if journal.OutputAfterHash == "" || journal.OutputAfterIdentity == "" {
+	if !validOutputProof(journal.OutputAfterHash, journal.OutputAfterIdentity) {
 		return fmt.Errorf("%w: recovered output proof is unavailable", workspace.ErrRecovery)
 	}
 	if err := validateSourceAfter(journal); err != nil {
@@ -579,6 +647,10 @@ func validateAlreadySwappedOutput(vault string, journal workspace.Journal) error
 		return fmt.Errorf("%w: recovered output proof does not match", workspace.ErrRecovery)
 	}
 	return nil
+}
+
+func validOutputProof(hash, identity string) bool {
+	return strings.TrimSpace(hash) != "" && hash != "unavailable" && strings.TrimSpace(identity) != "" && identity != "absent"
 }
 
 func validateOutputContinuation(vault string, journal workspace.Journal) error {
@@ -654,6 +726,9 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 				beforePath = journal.SourcePath
 			}
 			if fileHash(beforePath) == journal.SourceBeforeHash {
+				if filepath.Clean(beforePath) != filepath.Clean(journal.SourcePath) && fileHash(journal.SourcePath) != "absent" {
+					return fmt.Errorf("%w: source-committed destination was recreated", workspace.ErrRecovery)
+				}
 				if journal.OutputBeforeHash != "" && directoryHash(journal.TargetPath) != journal.OutputBeforeHash {
 					return fmt.Errorf("%w: source-committed output changed", workspace.ErrRecovery)
 				}
@@ -672,8 +747,14 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 		if want == "" {
 			want = journal.AfterHash
 		}
-		if want != "" && directoryHash(journal.TargetPath) != want {
+		if !validOutputProof(want, journal.OutputAfterIdentity) {
+			return fmt.Errorf("%w: committed output proof is unavailable", workspace.ErrRecovery)
+		}
+		if directoryHash(journal.TargetPath) != want {
 			return fmt.Errorf("%w: committed output hash does not match", workspace.ErrRecovery)
+		}
+		if outputIdentity(journal.TargetPath) != journal.OutputAfterIdentity {
+			return fmt.Errorf("%w: committed output postcondition identity does not match", workspace.ErrRecovery)
 		}
 		if journal.OutputIdentity != "" && outputIdentity(journal.TargetPath) != journal.OutputIdentity {
 			return fmt.Errorf("%w: committed output identity does not match", workspace.ErrRecovery)

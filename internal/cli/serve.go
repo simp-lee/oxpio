@@ -397,9 +397,14 @@ func (loop *serveWatchLoop) run(ctx context.Context) {
 			}
 		case <-timerC:
 			timerC = nil
+			retrySuppression := false
 			for cleanPath := range pendingWatchPaths {
 				suppressed, err := workspace.ConsumeCompleted(loop.vaultPath, cleanPath)
 				if err != nil {
+					if errors.Is(err, workspace.ErrBusy) {
+						retrySuppression = true
+						continue
+					}
 					loop.reportError(err)
 					continue
 				}
@@ -413,6 +418,16 @@ func (loop *serveWatchLoop) run(ctx context.Context) {
 						completedTimer.Reset(loop.debounce)
 					}
 				}
+			}
+			if retrySuppression {
+				if timer == nil {
+					timer = time.NewTimer(loop.debounce)
+				} else {
+					stopWatchTimer(timer)
+					timer.Reset(loop.debounce)
+				}
+				timerC = timer.C
+				continue
 			}
 			if len(pendingWatchPaths) == 0 {
 				continue

@@ -216,6 +216,40 @@ func TestCoordinatorKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 	}
 }
 
+func TestCoordinatorRollsBackWhenWatchMarkerCannotBeWritten(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nOriginal\n"
+	writeEditFile(t, vault, "article.md", original)
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(vault, output, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(vault, ".oxpio", "completed.json")
+	if err := os.MkdirAll(marker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(marker)
+
+	beforeOutput := snapshotEditOutput(t, output)
+	updated := "---\ntitle: Article\npublish: true\ntype: doc\n---\nUpdated\n"
+	if _, err := coordinator.Save("article.md", sourceHash([]byte(original)), []byte(updated)); err == nil || !strings.Contains(err.Error(), "watch suppression marker") {
+		t.Fatalf("Save() error = %v, want watch marker failure", err)
+	}
+	if got, err := os.ReadFile(filepath.Join(vault, "article.md")); err != nil || string(got) != original {
+		t.Fatalf("source after marker failure = %q, err=%v", got, err)
+	}
+	if afterOutput := snapshotEditOutput(t, output); !reflect.DeepEqual(afterOutput, beforeOutput) {
+		t.Fatal("marker failure changed formal output")
+	}
+}
+
 func sourceHash(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])

@@ -26,6 +26,8 @@ const (
 	maxUploadAttachment = 64 << 20
 )
 
+var atomicCreateUploadFile = workspace.AtomicCreateFile
+
 // UploadMutationRequest describes the deliberately narrow, create-only Agent
 // upload operation. Markdown uploads are analyzed through the normal planner;
 // attachments are opaque regular-file bytes below the configured attachment root.
@@ -60,6 +62,9 @@ func MutateUpload(vaultPath, outputPath string, request UploadMutationRequest) (
 			return MutationResult{}, err
 		}
 		return mutateUploadLocked(boundary, request)
+	}
+	if err := recoverPendingApplicationJournal(boundary.VaultPath); err != nil {
+		return MutationResult{}, err
 	}
 	lease, err := workspace.Acquire(boundary.VaultPath)
 	if err != nil {
@@ -149,13 +154,21 @@ func mutateUploadLocked(boundary internalfsutil.VaultOutputBoundary, request Upl
 		overlay := map[string][]byte{target: append([]byte(nil), request.Content...)}
 		analysis, analyzeErr := internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlay(boundary.VaultPath, boundary.OutputPath, 0, overlay, nil)
 		if analyzeErr != nil || len(analysis.Diagnostics) != 0 || analysis.Plan == nil {
+			diagnostics := analysis.Diagnostics
+			if !request.IncludeUnpublished && analysis.Plan != nil {
+				catalog := sourceCatalogFromAnalysis(analysis.Plan)
+				if hasHiddenMutationDiagnostics(diagnostics, catalog) {
+					return MutationResult{}, &MutationError{Err: ErrHiddenSource, Diagnostics: redactMutationDiagnostics(diagnostics, catalog)}
+				}
+				diagnostics = redactMutationDiagnostics(diagnostics, catalog)
+			}
 			if analyzeErr == nil {
-				analyzeErr = internalanalyze.Failure(analysis.Diagnostics)
+				analyzeErr = internalanalyze.Failure(diagnostics)
 			}
 			if analyzeErr == nil {
 				analyzeErr = errors.New("strict analysis produced no site plan")
 			}
-			return MutationResult{}, &MutationError{Err: analyzeErr, Diagnostics: analysis.Diagnostics}
+			return MutationResult{}, &MutationError{Err: analyzeErr, Diagnostics: diagnostics}
 		}
 		catalog := sourceCatalogFromAnalysis(analysis.Plan)
 		for index := range catalog.Entries {
@@ -206,14 +219,41 @@ func mutateUploadLocked(boundary internalfsutil.VaultOutputBoundary, request Upl
 	if err := workspace.WriteJournal(boundary.VaultPath, journal); err != nil {
 		return MutationResult{}, err
 	}
-	if err := workspace.AtomicCreateFile(targetAbsolute, request.Content, 0o644); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return MutationResult{}, &ConflictError{Path: target, Expected: AbsentHash, Actual: "present"}
-		}
-		return MutationResult{}, err
+	completedPaths := []workspace.CompletedPath{{Path: targetAbsolute, AfterHash: after}}
+	if err := workspace.RecordCompleted(boundary.VaultPath, completedPaths); err != nil {
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		journalErr := workspace.ClearJournal(boundary.VaultPath)
+		return MutationResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), cleanupErr, journalErr)
 	}
-	if err := workspace.RecordCompleted(boundary.VaultPath, []workspace.CompletedPath{{Path: targetAbsolute, AfterHash: after}}); err != nil {
-		result.Diagnostics = append(result.Diagnostics, directoryWarning("source committed; watch suppression marker could not be recorded"))
+	if err := atomicCreateUploadFile(targetAbsolute, request.Content, 0o644); err != nil {
+		currentAfter, existsAfter, readErr := readMutationFile(boundary.VaultPath, target)
+		actualAfter := AbsentHash
+		if existsAfter {
+			actualAfter = hashBytes(currentAfter)
+		}
+		if errors.Is(err, os.ErrExist) {
+			cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+			journalErr := workspace.ClearJournal(boundary.VaultPath)
+			return MutationResult{}, errors.Join(&ConflictError{Path: target, Expected: AbsentHash, Actual: "present"}, cleanupErr, journalErr)
+		}
+		if readErr == nil && actualAfter == after {
+			journal.Phase = "source-committed"
+			if journalErr := workspace.WriteJournal(boundary.VaultPath, journal); journalErr != nil {
+				return MutationResult{}, errors.Join(err, journalErr, fmt.Errorf("%w: upload recovery required", workspace.ErrRecovery))
+			}
+			result.Diagnostics = append(result.Diagnostics, directoryWarning("source committed; atomic upload reported an error and transaction recovery is pending"))
+			return result, nil
+		}
+		if readErr == nil && actualAfter == AbsentHash {
+			cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+			journalErr := workspace.ClearJournal(boundary.VaultPath)
+			return MutationResult{}, errors.Join(err, cleanupErr, journalErr)
+		}
+		return MutationResult{}, errors.Join(err, readErr, fmt.Errorf("%w: upload recovery required", workspace.ErrRecovery))
+	}
+	currentAfter, existsAfter, readErr := readMutationFile(boundary.VaultPath, target)
+	if readErr != nil || !existsAfter || hashBytes(currentAfter) != after {
+		return MutationResult{}, errors.Join(readErr, fmt.Errorf("%w: upload postcondition changed", workspace.ErrRecovery))
 	}
 	journal.Phase = "source-committed"
 	if err := workspace.WriteJournal(boundary.VaultPath, journal); err != nil {

@@ -114,6 +114,9 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
+	if err := recoverPendingWorkspaceJournal(coordinator.vault); err != nil {
+		return TransactionResult{}, err
+	}
 	lease, err := workspace.Acquire(coordinator.vault)
 	if err != nil {
 		return TransactionResult{}, err
@@ -279,7 +282,8 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 			preserveErr := transaction.PreserveForRecovery()
 			return TransactionResult{}, errors.Join(operationErr, rollbackErr, preserveErr, fmt.Errorf("%w: source rollback failed", workspace.ErrRecovery))
 		}
-		return TransactionResult{}, errors.Join(operationErr, transaction.Abort())
+		markerErr := workspace.ReplaceCompleted(coordinator.vault, []workspace.CompletedPath{{Path: sourceFilename, AfterHash: sourceBeforeHash}})
+		return TransactionResult{}, errors.Join(operationErr, markerErr, transaction.Abort())
 	}
 	validateInput := func() error {
 		currentFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output)
@@ -291,7 +295,7 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 		}
 		return nil
 	}
-	if err := transaction.MarkSourceCommitted(expectedAfterFingerprint, validateInput); err != nil {
+	if err := transaction.PrepareSourceCommit(expectedAfterFingerprint, validateInput); err != nil {
 		return abortBeforeOutput(err)
 	}
 	if err := commitSource(coordinator.vault, relPath, expectedHash, content, deleting, creating, artifactRoot); err != nil {
@@ -309,7 +313,13 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	if actualAfterSource != committedHash {
 		return abortBeforeOutput(&ConflictError{Path: relPath, Expected: committedHash, Actual: actualAfterSource})
 	}
+	if err := transaction.MarkSourceCommitted(); err != nil {
+		return abortBeforeOutput(err)
+	}
 
+	if err := workspace.RecordCompleted(coordinator.vault, []workspace.CompletedPath{{Path: sourceFilename, AfterHash: committedHash}}); err != nil {
+		return abortBeforeOutput(fmt.Errorf("watch suppression marker could not be recorded: %w", err))
+	}
 	commit, err := transaction.Commit()
 	if err != nil {
 		return abortBeforeOutput(err)
@@ -336,6 +346,11 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	}
 	coordinator.catalog = cloneCatalog(built.Catalog)
 	return TransactionResult{SourceHash: committedHash, RelPath: relPath, Build: built}, nil
+}
+
+func recoverPendingWorkspaceJournal(vault string) error {
+	_, err := internalpublish.Recover(vault, false)
+	return err
 }
 
 func (coordinator *Coordinator) validateCreateParent(relPath string) error {
@@ -403,11 +418,7 @@ func inspectSourceParent(vault, relPath string) error {
 	return err
 }
 
-func commitSource(vault, relPath, expected string, content []byte, deleting, creating bool, transactionRoots ...string) error {
-	artifactRoot := ""
-	if len(transactionRoots) > 0 {
-		artifactRoot = transactionRoots[0]
-	}
+func commitSource(vault, relPath, expected string, content []byte, deleting, creating bool, _ ...string) error {
 	current, exists, err := readSource(vault, relPath)
 	if err != nil {
 		return err
@@ -429,237 +440,24 @@ func commitSource(vault, relPath, expected string, content []byte, deleting, cre
 		}
 	}
 	if creating {
-		if exists {
-			return &ConflictError{Path: relPath, Expected: AbsentSourceHash, Actual: actual}
+		err = workspace.AtomicCreateFile(filename, content, 0o644)
+	} else if deleting {
+		err = workspace.RemoveFileCAS(filename, expected)
+	} else {
+		err = workspace.AtomicWriteFileCAS(filename, expected, content, 0o644)
+	}
+	if errors.Is(err, workspace.ErrCASConflict) || errors.Is(err, os.ErrExist) {
+		latest, latestExists, latestErr := readSource(vault, relPath)
+		if latestErr != nil {
+			return errors.Join(&ConflictError{Path: relPath, Expected: expected, Actual: AbsentSourceHash}, latestErr)
 		}
-		return createSourceNoReplace(filename, relPath, content, artifactRoot)
-	}
-
-	casName, err := makeCASSnapshot(filename, artifactRoot)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = os.Remove(casName) }()
-	if err := verifyCASSnapshot(filename, casName, relPath, expected); err != nil {
-		return err
-	}
-	if deleting {
-		displaced, err := moveSourceForCAS(filename, artifactRoot)
-		if err != nil {
-			return fmt.Errorf("delete source %q: %w", relPath, err)
+		latestHash := AbsentSourceHash
+		if latestExists {
+			latestHash = hashForAbsentOrBytes(latest)
 		}
-		if err := verifyCASSnapshot(displaced, casName, relPath, expected); err != nil {
-			return errors.Join(err, preserveMovedSource(displaced, filename))
-		}
-		if _, err := os.Lstat(filename); err == nil {
-			return errors.Join(&ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}, preserveMovedSource(displaced, filename))
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return errors.Join(err, preserveMovedSource(displaced, filename))
-		}
-		if err := verifySnapshotBytes(casName, expected, relPath); err != nil {
-			return errors.Join(err, preserveMovedSource(displaced, filename))
-		}
-		if err := os.Remove(displaced); err != nil {
-			return errors.Join(fmt.Errorf("delete source %q: %w", relPath, err), restoreMovedSource(displaced, filename))
-		}
-		return nil
+		return &ConflictError{Path: relPath, Expected: expected, Actual: latestHash}
 	}
-
-	temporary, err := writeSourceTransactionFile(filepath.Dir(filename), content, artifactRoot)
-	if err != nil {
-		return err
-	}
-	temporaryName := temporary.Name()
-	defer func() { _ = os.Remove(temporaryName) }()
-	if err := verifyCASSnapshot(filename, casName, relPath, expected); err != nil {
-		return err
-	}
-	displaced, err := moveSourceForCAS(filename, artifactRoot)
-	if err != nil {
-		return fmt.Errorf("replace source %q: %w", relPath, err)
-	}
-	if err := verifyCASSnapshot(displaced, casName, relPath, expected); err != nil {
-		return errors.Join(err, preserveMovedSource(displaced, filename))
-	}
-	if _, err := os.Lstat(filename); err == nil {
-		return errors.Join(&ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}, preserveMovedSource(displaced, filename))
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return errors.Join(err, preserveMovedSource(displaced, filename))
-	}
-	if err := os.Link(temporaryName, filename); err != nil {
-		preserveErr := preserveMovedSource(displaced, filename)
-		if errors.Is(err, os.ErrExist) {
-			return errors.Join(&ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}, preserveErr)
-		}
-		return errors.Join(fmt.Errorf("replace source %q: %w", relPath, err), preserveErr)
-	}
-	if err := verifySnapshotBytes(casName, expected, relPath); err != nil {
-		return errors.Join(err, rollbackReplacedSource(filename, displaced, hashForAbsentOrBytes(content), relPath))
-	}
-	if err := os.Remove(displaced); err != nil {
-		return errors.Join(fmt.Errorf("finalize source %q: %w", relPath, err), rollbackReplacedSource(filename, displaced, hashForAbsentOrBytes(content), relPath))
-	}
-	return nil
-}
-
-func moveSourceForCAS(filename string, artifactRoot ...string) (string, error) {
-	temporaryDir := filepath.Dir(filename)
-	if len(artifactRoot) > 0 && artifactRoot[0] != "" {
-		temporaryDir = artifactRoot[0]
-	}
-	temporary, err := os.CreateTemp(temporaryDir, ".oxpio-displaced-*")
-	if err != nil {
-		return "", err
-	}
-	name := temporary.Name()
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(name)
-		return "", err
-	}
-	if err := os.Remove(name); err != nil {
-		return "", err
-	}
-	if err := os.Rename(filename, name); err != nil {
-		return "", err
-	}
-	return name, nil
-}
-
-func preserveMovedSource(displaced, filename string) error {
-	if _, err := os.Lstat(filename); errors.Is(err, os.ErrNotExist) {
-		if err := renamePathNoReplace(displaced, filename); err == nil {
-			return nil
-		} else if _, statErr := os.Lstat(filename); statErr == nil {
-			return errors.Join(err, os.RemoveAll(displaced))
-		} else {
-			return err
-		}
-	} else if err != nil {
-		return err
-	}
-	return os.RemoveAll(displaced)
-}
-
-func restoreMovedSource(displaced, filename string) error {
-	if _, err := os.Lstat(filename); err == nil {
-		return fmt.Errorf("source changed before rollback")
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return renamePathNoReplace(displaced, filename)
-}
-
-func rollbackReplacedSource(filename, displaced, expected, relPath string) error {
-	if actual := currentSourceHashFromPath(filename); actual != expected {
-		return &ConflictError{Path: relPath, Expected: expected, Actual: actual}
-	}
-	candidate, err := moveSourceForCAS(filename)
-	if err != nil {
-		return err
-	}
-	if err := restoreMovedSource(displaced, filename); err != nil {
-		return errors.Join(err, restoreMovedSource(candidate, filename))
-	}
-	return os.Remove(candidate)
-}
-
-func createSourceNoReplace(filename, relPath string, content []byte, artifactRoot ...string) error {
-	temporary, err := writeSourceTransactionFile(filepath.Dir(filename), content, artifactRoot...)
-	if err != nil {
-		return err
-	}
-	temporaryName := temporary.Name()
-	defer func() { _ = os.Remove(temporaryName) }()
-	if err := os.Link(temporaryName, filename); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return &ConflictError{Path: relPath, Expected: AbsentSourceHash, Actual: "present"}
-		}
-		return fmt.Errorf("create source %q: %w", relPath, err)
-	}
-	return nil
-}
-
-func writeSourceTransactionFile(parent string, content []byte, artifactRoot ...string) (*os.File, error) {
-	if len(artifactRoot) > 0 && artifactRoot[0] != "" {
-		parent = artifactRoot[0]
-	}
-	temporary, err := os.CreateTemp(parent, ".oxpio-source-*")
-	if err != nil {
-		return nil, fmt.Errorf("create source transaction file: %w", err)
-	}
-	if err := temporary.Chmod(0o644); err != nil {
-		_ = temporary.Close()
-		_ = os.Remove(temporary.Name())
-		return nil, err
-	}
-	if _, err := temporary.Write(content); err != nil {
-		_ = temporary.Close()
-		_ = os.Remove(temporary.Name())
-		return nil, fmt.Errorf("write source transaction file: %w", err)
-	}
-	if err := temporary.Sync(); err != nil {
-		_ = temporary.Close()
-		_ = os.Remove(temporary.Name())
-		return nil, fmt.Errorf("sync source transaction file: %w", err)
-	}
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(temporary.Name())
-		return nil, err
-	}
-	return temporary, nil
-}
-
-func makeCASSnapshot(filename string, artifactRoot ...string) (string, error) {
-	temporaryDir := filepath.Dir(filename)
-	if len(artifactRoot) > 0 && artifactRoot[0] != "" {
-		temporaryDir = artifactRoot[0]
-	}
-	temporary, err := os.CreateTemp(temporaryDir, ".oxpio-cas-*")
-	if err != nil {
-		return "", fmt.Errorf("create source CAS marker: %w", err)
-	}
-	name := temporary.Name()
-	if err := temporary.Close(); err != nil {
-		_ = os.Remove(name)
-		return "", err
-	}
-	_ = os.Remove(name)
-	if err := os.Link(filename, name); err != nil {
-		return "", fmt.Errorf("create source CAS marker: %w", err)
-	}
-	return name, nil
-}
-
-func verifyCASSnapshot(filename, snapshot, relPath, expected string) error {
-	currentInfo, err := os.Stat(filename)
-	if err != nil {
-		return &ConflictError{Path: relPath, Expected: expected, Actual: AbsentSourceHash}
-	}
-	snapshotInfo, err := os.Stat(snapshot)
-	if err != nil || !os.SameFile(currentInfo, snapshotInfo) {
-		return &ConflictError{Path: relPath, Expected: expected, Actual: currentSourceHashFromPath(filename)}
-	}
-	return verifySnapshotBytes(snapshot, expected, relPath)
-}
-
-func verifySnapshotBytes(snapshot, expected, relPath string) error {
-	data, err := os.ReadFile(snapshot)
-	if err != nil {
-		return fmt.Errorf("read source CAS marker: %w", err)
-	}
-	actual := hashForAbsentOrBytes(data)
-	if actual != expected {
-		return &ConflictError{Path: relPath, Expected: expected, Actual: actual}
-	}
-	return nil
-}
-
-func currentSourceHashFromPath(filename string) string {
-	data, err := os.ReadFile(filename)
-	if err != nil {
-		return AbsentSourceHash
-	}
-	return hashForAbsentOrBytes(data)
+	return err
 }
 
 func restoreSource(vault, relPath, expected string, original []byte, existed bool) error {

@@ -25,6 +25,7 @@ import (
 	internalmodel "github.com/simp-lee/oxpio/internal/model"
 	internalpublish "github.com/simp-lee/oxpio/internal/publish"
 	"github.com/simp-lee/oxpio/internal/siteplan"
+	internalvault "github.com/simp-lee/oxpio/internal/vault"
 	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
@@ -114,6 +115,11 @@ func (e *ConflictError) Is(target error) bool { return target == ErrConflict }
 
 var ErrConflict = errors.New("CONFLICT")
 
+func recoverPendingApplicationJournal(vault string) error {
+	_, err := internalpublish.Recover(vault, false)
+	return err
+}
+
 // MutateSource is the source-only Agent mutation service. It shares the
 // analyzer, path boundary, workspace lock and fingerprint rules with formal
 // publishing, but intentionally never calls a publisher or reload service.
@@ -130,6 +136,9 @@ func MutateSource(vaultPath, outputPath string, request SourceMutationRequest) (
 			return MutationResult{}, err
 		}
 		return mutateSourceLocked(boundary, request, false)
+	}
+	if err := recoverPendingApplicationJournal(boundary.VaultPath); err != nil {
+		return MutationResult{}, err
 	}
 	lease, err := workspace.Acquire(boundary.VaultPath)
 	if err != nil {
@@ -248,6 +257,16 @@ func mutateSourceLocked(boundary internalfsutil.VaultOutputBoundary, request Sou
 			}
 		}
 		if err := checkSourceReferences(snapshot, pathValue); err != nil {
+			if !request.IncludeUnpublished {
+				var mutationErr *MutationError
+				if errors.As(err, &mutationErr) {
+					diagnostics := redactMutationDiagnostics(mutationErr.Diagnostics, snapshot.Catalog)
+					if hasHiddenMutationDiagnostics(mutationErr.Diagnostics, snapshot.Catalog) {
+						return MutationResult{}, &MutationError{Err: ErrHiddenSource, Diagnostics: diagnostics}
+					}
+					return MutationResult{}, &MutationError{Err: mutationErr.Err, Diagnostics: diagnostics}
+				}
+			}
 			return MutationResult{}, err
 		}
 	}
@@ -308,7 +327,13 @@ func mutateSourceLocked(boundary internalfsutil.VaultOutputBoundary, request Sou
 		return MutationResult{}, &MutationError{Err: analyzeErr, Diagnostics: diagnostics}
 	}
 	catalog := sourceCatalogFromAnalysis(analysis.Plan)
-	safeDiagnostics := redactMutationDiagnostics(analysis.Diagnostics, catalog)
+	safeDiagnostics := append([]internaldiag.Diagnostic(nil), analysis.Diagnostics...)
+	if !request.IncludeUnpublished {
+		if hasHiddenMutationDiagnostics(analysis.Diagnostics, catalog) {
+			return MutationResult{}, &MutationError{Err: ErrHiddenSource, Diagnostics: redactMutationDiagnostics(analysis.Diagnostics, catalog)}
+		}
+		safeDiagnostics = redactMutationDiagnostics(analysis.Diagnostics, catalog)
+	}
 	var candidateEntry *internalmodel.SourceCatalogEntry
 	for index := range catalog.Entries {
 		if catalog.Entries[index].RelPath == candidatePath {
@@ -360,11 +385,50 @@ func mutateSourceLocked(boundary internalfsutil.VaultOutputBoundary, request Sou
 	if err := workspace.WriteJournal(boundary.VaultPath, journal); err != nil {
 		return MutationResult{}, err
 	}
-	if err := applySourceMutation(boundary.VaultPath, request.Operation, pathValue, request.Destination, candidate); err != nil {
-		return MutationResult{}, err
+	completedPaths := sourceCompletedPaths(boundary.VaultPath, request.Operation, pathValue, request.Destination, candidate)
+	if err := workspace.RecordCompleted(boundary.VaultPath, completedPaths); err != nil {
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		journalErr := workspace.ClearJournal(boundary.VaultPath)
+		return MutationResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), cleanupErr, journalErr)
 	}
-	if err := workspace.RecordCompleted(boundary.VaultPath, sourceCompletedPaths(boundary.VaultPath, request.Operation, pathValue, request.Destination, candidate)); err != nil {
-		result.Diagnostics = append(result.Diagnostics, internaldiag.Diagnostic{Severity: internaldiag.SeverityWarning, Kind: internaldiag.KindOutputCleanup, Message: "source committed; watch suppression marker could not be recorded"})
+	if err := applySourceMutation(boundary.VaultPath, request.Operation, pathValue, request.Destination, beforeHash, candidate); err != nil {
+		currentAfter, existsAfter, readErr := readMutationFile(boundary.VaultPath, pathValue)
+		actualAfter := AbsentHash
+		if existsAfter {
+			actualAfter = hashBytes(currentAfter)
+		}
+		if readErr == nil && request.Operation == MutationMove && !existsAfter {
+			destinationAfter, destinationExists, destinationErr := readMutationFile(boundary.VaultPath, request.Destination)
+			if destinationErr != nil {
+				readErr = destinationErr
+			} else if destinationExists {
+				actualAfter = hashBytes(destinationAfter)
+			}
+		}
+		if readErr == nil && (request.Operation != MutationMove || existsAfter) && actualAfter == beforeHash {
+			cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+			journalErr := workspace.ClearJournal(boundary.VaultPath)
+			if errors.Is(err, workspace.ErrCASConflict) {
+				err = sourceMutationConflict(boundary.VaultPath, request.Operation, pathValue, request.Destination, beforeHash)
+			}
+			return MutationResult{}, errors.Join(err, cleanupErr, journalErr)
+		}
+		if readErr == nil && actualAfter == journal.SourceAfterHash && (request.Operation != MutationMove || !existsAfter) {
+			journal.Phase = "source-committed"
+			if journalErr := workspace.WriteJournal(boundary.VaultPath, journal); journalErr != nil {
+				return MutationResult{}, errors.Join(err, journalErr, fmt.Errorf("%w: source mutation recovery required", workspace.ErrRecovery))
+			}
+			result.Diagnostics = append(result.Diagnostics, internaldiag.Diagnostic{Severity: internaldiag.SeverityWarning, Kind: internaldiag.KindOutputCleanup, Message: "source committed; atomic write reported an error and transaction recovery is pending"})
+			return result, nil
+		}
+		return MutationResult{}, errors.Join(err, readErr, fmt.Errorf("%w: source mutation recovery required", workspace.ErrRecovery))
+	}
+	committed, postconditionErr := sourceMutationMatchesAfter(boundary.VaultPath, request.Operation, pathValue, request.Destination, journal.SourceAfterHash)
+	if postconditionErr != nil {
+		return MutationResult{}, errors.Join(postconditionErr, fmt.Errorf("%w: source mutation recovery required", workspace.ErrRecovery))
+	}
+	if !committed {
+		return MutationResult{}, fmt.Errorf("%w: source mutation postcondition changed", workspace.ErrRecovery)
 	}
 	journal.Phase = "source-committed"
 	if request.Operation == MutationDelete {
@@ -395,9 +459,18 @@ func hasAnalysisErrors(diagnostics []internaldiag.Diagnostic) bool {
 	return false
 }
 
-func redactMutationDiagnostics(diagnostics []internaldiag.Diagnostic, catalog *internalmodel.SourceCatalog) []internaldiag.Diagnostic {
-	if len(diagnostics) == 0 {
-		return nil
+func hasHiddenMutationDiagnostics(diagnostics []internaldiag.Diagnostic, catalog *internalmodel.SourceCatalog) bool {
+	for _, item := range diagnostics {
+		if hiddenMutationDiagnostic(item, catalog) {
+			return true
+		}
+	}
+	return false
+}
+
+func hiddenMutationDiagnostic(item internaldiag.Diagnostic, catalog *internalmodel.SourceCatalog) bool {
+	if string(item.Kind) == "unpublished_wikilink" {
+		return true
 	}
 	prefixes := make([]string, 0)
 	if catalog != nil {
@@ -423,13 +496,26 @@ func redactMutationDiagnostics(diagnostics []internaldiag.Diagnostic, catalog *i
 		}
 		return false
 	}
+	if isHidden(item.Location.Path) || isHidden(item.Target) {
+		return true
+	}
+	target := item.Target
+	if cut := strings.IndexAny(target, "?#"); cut >= 0 {
+		target = target[:cut]
+	}
+	if target != "" && item.Location.Path != "" && isHidden(path.Join(path.Dir(item.Location.Path), target)) {
+		return true
+	}
+	return false
+}
+
+func redactMutationDiagnostics(diagnostics []internaldiag.Diagnostic, catalog *internalmodel.SourceCatalog) []internaldiag.Diagnostic {
+	if len(diagnostics) == 0 {
+		return nil
+	}
 	result := append([]internaldiag.Diagnostic(nil), diagnostics...)
 	for index := range result {
-		hidden := isHidden(result[index].Target) || isHidden(result[index].Location.Path)
-		if string(result[index].Kind) == "unpublished_wikilink" {
-			hidden = true
-		}
-		if hidden {
+		if hiddenMutationDiagnostic(result[index], catalog) {
 			result[index].Location = internaldiag.Location{}
 			result[index].Target = ""
 			result[index].Message = "target is not available in the selected read scope"
@@ -522,27 +608,63 @@ func sourceCompletedPaths(vault, operation, source, destination string, candidat
 	}
 }
 
-func applySourceMutation(vault, operation, source, destination string, candidate []byte) error {
+func applySourceMutation(vault, operation, source, destination, expectedHash string, candidate []byte) error {
 	sourcePath := filepath.Join(vault, filepath.FromSlash(source))
 	switch operation {
 	case MutationWrite, MutationEdit:
-		return workspace.AtomicWriteFile(sourcePath, candidate, 0o644)
+		return workspace.AtomicWriteFileCAS(sourcePath, expectedHash, candidate, 0o644)
 	case MutationUpload:
 		return workspace.AtomicCreateFile(sourcePath, candidate, 0o644)
 	case MutationMove:
 		destinationPath := filepath.Join(vault, filepath.FromSlash(destination))
-		if err := internalfsutil.RenameNoReplace(sourcePath, destinationPath); err != nil {
-			if errors.Is(err, os.ErrExist) {
-				return &ConflictError{Path: destination, Expected: AbsentHash, Actual: "present"}
-			}
-			return err
-		}
-		return nil
+		return workspace.RenameFileCAS(sourcePath, destinationPath, expectedHash)
 	case MutationDelete:
-		return os.Remove(sourcePath)
+		return workspace.RemoveFileCAS(sourcePath, expectedHash)
 	default:
 		return fmt.Errorf("unsupported source mutation %q", operation)
 	}
+}
+
+func sourceMutationConflict(vault, operation, source, destination, expectedHash string) error {
+	if operation == MutationMove {
+		if _, exists, err := readMutationFile(vault, destination); err != nil {
+			return err
+		} else if exists {
+			return &ConflictError{Path: destination, Expected: AbsentHash, Actual: "present"}
+		}
+	}
+	data, exists, err := readMutationFile(vault, source)
+	if err != nil {
+		return err
+	}
+	actual := AbsentHash
+	if exists {
+		actual = hashBytes(data)
+	}
+	return &ConflictError{Path: source, Expected: expectedHash, Actual: actual}
+}
+
+func sourceMutationMatchesAfter(vault, operation, source, destination, expectedHash string) (bool, error) {
+	if operation == MutationMove {
+		if _, exists, err := readMutationFile(vault, source); err != nil {
+			return false, err
+		} else if exists {
+			return false, nil
+		}
+		data, exists, err := readMutationFile(vault, destination)
+		if err != nil {
+			return false, err
+		}
+		return exists && hashBytes(data) == expectedHash, nil
+	}
+	data, exists, err := readMutationFile(vault, source)
+	if err != nil {
+		return false, err
+	}
+	if !exists {
+		return expectedHash == AbsentHash, nil
+	}
+	return hashBytes(data) == expectedHash, nil
 }
 
 func readMutationFile(vault, rel string) ([]byte, bool, error) {
@@ -587,17 +709,102 @@ func validateMoveDestination(vault string, snapshot Snapshot, source internalmod
 	return fmt.Errorf("destination must be inside an existing section in the same version")
 }
 
+// ValidateEditorArticleMove applies the same normalized destination and
+// reference preflight as Agent moves, while allowing the authenticated editor
+// to manage unpublished articles and sections.
+func ValidateEditorArticleMove(vaultPath, outputPath, source, destination string) error {
+	sourcePath, err := NormalizeSourcePath(source)
+	if err != nil {
+		return err
+	}
+	destinationPath, err := NormalizeSourcePath(destination)
+	if err != nil {
+		return err
+	}
+	return validateEditorArticleMutation(vaultPath, outputPath, sourcePath, destinationPath, true)
+}
+
+// ValidateEditorArticleDelete rejects article deletes that would leave an
+// incoming source reference dangling.
+func ValidateEditorArticleDelete(vaultPath, outputPath, source string) error {
+	sourcePath, err := NormalizeSourcePath(source)
+	if err != nil {
+		return err
+	}
+	return validateEditorArticleMutation(vaultPath, outputPath, sourcePath, "", false)
+}
+
+func openEditorMutationSnapshot(vaultPath, outputPath string) (Snapshot, error) {
+	if strings.TrimSpace(vaultPath) == "" {
+		vaultPath = "."
+	}
+	if strings.TrimSpace(outputPath) == "" {
+		outputPath = filepath.Join(vaultPath, "public")
+	}
+	boundary, err := internalfsutil.ResolveVaultOutput(vaultPath, outputPath)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	analysis, analyzeErr := internalanalyze.AnalyzeWithOutput(boundary.VaultPath, boundary.OutputPath)
+	if analyzeErr != nil || analysis.Plan == nil {
+		if analyzeErr == nil {
+			analyzeErr = errors.New("normalized analysis is unavailable")
+		}
+		return Snapshot{}, &MutationError{Err: analyzeErr, Diagnostics: analysis.Diagnostics}
+	}
+	catalog := internalbuild.SourceCatalogForPlan(analysis.Plan)
+	if catalog == nil {
+		return Snapshot{}, &MutationError{Err: errors.New("normalized source catalog is unavailable"), Diagnostics: analysis.Diagnostics}
+	}
+	return Snapshot{VaultPath: boundary.VaultPath, OutputPath: boundary.OutputPath, Analysis: analysis, Catalog: catalog}, nil
+}
+
+func validateEditorArticleMutation(vaultPath, outputPath, source, destination string, moving bool) error {
+	snapshot, err := openEditorMutationSnapshot(vaultPath, outputPath)
+	if err != nil {
+		return err
+	}
+	entry, err := snapshot.Entry(source, true)
+	if err != nil {
+		return err
+	}
+	if entry.Kind != "article" {
+		return fmt.Errorf("only ordinary article sources can be moved or deleted")
+	}
+	if moving {
+		if strings.EqualFold(path.Base(destination), "_index.md") {
+			return errors.New("cannot move an article to a section source")
+		}
+		if err := validateSourceParent(snapshot.VaultPath, destination); err != nil {
+			return err
+		}
+		parent := path.Dir(destination)
+		for _, candidate := range snapshot.Catalog.Entries {
+			if candidate.Kind == "section" && candidate.SectionPath == parent && candidate.VersionID == entry.VersionID {
+				goto destinationValid
+			}
+		}
+		return fmt.Errorf("destination must be inside an existing section in the same version")
+	}
+
+destinationValid:
+	return checkSourceReferences(snapshot, source)
+}
+
 func checkSourceReferences(snapshot Snapshot, rel string) error {
 	if snapshot.Analysis.Plan == nil || snapshot.Analysis.Plan.Index == nil {
 		return nil
 	}
-	graph := internallink.BuildSourceGraph(sourceReferenceIndex(snapshot.Analysis.Plan.Index))
-	if len(graph.Backward[rel]) != 0 {
+	index := sourceReferenceIndex(snapshot)
+	graph := internallink.BuildSourceGraph(index)
+	if refs := graph.Backward[rel]; len(refs) != 0 {
 		return &MutationError{
 			Err: errors.New("source reference conflict"),
 			Diagnostics: []internaldiag.Diagnostic{{
 				Severity: internaldiag.SeverityError,
 				Kind:     internaldiag.KindReferenceConflict,
+				Location: internaldiag.Location{Path: refs[0], Line: sourceReferenceLine(index, refs[0], rel)},
+				Target:   rel,
 				Message:  fmt.Sprintf("source %q is still referenced; repair links before move or delete", rel),
 			}},
 		}
@@ -605,9 +812,53 @@ func checkSourceReferences(snapshot Snapshot, rel string) error {
 	return nil
 }
 
-func sourceReferenceIndex(index *internalmodel.VaultIndex) *internalmodel.VaultIndex {
-	if index == nil {
+func sourceReferenceIndex(snapshot Snapshot) *internalmodel.VaultIndex {
+	if snapshot.Analysis.Plan == nil || snapshot.Analysis.Plan.Plan == nil || snapshot.Analysis.Plan.Index == nil {
 		return nil
+	}
+	index := snapshot.Analysis.Plan.Index
+	sections := make([]*internalmodel.Section, 0, len(index.Sections))
+	seenSections := make(map[string]struct{}, len(index.Sections))
+	for _, section := range index.Sections {
+		if section == nil || strings.TrimSpace(section.SourcePath) == "" {
+			continue
+		}
+		sections = append(sections, section)
+		seenSections[section.SourcePath] = struct{}{}
+	}
+	for _, source := range snapshot.Analysis.Plan.Sources.Sections {
+		if source == nil || strings.TrimSpace(source.RelPath) == "" {
+			continue
+		}
+		if _, exists := seenSections[source.RelPath]; exists {
+			continue
+		}
+		sections = append(sections, &internalmodel.Section{
+			RelPath:       source.SectionPath,
+			SourcePath:    source.RelPath,
+			Title:         source.Frontmatter.Title,
+			Description:   source.Frontmatter.Description,
+			Publish:       source.Frontmatter.Publish != nil && *source.Frontmatter.Publish,
+			Order:         source.Frontmatter.Order,
+			RawContent:    append([]byte(nil), source.RawContent...),
+			BodyStartLine: source.BodyStartLine,
+			VersionID:     referenceSectionVersion(snapshot.Analysis.Plan.Plan.Config.Versions, source.SectionPath),
+		})
+		seenSections[source.RelPath] = struct{}{}
+	}
+	if len(sections) > len(index.Sections) {
+		sort.Slice(sections, func(i, j int) bool { return sections[i].SourcePath < sections[j].SourcePath })
+		indexed, _ := internalvault.BuildStrictIndex(
+			snapshot.Analysis.Plan.Scan,
+			snapshot.Analysis.Plan.Sources,
+			snapshot.Analysis.Plan.Plan.Articles,
+			sections,
+			internaldiag.NewCollector(),
+			internalvault.BuildIndexOptions{ResourceSections: sections},
+		)
+		if indexed.Index != nil {
+			index = indexed.Index
+		}
 	}
 	combined := &internalmodel.VaultIndex{
 		AttachmentFolderPath: index.AttachmentFolderPath,
@@ -663,6 +914,86 @@ func sourceReferenceIndex(index *internalmodel.VaultIndex) *internalmodel.VaultI
 		}
 	}
 	return combined
+}
+
+func sourceReferenceLine(index *internalmodel.VaultIndex, source, target string) int {
+	if index == nil || index.Notes[source] == nil {
+		return 0
+	}
+	note := index.Notes[source]
+	for indexRef, ref := range note.OutLinks {
+		candidateNote := *note
+		candidateNote.OutLinks = []internalmodel.LinkRef{note.OutLinks[indexRef]}
+		candidateNote.Embeds = nil
+		candidate := referenceIndexWithNotes(index, cloneReferenceNotes(index.Notes, source, &candidateNote))
+		if containsReferenceTarget(internallink.BuildSourceGraph(candidate).Forward[source], target) {
+			return ref.Line
+		}
+	}
+	for indexRef, ref := range note.Embeds {
+		if ref.IsImage {
+			continue
+		}
+		candidateNote := *note
+		candidateNote.OutLinks = nil
+		candidateNote.Embeds = []internalmodel.EmbedRef{note.Embeds[indexRef]}
+		candidate := referenceIndexWithNotes(index, cloneReferenceNotes(index.Notes, source, &candidateNote))
+		if containsReferenceTarget(internallink.BuildSourceGraph(candidate).Forward[source], target) {
+			return ref.Line
+		}
+	}
+	return 0
+}
+
+func referenceIndexWithNotes(index *internalmodel.VaultIndex, notes map[string]*internalmodel.Note) *internalmodel.VaultIndex {
+	return &internalmodel.VaultIndex{
+		AttachmentFolderPath: index.AttachmentFolderPath,
+		Notes:                notes,
+		Sections:             index.Sections,
+		SectionsBySource:     index.SectionsBySource,
+		SectionsByRoute:      index.SectionsByRoute,
+		NoteBySlug:           index.NoteBySlug,
+		NoteByName:           index.NoteByName,
+		AliasByName:          index.AliasByName,
+		Unpublished:          index.Unpublished,
+	}
+}
+
+func cloneReferenceNotes(notes map[string]*internalmodel.Note, source string, replacement *internalmodel.Note) map[string]*internalmodel.Note {
+	result := make(map[string]*internalmodel.Note, len(notes))
+	for relPath, note := range notes {
+		result[relPath] = note
+	}
+	result[source] = replacement
+	return result
+}
+
+func containsReferenceTarget(targets []string, wanted string) bool {
+	for _, target := range targets {
+		if target == wanted {
+			return true
+		}
+	}
+	return false
+}
+
+func referenceSectionVersion(config *internalmodel.VersionsConfig, sectionPath string) string {
+	if config == nil || sectionPath == "" {
+		return ""
+	}
+	bestSource := ""
+	bestID := ""
+	for _, entry := range config.Entries {
+		source := path.Join(config.Root, entry.Source)
+		if sectionPath != source && !strings.HasPrefix(sectionPath, source+"/") {
+			continue
+		}
+		if len(source) > len(bestSource) {
+			bestSource = source
+			bestID = entry.ID
+		}
+	}
+	return bestID
 }
 
 func validateExpectedHash(value string, allowAbsent bool) error {
@@ -954,6 +1285,9 @@ func MutateConfig(vaultPath string, request ConfigMutationRequest) (MutationResu
 		}
 		return mutateConfigLocked(vault, request, false)
 	}
+	if err := recoverPendingApplicationJournal(vault); err != nil {
+		return MutationResult{}, err
+	}
 	lease, err := workspace.Acquire(vault)
 	if err != nil {
 		return MutationResult{}, err
@@ -1017,6 +1351,13 @@ func mutateConfigLocked(vault string, request ConfigMutationRequest, persistent 
 		return MutationResult{}, err
 	}
 	if request.DryRun {
+		endFingerprint, fingerprintErr := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+		if fingerprintErr != nil {
+			return MutationResult{}, fingerprintErr
+		}
+		if endFingerprint != startFingerprint {
+			return MutationResult{}, errors.New("CONCURRENT_INPUT: Vault inputs changed during config dry-run")
+		}
 		return result, nil
 	}
 	currentAfterRead, currentExists, err := readConfigBytesState(vault)
@@ -1042,11 +1383,35 @@ func mutateConfigLocked(vault string, request ConfigMutationRequest, persistent 
 	if err := workspace.WriteJournal(vault, journal); err != nil {
 		return MutationResult{}, err
 	}
-	if err := workspace.AtomicWriteFile(filepath.Join(vault, internalconfig.Filename), candidate, 0o644); err != nil {
-		return MutationResult{}, err
+	completedPaths := []workspace.CompletedPath{{Path: filepath.Join(vault, internalconfig.Filename), AfterHash: hashBytes(candidate)}}
+	if err := workspace.RecordCompleted(vault, completedPaths); err != nil {
+		cleanupErr := workspace.RemoveCompleted(vault, completedPaths)
+		journalErr := workspace.ClearJournal(vault)
+		return MutationResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), cleanupErr, journalErr)
 	}
-	if err := workspace.RecordCompleted(vault, []workspace.CompletedPath{{Path: filepath.Join(vault, internalconfig.Filename), AfterHash: hashBytes(candidate)}}); err != nil {
-		result.Diagnostics = append(result.Diagnostics, internaldiag.Diagnostic{Severity: internaldiag.SeverityWarning, Kind: internaldiag.KindOutputCleanup, Message: "config committed; watch suppression marker could not be recorded"})
+	if err := workspace.AtomicWriteFileCAS(filepath.Join(vault, internalconfig.Filename), beforeHash, candidate, 0o644); err != nil {
+		currentAfter, existsAfter, readErr := readConfigBytesState(vault)
+		actualAfter := AbsentHash
+		if existsAfter {
+			actualAfter = hashBytes(currentAfter)
+		}
+		if readErr == nil && actualAfter == hashBytes(candidate) {
+			journal.Phase = "source-committed"
+			if journalErr := workspace.WriteJournal(vault, journal); journalErr != nil {
+				return MutationResult{}, errors.Join(err, journalErr, fmt.Errorf("%w: config mutation recovery required", workspace.ErrRecovery))
+			}
+			result.Diagnostics = append(result.Diagnostics, internaldiag.Diagnostic{Severity: internaldiag.SeverityWarning, Kind: internaldiag.KindOutputCleanup, Message: "config committed; atomic write reported an error and transaction recovery is pending"})
+			return result, nil
+		}
+		if readErr == nil && actualAfter == beforeHash {
+			if errors.Is(err, workspace.ErrCASConflict) {
+				err = &ConflictError{Path: internalconfig.Filename, Expected: beforeHash, Actual: actualAfter}
+			}
+			cleanupErr := workspace.RemoveCompleted(vault, completedPaths)
+			journalErr := workspace.ClearJournal(vault)
+			return MutationResult{}, errors.Join(err, cleanupErr, journalErr)
+		}
+		return MutationResult{}, errors.Join(err, readErr, fmt.Errorf("%w: config mutation recovery required", workspace.ErrRecovery))
 	}
 	journal.Phase = "source-committed"
 	if err := workspace.WriteJournal(vault, journal); err != nil {

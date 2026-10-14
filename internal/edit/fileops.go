@@ -15,6 +15,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
@@ -85,6 +86,9 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	}
 	coordinator.mu.Lock()
 	defer coordinator.mu.Unlock()
+	if err := recoverPendingWorkspaceJournal(coordinator.vault); err != nil {
+		return TransactionResult{}, err
+	}
 	lease, err := workspace.Acquire(coordinator.vault)
 	if err != nil {
 		return TransactionResult{}, err
@@ -199,6 +203,17 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 			if err := coordinator.validateEditableFileManagerTarget(mutation.path, current.isDir); err != nil {
 				return TransactionResult{}, err
 			}
+			if !current.isDir {
+				var preflightErr error
+				if mutation.operation == fileMutationRename {
+					preflightErr = internalapplication.ValidateEditorArticleMove(coordinator.vault, coordinator.output, mutation.path, mutation.destination)
+				} else {
+					preflightErr = internalapplication.ValidateEditorArticleDelete(coordinator.vault, coordinator.output, mutation.path)
+				}
+				if preflightErr != nil {
+					return TransactionResult{}, preflightErr
+				}
+			}
 		}
 		if err := validateManagedSubtree(coordinator.vault, coordinator.output, mutation.path, current.isDir); err != nil {
 			return TransactionResult{}, err
@@ -217,6 +232,14 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		}
 		if verifyErr := verifyFileManagerMutation(coordinator.vault, mutation, expectedAfter); verifyErr != nil {
 			return rollbackMutationResult(rollback, verifyErr)
+		}
+		if err := workspace.RecordCompleted(coordinator.vault, completedFileManagerPaths(coordinator.vault, mutation, expectedAfter)); err != nil {
+			rollbackErr := rollback()
+			finalizeErr := finalize()
+			if rollbackErr != nil {
+				return TransactionResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), rollbackErr, finalizeErr, fmt.Errorf("%w: source rollback failed", workspace.ErrRecovery))
+			}
+			return TransactionResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), finalizeErr)
 		}
 		return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, SourceCleanupError: finalize()}, nil
 	}
@@ -312,7 +335,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		}
 		return nil
 	}
-	if err := transaction.MarkSourceCommitted(expectedAfterFingerprint, validateInput); err != nil {
+	if err := transaction.PrepareSourceCommit(expectedAfterFingerprint, validateInput); err != nil {
 		return TransactionResult{}, errors.Join(err, transaction.Abort())
 	}
 	rollback, finalize, expectedAfter, err := applyFileManagerMutation(coordinator.vault, mutation, current, artifactRoot)
@@ -328,7 +351,8 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 			preserveErr := transaction.PreserveForRecovery()
 			return TransactionResult{}, errors.Join(operationErr, rollbackErr, preserveErr, fmt.Errorf("%w: source rollback failed", workspace.ErrRecovery))
 		}
-		return TransactionResult{}, errors.Join(operationErr, transaction.Abort())
+		markerErr := workspace.ReplaceCompleted(coordinator.vault, completedFileManagerBeforePaths(coordinator.vault, mutation, current))
+		return TransactionResult{}, errors.Join(operationErr, markerErr, transaction.Abort())
 	}
 	if expectedAfter.hash != candidateExpected.hash || expectedAfter.exists != candidateExpected.exists || expectedAfter.isDir != candidateExpected.isDir {
 		return rollbackMutation(&ConflictError{Path: mutation.path, Expected: candidateExpected.hash, Actual: expectedAfter.hash})
@@ -339,11 +363,17 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	if expectedAfter.hash != predictedAfter || filepath.ToSlash(expectedAfter.path) != filepath.ToSlash(predictedPath) {
 		return rollbackMutation(&ConflictError{Path: mutation.path, Expected: predictedAfter, Actual: expectedAfter.hash})
 	}
+	if err := transaction.MarkSourceCommitted(); err != nil {
+		return rollbackMutation(err)
+	}
 
 	if currentFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output); fingerprintErr != nil {
 		return rollbackMutation(fingerprintErr)
 	} else if currentFingerprint != expectedAfterFingerprint {
 		return rollbackMutation(fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during source mutation"))
+	}
+	if err := workspace.RecordCompleted(coordinator.vault, completedFileManagerPaths(coordinator.vault, mutation, expectedAfter)); err != nil {
+		return rollbackMutation(fmt.Errorf("watch suppression marker could not be recorded: %w", err))
 	}
 	commit, err := transaction.Commit()
 	if err != nil {
@@ -365,6 +395,28 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	}
 	coordinator.catalog = cloneCatalog(built.Catalog)
 	return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, Build: built, SourceCleanupError: sourceCleanupErr}, nil
+}
+
+func completedFileManagerPaths(vault string, mutation fileManagerMutation, expected fileManagerState) []workspace.CompletedPath {
+	source := filepath.Join(vault, filepath.FromSlash(mutation.path))
+	switch mutation.operation {
+	case fileMutationRename:
+		return []workspace.CompletedPath{{Path: source, AfterHash: fileManagerHashAbsent}, {Path: filepath.Join(vault, filepath.FromSlash(mutation.destination)), AfterHash: expected.hash}}
+	case fileMutationDelete:
+		return []workspace.CompletedPath{{Path: source, AfterHash: fileManagerHashAbsent}}
+	default:
+		return []workspace.CompletedPath{{Path: source, AfterHash: expected.hash}}
+	}
+}
+
+func completedFileManagerBeforePaths(vault string, mutation fileManagerMutation, current fileManagerState) []workspace.CompletedPath {
+	source := filepath.Join(vault, filepath.FromSlash(mutation.path))
+	switch mutation.operation {
+	case fileMutationRename:
+		return []workspace.CompletedPath{{Path: source, AfterHash: current.hash}, {Path: filepath.Join(vault, filepath.FromSlash(mutation.destination)), AfterHash: fileManagerHashAbsent}}
+	default:
+		return []workspace.CompletedPath{{Path: source, AfterHash: current.hash}}
+	}
 }
 
 func (coordinator *Coordinator) validateEditableFileManagerTarget(relPath string, isDir bool) error {

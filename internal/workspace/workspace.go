@@ -32,8 +32,9 @@ var validJournalPhases = map[string]bool{
 }
 
 var (
-	ErrBusy     = errors.New("WORKSPACE_BUSY")
-	ErrRecovery = errors.New("RECOVERY_ERROR")
+	ErrBusy        = errors.New("WORKSPACE_BUSY")
+	ErrRecovery    = errors.New("RECOVERY_ERROR")
+	ErrCASConflict = errors.New("CAS_CONFLICT")
 )
 
 type codedError struct {
@@ -327,6 +328,17 @@ func ClearJournal(vault string) error {
 // RecordCompleted records source-only paths whose resulting filesystem event
 // may be consumed by an active watch without triggering a formal publish.
 func RecordCompleted(vault string, paths []CompletedPath) error {
+	return updateCompleted(vault, paths, false)
+}
+
+// ReplaceCompleted replaces pending records for the supplied paths. It is used
+// when a source/output transaction rolls its source back so a watch suppresses
+// the rollback event rather than publishing a second, stale output.
+func ReplaceCompleted(vault string, paths []CompletedPath) error {
+	return updateCompleted(vault, paths, true)
+}
+
+func updateCompleted(vault string, paths []CompletedPath, replace bool) error {
 	resolved, err := internalfsutil.ResolveVaultPath(vault)
 	if err != nil {
 		return err
@@ -348,33 +360,102 @@ func RecordCompleted(vault string, paths []CompletedPath) error {
 		} else if !errors.Is(readErr, os.ErrNotExist) {
 			return readErr
 		}
+		validated := make([]CompletedPath, 0, len(paths))
+		replaced := make(map[string]struct{}, len(paths))
 		for _, item := range paths {
 			cleanPath := filepath.Clean(item.Path)
 			if !internalfsutil.PathWithinRoot(resolved, cleanPath) || strings.TrimSpace(item.AfterHash) == "" {
 				return errors.New("completed transaction path is outside the Vault or has no after hash")
 			}
+			if _, seen := replaced[cleanPath]; seen {
+				continue
+			}
+			replaced[cleanPath] = struct{}{}
+			validated = append(validated, CompletedPath{Path: cleanPath, AfterHash: item.AfterHash})
+		}
+		if replace {
+			kept := existing[:0]
+			for _, prior := range existing {
+				if _, replacedPath := replaced[filepath.Clean(prior.Path)]; !replacedPath {
+					kept = append(kept, prior)
+				}
+			}
+			existing = kept
+		}
+		for _, item := range validated {
 			duplicate := false
 			for _, prior := range existing {
-				if filepath.Clean(prior.Path) == cleanPath && prior.AfterHash == item.AfterHash {
+				if filepath.Clean(prior.Path) == item.Path && prior.AfterHash == item.AfterHash {
 					duplicate = true
 					break
 				}
 			}
 			if !duplicate {
-				existing = append(existing, CompletedPath{Path: cleanPath, AfterHash: item.AfterHash})
+				existing = append(existing, item)
 			}
 		}
-		encoded, err := json.Marshal(existing)
+		return writeCompletedRecords(marker, existing)
+	})
+}
+
+// RemoveCompleted removes pending suppression records for paths that were
+// prepared but never committed.
+func RemoveCompleted(vault string, paths []CompletedPath) error {
+	resolved, err := internalfsutil.ResolveVaultPath(vault)
+	if err != nil {
+		return err
+	}
+	if len(paths) == 0 {
+		return nil
+	}
+	marker := filepath.Join(resolved, ".oxpio", completedName)
+	if _, err := os.Lstat(marker); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return withCompletedLock(resolved, func() error {
+		data, err := readCompletedMarker(marker)
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
-		return AtomicWriteFile(marker, append(encoded, '\n'), 0o600)
+		var existing []CompletedPath
+		if err := json.Unmarshal(data, &existing); err != nil {
+			return fmt.Errorf("read completed transaction marker: %w", err)
+		}
+		remove := make(map[string]struct{}, len(paths))
+		for _, item := range paths {
+			cleanPath := filepath.Clean(item.Path)
+			if !internalfsutil.PathWithinRoot(resolved, cleanPath) {
+				return errors.New("completed transaction path is outside the Vault")
+			}
+			remove[cleanPath] = struct{}{}
+		}
+		remaining := existing[:0]
+		for _, item := range existing {
+			if _, ok := remove[filepath.Clean(item.Path)]; !ok {
+				remaining = append(remaining, item)
+			}
+		}
+		return writeCompletedRecords(marker, remaining)
 	})
 }
 
 // ConsumeCompleted reports a matching source-only watch event and retains the
 // record until the watch debounce window is cleared.
 func ConsumeCompleted(vault, eventPath string) (bool, error) {
+	lease, err := AcquireForRecovery(vault)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = lease.Release() }()
+	ready, err := completedSuppressionReady(vault)
+	if err != nil || !ready {
+		return false, err
+	}
 	resolved, err := internalfsutil.ResolveVaultPath(vault)
 	if err != nil {
 		return false, err
@@ -435,6 +516,16 @@ func readCompletedMarker(path string) ([]byte, error) {
 }
 
 func ClearCompleted(vault string) error {
+	lease, err := AcquireForRecovery(vault)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lease.Release() }()
+	if blocked, err := completedClearBlocked(vault); err != nil {
+		return err
+	} else if blocked {
+		return nil
+	}
 	resolved, err := internalfsutil.ResolveVaultPath(vault)
 	if err != nil {
 		return err
@@ -446,11 +537,53 @@ func ClearCompleted(vault string) error {
 		return err
 	}
 	return withCompletedLock(resolved, func() error {
+		if blocked, journalErr := completedClearBlocked(vault); journalErr != nil {
+			return journalErr
+		} else if blocked {
+			return nil
+		}
 		if err := os.Remove(marker); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
 		return nil
 	})
+}
+
+func completedSuppressionReady(vault string) (bool, error) {
+	journal, err := LoadJournal(vault)
+	if errors.Is(err, os.ErrNotExist) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if journal.CommitKind == "source-only" {
+		// Source-only commits never publish output. A matching after-hash marker
+		// is therefore safe to consume even while its journal is being finalized.
+		return true, nil
+	}
+	switch journal.Phase {
+	case "output-committed", "completed":
+		return true, nil
+	default:
+		// A source/output transaction is still before its formal output commit;
+		// do not suppress its source event while output may be stale.
+		return false, nil
+	}
+}
+
+func completedClearBlocked(vault string) (bool, error) {
+	journal, err := LoadJournal(vault)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if journal.CommitKind == "source-only" {
+		return journal.Phase == "prepared", nil
+	}
+	return journal.Phase != "output-committed" && journal.Phase != "completed", nil
 }
 
 func withCompletedLock(vault string, fn func() error) error {
@@ -778,6 +911,321 @@ func AtomicCreateFile(name string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	return SyncDirectory(parent)
+}
+
+// AtomicWriteFileCAS replaces a regular file only while its inode and bytes
+// still match expectedHash. It preserves an external replacement instead of
+// overwriting it between the final check and the atomic swap.
+func AtomicWriteFileCAS(name, expectedHash string, data []byte, mode os.FileMode) error {
+	if expectedHash == "absent" {
+		return AtomicCreateFile(name, data, mode)
+	}
+	parent := filepath.Dir(name)
+	if err := ensureAtomicFileParent(parent); err != nil {
+		return err
+	}
+	snapshot, err := createCASSnapshot(name, parent, expectedHash)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(snapshot) }()
+	candidate, err := createCASContent(parent, data, mode)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(candidate) }()
+	if err := verifyCASSnapshot(snapshot, name, expectedHash); err != nil {
+		return err
+	}
+	displaced, err := moveCASSource(name, parent)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if displaced != "" {
+			_ = os.Remove(displaced)
+		}
+	}()
+	if err := verifyCASSnapshot(snapshot, displaced, expectedHash); err != nil {
+		if restoreErr := restoreCASSource(displaced, name); restoreErr == nil {
+			displaced = ""
+			return errors.Join(ErrCASConflict, err)
+		} else {
+			return errors.Join(ErrCASConflict, err, restoreErr)
+		}
+	}
+	if _, err := os.Lstat(name); err == nil {
+		if restoreErr := restoreCASSource(displaced, name); restoreErr == nil {
+			displaced = ""
+			return ErrCASConflict
+		} else {
+			return errors.Join(ErrCASConflict, restoreErr)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Link(candidate, name); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			if removeErr := os.Remove(displaced); removeErr == nil {
+				displaced = ""
+				return ErrCASConflict
+			}
+		}
+		if restoreErr := restoreCASSource(displaced, name); restoreErr == nil {
+			displaced = ""
+		}
+		return err
+	}
+	candidateHash := hashBytes(data)
+	if err := verifyCASFile(candidate, candidateHash); err != nil {
+		return errors.Join(ErrCASConflict, err)
+	}
+	candidateInfo, candidateErr := os.Stat(candidate)
+	nameInfo, nameErr := os.Stat(name)
+	if candidateErr != nil || nameErr != nil || !os.SameFile(candidateInfo, nameInfo) {
+		return ErrCASConflict
+	}
+	if err := os.Remove(displaced); err != nil {
+		return err
+	}
+	displaced = ""
+	return SyncDirectory(parent)
+}
+
+// RenameFileCAS moves a regular file only while its source inode and bytes
+// still match expectedHash, and never replaces an existing destination.
+func RenameFileCAS(source, destination, expectedHash string) error {
+	if err := ensureAtomicFileParent(filepath.Dir(source)); err != nil {
+		return err
+	}
+	if err := ensureAtomicFileParent(filepath.Dir(destination)); err != nil {
+		return err
+	}
+	if _, err := os.Lstat(destination); err == nil {
+		return ErrCASConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	snapshot, err := createCASSnapshot(source, filepath.Dir(source), expectedHash)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(snapshot) }()
+	displaced, err := moveCASSource(source, filepath.Dir(source))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if displaced != "" {
+			_ = os.Remove(displaced)
+		}
+	}()
+	if err := verifyCASSnapshot(snapshot, displaced, expectedHash); err != nil {
+		if restoreErr := restoreCASSource(displaced, source); restoreErr == nil {
+			displaced = ""
+			return errors.Join(ErrCASConflict, err)
+		} else {
+			return errors.Join(ErrCASConflict, err, restoreErr)
+		}
+	}
+	if _, err := os.Lstat(source); err == nil {
+		if restoreErr := restoreCASSource(displaced, source); restoreErr == nil {
+			displaced = ""
+			return ErrCASConflict
+		} else {
+			return errors.Join(ErrCASConflict, restoreErr)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := internalfsutil.RenameNoReplace(displaced, destination); err != nil {
+		if restoreErr := restoreCASSource(displaced, source); restoreErr == nil {
+			displaced = ""
+			return errors.Join(ErrCASConflict, err)
+		} else {
+			return errors.Join(ErrCASConflict, err, restoreErr)
+		}
+	}
+	if err := verifyCASSnapshot(snapshot, destination, expectedHash); err != nil {
+		return errors.Join(ErrCASConflict, err)
+	}
+	return errors.Join(SyncDirectory(filepath.Dir(source)), SyncDirectory(filepath.Dir(destination)))
+}
+
+// RemoveFileCAS deletes a regular file only while its inode and bytes still
+// match expectedHash. An external replacement is left untouched.
+func RemoveFileCAS(name, expectedHash string) error {
+	if err := ensureAtomicFileParent(filepath.Dir(name)); err != nil {
+		return err
+	}
+	snapshot, err := createCASSnapshot(name, filepath.Dir(name), expectedHash)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.Remove(snapshot) }()
+	displaced, err := moveCASSource(name, filepath.Dir(name))
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if displaced != "" {
+			_ = os.Remove(displaced)
+		}
+	}()
+	if err := verifyCASSnapshot(snapshot, displaced, expectedHash); err != nil {
+		if restoreErr := restoreCASSource(displaced, name); restoreErr == nil {
+			displaced = ""
+			return errors.Join(ErrCASConflict, err)
+		} else {
+			return errors.Join(ErrCASConflict, err, restoreErr)
+		}
+	}
+	if _, err := os.Lstat(name); err == nil {
+		if restoreErr := restoreCASSource(displaced, name); restoreErr == nil {
+			displaced = ""
+			return ErrCASConflict
+		} else {
+			return errors.Join(ErrCASConflict, restoreErr)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Remove(displaced); err != nil {
+		if restoreErr := restoreCASSource(displaced, name); restoreErr == nil {
+			displaced = ""
+			return err
+		} else {
+			return errors.Join(err, restoreErr)
+		}
+	}
+	return SyncDirectory(filepath.Dir(name))
+}
+
+func ensureAtomicFileParent(parent string) error {
+	if err := internalfsutil.EnsureNoSymlinkComponents(parent); err != nil {
+		return fmt.Errorf("atomic file parent contains a symbolic link: %w", err)
+	}
+	info, err := os.Lstat(parent)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return fmt.Errorf("atomic file parent is not a regular directory: %w", err)
+	}
+	return nil
+}
+
+func createCASSnapshot(name, parent, expectedHash string) (string, error) {
+	if err := verifyCASFile(name, expectedHash); err != nil {
+		return "", err
+	}
+	temporary, err := os.CreateTemp(parent, ".oxpio-cas-*")
+	if err != nil {
+		return "", err
+	}
+	snapshot := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(snapshot)
+		return "", err
+	}
+	if err := os.Remove(snapshot); err != nil {
+		return "", err
+	}
+	if err := os.Link(name, snapshot); err != nil {
+		return "", err
+	}
+	if err := verifyCASSnapshot(snapshot, name, expectedHash); err != nil {
+		_ = os.Remove(snapshot)
+		return "", err
+	}
+	return snapshot, nil
+}
+
+func createCASContent(parent string, data []byte, mode os.FileMode) (string, error) {
+	temporary, err := os.CreateTemp(parent, ".oxpio-candidate-*")
+	if err != nil {
+		return "", err
+	}
+	name := temporary.Name()
+	cleanup := func() {
+		_ = temporary.Close()
+		_ = os.Remove(name)
+	}
+	if err := temporary.Chmod(mode); err != nil {
+		cleanup()
+		return "", err
+	}
+	if _, err := temporary.Write(data); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := temporary.Sync(); err != nil {
+		cleanup()
+		return "", err
+	}
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(name)
+		return "", err
+	}
+	return name, nil
+}
+
+func moveCASSource(name, parent string) (string, error) {
+	temporary, err := os.CreateTemp(parent, ".oxpio-displaced-*")
+	if err != nil {
+		return "", err
+	}
+	displaced := temporary.Name()
+	if err := temporary.Close(); err != nil {
+		_ = os.Remove(displaced)
+		return "", err
+	}
+	if err := os.Remove(displaced); err != nil {
+		return "", err
+	}
+	if err := os.Rename(name, displaced); err != nil {
+		return "", err
+	}
+	return displaced, nil
+}
+
+func restoreCASSource(displaced, name string) error {
+	if _, err := os.Lstat(name); err == nil {
+		return ErrCASConflict
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return internalfsutil.RenameNoReplace(displaced, name)
+}
+
+func verifyCASSnapshot(snapshot, name, expectedHash string) error {
+	if err := verifyCASFile(name, expectedHash); err != nil {
+		return err
+	}
+	snapshotInfo, snapshotErr := os.Stat(snapshot)
+	nameInfo, nameErr := os.Stat(name)
+	if snapshotErr != nil || nameErr != nil || !os.SameFile(snapshotInfo, nameInfo) {
+		return ErrCASConflict
+	}
+	return nil
+}
+
+func verifyCASFile(name, expectedHash string) error {
+	info, err := os.Lstat(name)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ErrCASConflict
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return ErrCASConflict
+	}
+	data, err := os.ReadFile(name)
+	if err != nil {
+		return err
+	}
+	if hashBytes(data) != expectedHash {
+		return ErrCASConflict
+	}
+	return nil
 }
 
 // SyncDirectory flushes directory entry changes on supported filesystems.

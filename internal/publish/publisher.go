@@ -22,6 +22,8 @@ const (
 	ManagedMarkerContents = "managed by oxpio\n"
 )
 
+var atomicReplaceDirectory = workspace.AtomicReplaceDirectory
+
 // DirectoryHash returns the deterministic identity digest used by the
 // transaction journal. It is read-only and returns "absent" or "unavailable"
 // for those exact boundary states.
@@ -162,9 +164,34 @@ func (t *Transaction) OutputPath() string {
 	return t.output
 }
 
-// MarkSourceCommitted persists the source-committed phase before output swap.
-// It is used by source+output mutations so recovery can finish the output
-// commit after a process interruption.
+// PrepareSourceCommit records the candidate input fingerprint while the
+// transaction is still prepared. The source CAS is performed only after this
+// durable pre-commit record succeeds.
+func (t *Transaction) PrepareSourceCommit(inputFingerprint string, validateInput func() error) error {
+	if t == nil || t.closed {
+		return errors.New("publish transaction is closed")
+	}
+	t.validateInput = validateInput
+	t.journal.InputFingerprint = inputFingerprint
+	if !t.options.Durable {
+		return nil
+	}
+	return workspace.WriteJournal(t.vault, t.journal)
+}
+
+// MarkSourceCommitted persists the source-committed phase after the source CAS
+// and postcondition verification succeed, before the output swap.
+func (t *Transaction) MarkSourceCommitted() error {
+	if t == nil || t.closed {
+		return errors.New("publish transaction is closed")
+	}
+	if !t.options.Durable {
+		return nil
+	}
+	t.journal.Phase = "source-committed"
+	return workspace.WriteJournal(t.vault, t.journal)
+}
+
 func (t *Transaction) MarkStagingReady() error {
 	if t == nil || t.closed {
 		return errors.New("publish transaction is closed")
@@ -183,19 +210,6 @@ func (t *Transaction) MarkStagingReady() error {
 	t.journal.OutputAfterHash = hash
 	t.journal.OutputAfterIdentity = outputIdentity(t.staging)
 	t.journal.AfterHash = hash
-	return workspace.WriteJournal(t.vault, t.journal)
-}
-
-func (t *Transaction) MarkSourceCommitted(inputFingerprint string, validateInput func() error) error {
-	if t == nil || t.closed {
-		return errors.New("publish transaction is closed")
-	}
-	t.validateInput = validateInput
-	t.journal.InputFingerprint = inputFingerprint
-	if !t.options.Durable {
-		return nil
-	}
-	t.journal.Phase = "source-committed"
 	return workspace.WriteJournal(t.vault, t.journal)
 }
 
@@ -269,9 +283,11 @@ func (t *Transaction) Commit() (result CommitResult, err error) {
 	if t.stagingHash == "" {
 		t.stagingHash = currentStagingHash
 	}
+	expectedOutputHash := currentStagingHash
 	if err := os.Chmod(t.staging, t.mode()); err != nil {
 		return result, fmt.Errorf("set staged output permissions: %w", err)
 	}
+	expectedOutputIdentity := outputIdentity(t.staging)
 	if t.options.Durable {
 		t.journal.OutputAfterHash = currentStagingHash
 		t.journal.OutputAfterIdentity = outputIdentity(t.staging)
@@ -285,7 +301,7 @@ func (t *Transaction) Commit() (result CommitResult, err error) {
 			return result, fmt.Errorf("publish output: %w", err)
 		}
 	} else {
-		if err := workspace.AtomicReplaceDirectory(t.staging, t.output); err != nil {
+		if err := atomicReplaceDirectory(t.staging, t.output); err != nil {
 			return result, err
 		}
 	}
@@ -294,20 +310,37 @@ func (t *Transaction) Commit() (result CommitResult, err error) {
 	oldRoot := t.staging
 	t.staging = ""
 	t.closed = true
+	committedOutputHash := directoryHash(t.output)
+	committedOutputIdentity := outputIdentity(t.output)
+	postconditionErr := error(nil)
+	if committedOutputHash != expectedOutputHash || committedOutputIdentity != expectedOutputIdentity {
+		postconditionErr = fmt.Errorf("committed output postcondition mismatch: expected hash %s and identity %s, found hash %s and identity %s", expectedOutputHash, expectedOutputIdentity, committedOutputHash, committedOutputIdentity)
+	}
+	journalCleanupAllowed := true
 	if t.options.Durable {
 		t.journal.Phase = "output-committed"
-		t.journal.OutputAfterHash = directoryHash(t.output)
-		t.journal.AfterHash = t.journal.OutputAfterHash
-		t.journal.OutputIdentity = outputIdentity(t.output)
-		t.journal.OutputAfterIdentity = t.journal.OutputIdentity
+		// Keep the staged proof as the expected postcondition. Recovery must
+		// reject a committed root that changed after the atomic swap rather
+		// than treating its observed hash as the expected result.
+		t.journal.OutputAfterHash = expectedOutputHash
+		t.journal.AfterHash = expectedOutputHash
+		t.journal.OutputAfterIdentity = expectedOutputIdentity
+		t.journal.OutputIdentity = committedOutputIdentity
 		if journalErr := workspace.WriteJournal(t.vault, t.journal); journalErr != nil {
 			result.CleanupError = journalErr
+			journalCleanupAllowed = false
 		}
 	}
-	if removeErr := t.removeAll(oldRoot); removeErr != nil {
-		result.CleanupError = errors.Join(result.CleanupError, fmt.Errorf("cleanup previous output: %w", removeErr))
+	if postconditionErr != nil {
+		result.CleanupError = errors.Join(result.CleanupError, postconditionErr)
+		journalCleanupAllowed = false
 	}
-	if t.options.Durable {
+	if !t.options.Durable || journalCleanupAllowed {
+		if removeErr := t.removeAll(oldRoot); removeErr != nil {
+			result.CleanupError = errors.Join(result.CleanupError, fmt.Errorf("cleanup previous output: %w", removeErr))
+		}
+	}
+	if t.options.Durable && journalCleanupAllowed {
 		if cleanupErr := removeJournalArtifacts(t.journal); cleanupErr != nil {
 			result.CleanupError = errors.Join(result.CleanupError, cleanupErr)
 		}

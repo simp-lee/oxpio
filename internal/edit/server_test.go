@@ -532,6 +532,41 @@ func TestEditorPreviewPostUsesAuthenticatedCandidateOverlay(t *testing.T) {
 	if contentResponse.StatusCode != http.StatusOK || !strings.Contains(string(content), "Preview only") || contentResponse.Header.Get("Cache-Control") != "no-store" {
 		t.Fatalf("preview content = %d %s", contentResponse.StatusCode, content)
 	}
+
+	newPreviewBody := `{"path":"new.md","source":` + strconv.Quote("---\ntitle: New preview\npublish: false\ntype: doc\n---\nDraft\n") + `}`
+	newRequest, err := http.NewRequest(http.MethodPost, ts.URL+"/_oxpio/preview", strings.NewReader(newPreviewBody))
+	if err != nil {
+		t.Fatal(err)
+	}
+	newRequest.Header.Set("Origin", ts.URL)
+	newRequest.Header.Set(csrfHeaderName, sessionData.CSRF)
+	newRequest.Header.Set("Content-Type", "application/json")
+	newResponse, err := httpClient.Do(newRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if newResponse.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(newResponse.Body)
+		_ = newResponse.Body.Close()
+		t.Fatalf("new article preview response = %d %s", newResponse.StatusCode, body)
+	}
+	var newPreview struct {
+		ContentURL string `json:"contentURL"`
+	}
+	if err := json.NewDecoder(newResponse.Body).Decode(&newPreview); err != nil {
+		_ = newResponse.Body.Close()
+		t.Fatal(err)
+	}
+	_ = newResponse.Body.Close()
+	newContentResponse, err := httpClient.Get(ts.URL + newPreview.ContentURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newContent, _ := io.ReadAll(newContentResponse.Body)
+	_ = newContentResponse.Body.Close()
+	if newContentResponse.StatusCode != http.StatusOK || !strings.Contains(string(newContent), "New preview") {
+		t.Fatalf("new article preview content = %d %s", newContentResponse.StatusCode, newContent)
+	}
 }
 
 func sourceHashForTest(data []byte) string {

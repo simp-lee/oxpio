@@ -332,6 +332,53 @@ func TestCommitAtomicallyReplacesManagedOutputAndClearsJournal(t *testing.T) {
 	}
 }
 
+func TestCommitRetainsExpectedPostconditionWhenOutputChangesAfterSwap(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "public")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, ManagedMarkerFilename), []byte(ManagedMarkerContents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	transaction, err := Prepare(vault, output, Options{Durable: true, InputFingerprint: "input"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(transaction.StagingPath(), "index.html"), []byte("new"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	originalReplace := atomicReplaceDirectory
+	atomicReplaceDirectory = func(source, target string) error {
+		if err := workspace.AtomicReplaceDirectory(source, target); err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(target, "post-swap-change"), []byte("external"), 0o644)
+	}
+	defer func() { atomicReplaceDirectory = originalReplace }()
+
+	result, err := transaction.Commit()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CleanupError == nil || !strings.Contains(result.CleanupError.Error(), "postcondition mismatch") {
+		t.Fatalf("Commit() cleanup warning = %v, want postcondition mismatch", result.CleanupError)
+	}
+	journal, err := workspace.LoadJournal(vault)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if journal.OutputAfterHash == directoryHash(output) {
+		t.Fatalf("journal accepted observed output hash %q", journal.OutputAfterHash)
+	}
+	if _, err := Recover(vault, false); err == nil || !errors.Is(err, workspace.ErrRecovery) {
+		t.Fatalf("Recover() error = %v, want RECOVERY_ERROR", err)
+	}
+}
+
 func TestCommitInputRecheckLeavesOutputUnchanged(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(vault, "public")
