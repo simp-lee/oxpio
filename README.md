@@ -220,4 +220,4 @@ npx --no-install playwright install chromium
 npm run test:e2e
 ```
 
-OXPIO does not provide site search, migration of old vault formats, complete template replacement, online search, a database, or external runtime downloads.
+OXPIO does not provide site search, migration of old vault formats, online search, a database, or external runtime downloads.
