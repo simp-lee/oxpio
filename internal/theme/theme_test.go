@@ -51,7 +51,7 @@ func TestBaseThemeHasStableContractAndRendersAllPageKinds(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, kind := range []string{"section", "article", "tag", "timeline", "404"} {
-		output, renderErr := renderer.Render(kind, viewmodel.Page{Schema: viewmodel.SchemaVersion, Kind: kind, Site: viewmodel.Site{Title: "Site", Language: "en"}, Title: strings.Title(kind)})
+		output, renderErr := renderer.Render(kind, viewmodel.Page{Schema: viewmodel.SchemaVersion, Kind: kind, Site: viewmodel.Site{Title: "Site", Language: "en"}, Title: strings.ToUpper(kind[:1]) + kind[1:]})
 		if renderErr != nil {
 			t.Fatalf("render %s: %v", kind, renderErr)
 		}

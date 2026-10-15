@@ -7,9 +7,21 @@ import (
 	"fmt"
 	"net/http"
 
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
 	"github.com/simp-lee/oxpio/internal/vault"
 )
+
+func currentSourceBytes(vaultRoot string, entry *model.SourceCatalogEntry) ([]byte, error) {
+	if entry == nil {
+		return nil, fmt.Errorf("source entry is missing")
+	}
+	_, data, _, err := internalfsutil.ReadContainedRegularFile(vaultRoot, entry.RelPath)
+	if err != nil {
+		return nil, err
+	}
+	return data, nil
+}
 
 type sourceMetaResponse struct {
 	Path        string            `json:"path"`
@@ -59,7 +71,11 @@ func (s *Server) serveSourceMeta(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	content := append([]byte(nil), entry.RawSource...)
+	content, err := currentSourceBytes(s.vault, entry)
+	if err != nil {
+		http.Error(w, "source is not available", http.StatusConflict)
+		return
+	}
 	response := makeEditorMetaResponse(entry, content)
 	writeJSON(w, response)
 }

@@ -35,9 +35,10 @@ esac
 (
   cd "$VAULT"
   "$BINARY" init
-  "$BINARY" build
+  "$BINARY" validate
+  "$BINARY" publish
 )
-[ -f "$VAULT/public/index.html" ] || { echo "default build did not create public/index.html" >&2; exit 1; }
+[ -f "$VAULT/public/index.html" ] || { echo "default publish did not create public/index.html" >&2; exit 1; }
 
 PORT=$(python3 - <<'PY'
 import socket

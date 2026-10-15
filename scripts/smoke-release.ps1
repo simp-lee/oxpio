@@ -24,14 +24,16 @@ try {
     try {
         & $Binary init
         if ($LASTEXITCODE -ne 0) { throw "oxpio init exited $LASTEXITCODE" }
-        & $Binary build
-        if ($LASTEXITCODE -ne 0) { throw "oxpio build exited $LASTEXITCODE" }
+        & $Binary validate
+        if ($LASTEXITCODE -ne 0) { throw "oxpio validate exited $LASTEXITCODE" }
+        & $Binary publish
+        if ($LASTEXITCODE -ne 0) { throw "oxpio publish exited $LASTEXITCODE" }
     }
     finally {
         Pop-Location
     }
     if (-not (Test-Path -LiteralPath (Join-Path $Vault 'public/index.html') -PathType Leaf)) {
-        throw 'default build did not create public/index.html'
+        throw 'default publish did not create public/index.html'
     }
 
     $Listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)

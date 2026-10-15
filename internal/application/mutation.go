@@ -88,12 +88,14 @@ func (e *MutationError) Error() string {
 	}
 	return e.Err.Error()
 }
+
 func (e *MutationError) Unwrap() error {
 	if e == nil {
 		return nil
 	}
 	return e.Err
 }
+
 func (e *MutationError) AnalysisDiagnostics() []internaldiag.Diagnostic {
 	if e == nil {
 		return nil
@@ -1019,6 +1021,7 @@ func stringPtrHash(value string) *string {
 	}
 	return &value
 }
+
 func minInt(a, b int) int {
 	if a < b {
 		return a
@@ -1439,6 +1442,7 @@ func readConfigBytes(vault string) ([]byte, error) {
 	}
 	return data, nil
 }
+
 func readConfigBytesState(vault string) ([]byte, bool, error) {
 	_, data, _, err := internalfsutil.ReadContainedRegularFile(vault, filepath.Join(vault, internalconfig.Filename))
 	if err == nil {
@@ -1449,6 +1453,7 @@ func readConfigBytesState(vault string) ([]byte, bool, error) {
 	}
 	return nil, false, err
 }
+
 func configSummary(cfg internalmodel.SiteConfig, hash string) ConfigSummary {
 	versions := 0
 	if cfg.Versions != nil {

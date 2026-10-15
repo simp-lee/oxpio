@@ -1374,7 +1374,7 @@ func writeStrictConfiguredAssets(vaultRoot, outputRoot string, plan *model.SiteP
 }
 
 func strictReservedAssetOutputs(plan *model.SitePlan) []string {
-	reserved := []string{"style.css", "assets/oxpio-runtime", "assets/oxpio", "assets/oxpio", "assets/social"}
+	reserved := []string{"style.css", "assets/oxpio-runtime", "assets/oxpio", "assets/social"}
 	if plan != nil && plan.Config.CustomCSS != "" {
 		reserved = append(reserved, "assets/custom.css")
 	}

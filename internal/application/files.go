@@ -273,7 +273,7 @@ func sameDirectoryIdentity(left, right directoryIdentity) bool {
 	if left.info == nil || right.info == nil || !os.SameFile(left.info, right.info) {
 		return false
 	}
-	return left.info.Mode() == right.info.Mode() && left.info.Size() == right.info.Size() && left.info.ModTime() == right.info.ModTime()
+	return left.info.Mode() == right.info.Mode() && left.info.Size() == right.info.Size() && left.info.ModTime().Equal(right.info.ModTime())
 }
 
 func verifyDirectoryMutationSnapshot(snapshot directoryMutationSnapshot) error {

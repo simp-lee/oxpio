@@ -86,18 +86,24 @@ func newGrepCommand() *cobra.Command {
 					continue
 				}
 				if match.Line == nil {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n", match.Path, match.SourceKind, match.MatchedText)
+					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s\t%s\t%s\n", match.Path, match.SourceKind, match.MatchedText); err != nil {
+						return err
+					}
 					continue
 				}
 				lineText := match.LineText
 				if lineText == "" {
 					lineText = match.MatchedText
 				}
-				fmt.Fprintf(cmd.OutOrStdout(), "%s:%d:%d: %s\n", match.Path, *match.Line, valueOrZero(match.Column), lineText)
+				if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s:%d:%d: %s\n", match.Path, *match.Line, valueOrZero(match.Column), lineText); err != nil {
+					return err
+				}
 			}
 			for _, window := range result.Contexts {
 				for offset, line := range window.Lines {
-					fmt.Fprintf(cmd.OutOrStdout(), "%s:%d: %s\n", window.Path, window.StartLine+offset, line)
+					if _, err := fmt.Fprintf(cmd.OutOrStdout(), "%s:%d: %s\n", window.Path, window.StartLine+offset, line); err != nil {
+						return err
+					}
 				}
 			}
 			return nil

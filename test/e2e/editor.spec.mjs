@@ -78,7 +78,7 @@ async function mutate(context, method, url, csrf, hash, data, contentType = '') 
 async function startConfiguredEditor() {
   vault = path.join(tempRoot, 'vault');
   await fs.mkdir(vault);
-  await fs.writeFile(path.join(vault, 'oxpio.yaml'), `title: Edit E2E\nbaseURL: http://127.0.0.1/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: ${passwordHash}\n`);
+  await fs.writeFile(path.join(vault, 'oxpio.yaml'), `title: Editor E2E\nbaseURL: http://127.0.0.1/\nnavigation: []\neditor:\n  username: admin\n  passwordHash: ${passwordHash}\n`);
   await fs.writeFile(path.join(vault, '_index.md'), '---\ntitle: Home\npublish: true\n---\nHome\n');
   await fs.writeFile(path.join(vault, 'guide.md'), '---\ntitle: Guide\npublish: true\ntype: doc\n---\nGuide\n');
   await fs.mkdir(path.join(vault, 'section'));
@@ -90,7 +90,7 @@ async function startConfiguredEditor() {
   const configPath = path.join(vault, 'oxpio.yaml');
   const config = (await fs.readFile(configPath, 'utf8')).replace('http://127.0.0.1/', `${origin}/`);
   await fs.writeFile(configPath, config);
-  child = spawn(binaryPath, ['edit', '--vault', vault, '--port', String(port)], {cwd: repoRoot, stdio: 'ignore'});
+  child = spawn(binaryPath, ['editor', '--vault', vault, '--port', String(port)], {cwd: repoRoot, stdio: 'ignore'});
   await waitForHTTP(`${origin}/_oxpio/login`);
 }
 
@@ -189,9 +189,9 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   await expect(page.locator('#preview-frame')).toBeVisible();
   await expect(page.locator('#preview-empty')).toBeHidden();
   const preview = page.frameLocator('#preview-frame');
-  await expect(preview.locator('.content-preview-content')).toContainText('Original');
-  await expect(preview.locator('.site-header, .sidebar-shell, .site-footer, .related-articles')).toHaveCount(0);
-  await expect(preview.locator('link[href*="custom.css"], link[href*="theme.css"]')).toHaveCount(0);
+  await expect(preview.locator('[data-page-content]')).toContainText('Original');
+  await expect(preview.locator('.site-header')).toHaveCount(1);
+  await expect(preview.locator('link[href*="style.css"]')).toHaveCount(1);
 
   await page.locator('#file-new-folder').click();
   await expect(page.locator('#markdown-file-fields')).toBeHidden();
@@ -356,7 +356,7 @@ test('browser create defaults to a private draft, rejects bad posts, and deletes
   await context.close();
 });
 
-test('failed builds and stale hashes are visible and leave source and output unchanged', async ({browser}) => {
+test('failed publishes and stale hashes are visible and leave source and output unchanged', async ({browser}) => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await login(page);
@@ -488,7 +488,7 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   await page.getByRole('button', {name: 'New Markdown'}).click();
   await page.locator('#file-path').fill('docs/_index.md');
   await page.locator('#file-title').fill('Docs');
-  await page.locator('#file-kind').selectOption('section');
+  await page.locator('#file-kind').selectOption('section-index');
   await page.locator('#file-submit').click();
   await expect(page.locator('.file-entry[data-path="docs/_index.md"]')).toHaveCount(1);
 
@@ -577,7 +577,7 @@ test('visual local drafts restore metadata changes before save', async ({browser
   await context.close();
 });
 
-test('edit setup initializes one account and failed setup does not write', async () => {
+test('editor setup initializes one account and failed setup does not write', async () => {
   test.skip(process.platform !== 'linux', 'the interactive setup check uses a Linux pseudo-terminal');
   try {
     execFileSync('script', ['--version'], {stdio: 'ignore'});
@@ -589,7 +589,7 @@ test('edit setup initializes one account and failed setup does not write', async
   const config = 'title: Setup\nbaseURL: https://example.test/\nnavigation: []\n';
   await fs.writeFile(path.join(setupVault, 'oxpio.yaml'), config);
   await fs.writeFile(path.join(setupVault, '_index.md'), '---\ntitle: Home\npublish: true\n---\nHome\n');
-  const setupOutput = execFileSync('script', ['-qef', '--echo', 'never', '-c', `${shellQuote(binaryPath)} edit --setup --vault ${shellQuote(setupVault)}`, '/dev/null'], {input: 'admin\nsecret\n', encoding: 'utf8'});
+  const setupOutput = execFileSync('script', ['-qef', '--echo', 'never', '-c', `${shellQuote(binaryPath)} editor --setup --vault ${shellQuote(setupVault)}`, '/dev/null'], {input: 'admin\nsecret\n', encoding: 'utf8'});
   expect(setupOutput).not.toContain('secret');
   const configured = await fs.readFile(path.join(setupVault, 'oxpio.yaml'), 'utf8');
   expect(configured).toContain('username: "admin"');
@@ -598,7 +598,7 @@ test('edit setup initializes one account and failed setup does not write', async
   const before = configured;
   let failed = false;
   try {
-    execFileSync(binaryPath, ['edit', '--setup', '--vault', setupVault], {input: 'other\nother\n', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']});
+    execFileSync(binaryPath, ['editor', '--setup', '--vault', setupVault], {input: 'other\nother\n', encoding: 'utf8', stdio: ['pipe', 'pipe', 'pipe']});
   } catch (error) {
     failed = true;
     expect(`${error.stdout || ''}${error.stderr || ''}`).toContain('already configured');
@@ -607,20 +607,20 @@ test('edit setup initializes one account and failed setup does not write', async
   expect(await fs.readFile(path.join(setupVault, 'oxpio.yaml'), 'utf8')).toBe(before);
 });
 
-test('edit startup fails before listening when the account is missing', async () => {
+test('editor startup fails before listening when the account is missing', async () => {
   const missingVault = path.join(tempRoot, 'missing-account');
   await fs.mkdir(missingVault);
   await fs.writeFile(path.join(missingVault, 'oxpio.yaml'), 'title: Missing\nbaseURL: https://example.test/\nnavigation: []\n');
   await fs.writeFile(path.join(missingVault, '_index.md'), '---\ntitle: Home\npublish: true\n---\nHome\n');
   const port = await freePort();
-  const failed = spawn(binaryPath, ['edit', '--vault', missingVault, '--port', String(port)], {cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe']});
+  const failed = spawn(binaryPath, ['editor', '--vault', missingVault, '--port', String(port)], {cwd: repoRoot, stdio: ['ignore', 'pipe', 'pipe']});
   let stdout = '';
   let stderr = '';
   failed.stdout.on('data', data => { stdout += data; });
   failed.stderr.on('data', data => { stderr += data; });
   await waitForExit(failed);
   expect(failed.exitCode).not.toBe(0);
-  expect(`${stdout}${stderr}`).toContain('edit.username and edit.passwordHash');
+  expect(`${stdout}${stderr}`).toContain('editor.username and editor.passwordHash');
   await expect.poll(async () => {
     try { return (await fetch(`http://127.0.0.1:${port}/`)).status; } catch { return 0; }
   }).toBe(0);

@@ -385,7 +385,11 @@ func (s *Server) serveSourceRead(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	data := append([]byte(nil), entry.RawSource...)
+	data, err := currentSourceBytes(s.vault, entry)
+	if err != nil {
+		http.Error(w, "source is not available", http.StatusConflict)
+		return
+	}
 	hash := sha256.Sum256(data)
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.Header().Set("X-OXPIO-Source-Hash", hex.EncodeToString(hash[:]))
@@ -587,19 +591,6 @@ func readSourceBody(r *http.Request) ([]byte, error) {
 		return nil, fmt.Errorf("source exceeds 8 MiB limit")
 	}
 	return data, nil
-}
-
-func (s *Server) sourceCatalog() *model.SourceCatalog {
-	if s == nil {
-		return nil
-	}
-	if s.coordinator != nil {
-		return s.coordinator.CatalogSnapshot()
-	}
-	if s.catalog != nil {
-		return s.catalog.Snapshot()
-	}
-	return nil
 }
 
 func (s *Server) applicationCatalog() *internalapplication.Catalog {

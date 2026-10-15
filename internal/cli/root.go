@@ -574,13 +574,6 @@ func formatOf(cmd *cobra.Command) string {
 	return value
 }
 
-func resolveOptionalVaultFlag(value string) (string, error) {
-	if strings.TrimSpace(value) == "" {
-		return "", nil
-	}
-	return resolveVaultPath(value)
-}
-
 func versionFlagRequested(args []string) bool {
 	for _, arg := range args {
 		if arg == "--version" || arg == "--version=true" {

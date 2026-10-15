@@ -235,7 +235,7 @@ func TestCoordinatorRollsBackWhenWatchMarkerCannotBeWritten(t *testing.T) {
 	if err := os.MkdirAll(marker, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(marker)
+	defer func() { _ = os.RemoveAll(marker) }()
 
 	beforeOutput := snapshotEditOutput(t, output)
 	updated := "---\ntitle: Article\npublish: true\ntype: doc\n---\nUpdated\n"

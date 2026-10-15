@@ -5,10 +5,12 @@ package theme
 
 import core "github.com/simp-lee/oxpio/internal/theme"
 
-type File = core.File
-type Source = core.Source
-type Manifest = core.Manifest
-type Renderer = core.Renderer
+type (
+	File     = core.File
+	Source   = core.Source
+	Manifest = core.Manifest
+	Renderer = core.Renderer
+)
 
 const (
 	APIVersion = core.APIVersion
@@ -16,16 +18,18 @@ const (
 	BaseID     = core.BaseID
 )
 
-var BaseFiles = core.BaseFiles
-var BaseSource = core.BaseSource
-var LoadLocal = core.LoadLocal
-var Validate = core.Validate
-var ValidateWithAssets = core.ValidateWithAssets
-var Compile = core.Compile
-var ManifestOf = core.ManifestOf
-var InitFiles = core.InitFiles
-var Files = core.Files
-var FileKind = core.FileKind
-var ValidationAssets = core.ValidationAssets
-var ValidID = core.ValidID
-var ValidRelativePath = core.ValidRelativePath
+var (
+	BaseFiles          = core.BaseFiles
+	BaseSource         = core.BaseSource
+	LoadLocal          = core.LoadLocal
+	Validate           = core.Validate
+	ValidateWithAssets = core.ValidateWithAssets
+	Compile            = core.Compile
+	ManifestOf         = core.ManifestOf
+	InitFiles          = core.InitFiles
+	Files              = core.Files
+	FileKind           = core.FileKind
+	ValidationAssets   = core.ValidationAssets
+	ValidID            = core.ValidID
+	ValidRelativePath  = core.ValidRelativePath
+)

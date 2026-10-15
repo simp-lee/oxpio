@@ -142,9 +142,11 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 		}
 	}
 	for _, managementPath := range cfg.UnknownManagementPaths {
-		collector.Add(diag.Diagnostic{Severity: diag.SeverityWarning, Kind: diag.KindMetadata,
+		collector.Add(diag.Diagnostic{
+			Severity: diag.SeverityWarning, Kind: diag.KindMetadata,
 			Location: diag.Location{Path: managementPath}, Field: ".oxpio",
-			Message: fmt.Sprintf("unknown OXPIO management path %q is ignored", managementPath)})
+			Message: fmt.Sprintf("unknown OXPIO management path %q is ignored", managementPath),
+		})
 	}
 	scan, err := vault.ScanWithOptions(resolvedVault, vault.ScanOptions{
 		OutputPath: outputPath, AttachmentDirectory: cfg.AttachmentDirectory,

@@ -38,7 +38,7 @@ func TestBuildWithOptionsExcludesOverlayInsideFormalOutput(t *testing.T) {
 func TestStrictBuildRejectsVaultControlFilesAsMarkdownAssets(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "site")
-	writeStrictFile(t, vault, "oxpio.yaml", "title: Protected\nbaseURL: https://example.test/\nnavigation: []\nedit:\n  username: admin\n  passwordHash: secret-hash\n")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Protected\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeStrictFile(t, vault, ".git/config", "[remote \"origin\"]\nurl = https://user:secret@example.test/repo.git\n")
 	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n![config](oxpio.yaml) ![git](.git/config)\n")
 

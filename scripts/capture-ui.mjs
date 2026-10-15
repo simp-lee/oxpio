@@ -112,14 +112,15 @@ async function copyAndBuild(name, fixture, basePath, baseURL) {
     await fs.writeFile(path.join(vault, 'roadmap.md'), `---\ntitle: Roadmap\npublish: true\ntype: page\n---\n\nA short view of what is coming next.\n`);
   }
   await fs.writeFile(configPath, config.replace(baseURL, `${staticOrigin}${basePath}`));
-  execFileSync(binaryPath, ['build', '--vault', vault], {cwd: repoRoot, stdio: 'inherit'});
+  execFileSync(binaryPath, ['validate', '--vault', vault], {cwd: repoRoot, stdio: 'inherit'});
+  execFileSync(binaryPath, ['publish', '--vault', vault], {cwd: repoRoot, stdio: 'inherit'});
   roots.set(name, path.join(vault, 'public'));
 }
 
 async function prepareEditor() {
   const vault = path.join(tempRoot, 'editor-vault');
   await fs.mkdir(path.join(vault, 'section', 'nested'), {recursive: true});
-  await fs.writeFile(path.join(vault, 'oxpio.yaml'), `title: OXPIO Studio\nbaseURL: http://127.0.0.1/\nauthor: Studio Team\ndescription: A calm writing workspace.\nnavigation:\n  - name: Home\n    section: .\n  - name: Notes\n    section: section\nsidebar:\n  enabled: true\nedit:\n  username: admin\n  passwordHash: ${passwordHash}\n`);
+  await fs.writeFile(path.join(vault, 'oxpio.yaml'), `title: OXPIO Studio\nbaseURL: http://127.0.0.1/\nauthor: Studio Team\ndescription: A calm writing workspace.\nnavigation:\n  - name: Home\n    section: .\n  - name: Notes\n    section: section\nsidebar:\n  enabled: true\neditor:\n  username: admin\n  passwordHash: ${passwordHash}\n`);
   await fs.writeFile(path.join(vault, '_index.md'), '---\ntitle: Studio Home\npublish: true\n---\n# Studio Home\n\nWelcome to the editorial workspace.\n');
   await fs.mkdir(path.join(vault, 'images'), {recursive: true});
   await fs.copyFile(path.join(runtimeFixture, 'images', 'hero.png'), path.join(vault, 'images', 'hero.png'));
@@ -136,7 +137,7 @@ async function prepareEditor() {
   const configPath = path.join(vault, 'oxpio.yaml');
   const config = (await fs.readFile(configPath, 'utf8')).replace('http://127.0.0.1/', `${editorOrigin}/`);
   await fs.writeFile(configPath, config);
-  editorProcess = spawn(binaryPath, ['edit', '--vault', vault, '--port', String(port)], {cwd: repoRoot, stdio: 'ignore'});
+  editorProcess = spawn(binaryPath, ['editor', '--vault', vault, '--port', String(port)], {cwd: repoRoot, stdio: 'ignore'});
   await waitForHTTP(`${editorOrigin}/_oxpio/login`);
 }
 

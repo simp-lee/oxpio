@@ -43,12 +43,14 @@ const (
 //go:embed base/**
 var baseFS embed.FS
 
-var requiredLayouts = [...]string{"base", "section", "article", "tag", "timeline", "404"}
-var staticThemeAssetURLPattern = regexp.MustCompile(`(?i)\b(?:src|href)\s*=\s*["'](/?assets/[^"'#?\s]+)`)
-var themeAssetCallPattern = regexp.MustCompile(`\{\{\s*assetURL\s+"([^"]+)"\s*\}\}`)
-var themeAssetBacktickPattern = regexp.MustCompile("\\{\\{\\s*assetURL\\s+`([^`]+)`\\s*\\}\\}")
-var themeExternalURLPattern = regexp.MustCompile(`(?i)(?:https?:)?//`)
-var themeExternalResourcePattern = regexp.MustCompile(`(?i)(?:href|src)\s*=\s*["'](?:https?:)?//|url\s*\(\s*(?:https?:)?//`)
+var (
+	requiredLayouts              = [...]string{"base", "section", "article", "tag", "timeline", "404"}
+	staticThemeAssetURLPattern   = regexp.MustCompile(`(?i)\b(?:src|href)\s*=\s*["'](/?assets/[^"'#?\s]+)`)
+	themeAssetCallPattern        = regexp.MustCompile(`\{\{\s*assetURL\s+"([^"]+)"\s*\}\}`)
+	themeAssetBacktickPattern    = regexp.MustCompile("\\{\\{\\s*assetURL\\s+`([^`]+)`\\s*\\}\\}")
+	themeExternalURLPattern      = regexp.MustCompile(`(?i)(?:https?:)?//`)
+	themeExternalResourcePattern = regexp.MustCompile(`(?i)(?:href|src)\s*=\s*["'](?:https?:)?//|url\s*\(\s*(?:https?:)?//`)
+)
 
 // File describes one theme-domain regular file without exposing its host path.
 type File struct {
@@ -765,7 +767,7 @@ func contains(values []string, value string) bool {
 func ManifestOf(source Source) Manifest {
 	files := make([]File, 0, len(source.Files))
 	hash := sha256.New()
-	_, _ = hash.Write([]byte(fmt.Sprintf("apiVersion:%d\nname:%s\n", source.APIVersion, source.Name)))
+	_, _ = fmt.Fprintf(hash, "apiVersion:%d\nname:%s\n", source.APIVersion, source.Name)
 	names := make([]string, 0, len(source.Files))
 	for name := range source.Files {
 		names = append(names, name)

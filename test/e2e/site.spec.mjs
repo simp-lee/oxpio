@@ -79,7 +79,8 @@ async function copyAndBuild(name, basePath) {
   const configPath = path.join(vault, 'oxpio.yaml');
   const config = (await fs.readFile(configPath, 'utf8')).replace('http://127.0.0.1/alpha/', `${origin}${basePath}`);
   await fs.writeFile(configPath, config);
-  execFileSync(binaryPath, ['build', '--vault', vault], {cwd: repoRoot, stdio: 'inherit'});
+  execFileSync(binaryPath, ['validate', '--vault', vault], {cwd: repoRoot, stdio: 'inherit'});
+  execFileSync(binaryPath, ['publish', '--vault', vault], {cwd: repoRoot, stdio: 'inherit'});
   return vault;
 }
 
@@ -377,7 +378,7 @@ test('sidebar preserves encoded and whitespace-significant routes', async ({brow
   await context.close();
 });
 
-test('base-path builds are isolated and contain no external runtime requests', async ({browser}) => {
+test('base-path publishes are isolated and contain no external runtime requests', async ({browser}) => {
   const alpha = await fs.readFile(path.join(alphaVault, 'public', 'index.html'), 'utf8');
   const beta = await fs.readFile(path.join(betaVault, 'public', 'index.html'), 'utf8');
   expect(alpha).toContain(`${origin}/alpha/`);
@@ -418,5 +419,5 @@ test('serve --watch rebuilds strict section content', async () => {
       await new Promise(resolve => child.once('exit', resolve));
     }
   }
-  expect(logs).not.toContain('build failed');
+  expect(logs).not.toContain('publish failed');
 });

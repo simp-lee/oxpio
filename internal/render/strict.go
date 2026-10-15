@@ -826,9 +826,6 @@ func strictSourceURL(templateURL, sourcePath string) string {
 	return strings.Replace(templateURL, ":path", slug.EncodeSourcePath(sourcePath), 1)
 }
 
-func strictEncodePath(value string) string {
-	return slug.EncodePath(value)
-}
 func esc(value string) string { return template.HTMLEscapeString(value) }
 
 // StrictRouteOutputPath returns the URL-escaped logical output path for route.

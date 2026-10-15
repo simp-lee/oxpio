@@ -3,17 +3,17 @@
 <p align="center"><img src="internal/branding/logo.svg" alt="OXPIO" width="393"></p>
 
 ```bash
-cd vault && oxpio init && oxpio build && oxpio serve --watch
+cd vault && oxpio init && oxpio validate && oxpio publish && oxpio serve --watch
 ```
 
-OXPIO is a self-contained Go CLI that publishes one Obsidian vault as a deterministic static site. The vault is the only content source and `<vault>/oxpio.yaml` is the only site configuration. The generated site is written transactionally to `<vault>/public` by default.
+OXPIO is a self-contained Go CLI that publishes one OXPIO Vault as a deterministic static site. The vault is the only content source and `<vault>/oxpio.yaml` is the only site configuration. The generated site is written transactionally to `<vault>/public` by default.
 
 ## Online editing
 
-OXPIO is also a focused online writing workspace. Run `oxpio edit`, open a Markdown source, edit frontmatter and content visually, preview the content-only server-rendered draft, or switch to source mode when you need full control.
+OXPIO is also a focused online writing workspace. Run `oxpio editor`, open a Markdown source, edit frontmatter and content visually, preview the server-rendered draft, or switch to source mode when you need full control.
 
 ```bash
-oxpio edit --vault ./vault --port 8080
+oxpio editor --vault ./vault --port 8080
 ```
 
 The editor keeps the vault as the source of truth and publishes only after validation and a successful build. It includes a local CodeMirror Markdown editor, metadata form, toolbar, file manager, content-only draft preview, media library, responsive layout, Live preview/Source/Read/Diff views, and safe save/rollback behavior. Live preview stays in one editor surface: the line under the pointer or cursor exposes Markdown while surrounding lines keep their rendered treatment. Use Read for a complete server-rendered view. The English showcase article below intentionally exercises inline and block math, a Go code block, a Markdown table, a callout, and a local image.
@@ -34,33 +34,37 @@ The editor keeps the vault as the source of truth and publishes only after valid
 
 ```text
 oxpio init [--vault PATH]
-oxpio build [--vault PATH] [--output PATH] [--strict]
 oxpio validate [--vault PATH] [--output PATH]
+oxpio publish [--vault PATH] [--output PATH] [--dry-run]
 oxpio serve [--vault PATH] [--output PATH] [--port NUM] [--watch]
-oxpio edit [--vault PATH] [--output PATH] [--port NUM] [--setup]
+oxpio editor [--vault PATH] [--output PATH] [--port NUM] [--setup|--reset-password]
+oxpio context
+oxpio read|write|edit|move|delete PATH ...
+oxpio find|ls|grep|tags|related ...
+oxpio theme validate|init|read|write|edit|context|preview ...
 oxpio version
 oxpio --version
 ```
 
-`init` accepts only a nonexistent or completely empty directory. It creates a strict `oxpio.yaml` and a root `_index.md`, and never overwrites existing files. `validate` is read-only and returns a failure for either errors or warnings. It resolves `--output` exactly like `build` (default `<vault>/public`); pass the same value when validating a custom-output build. Only that resolved path is excluded as the formal output boundary. OXPIO does not infer additional output boundaries from directory names or existing `.oxpio-output` markers; the normal fixed vault-input exclusions still apply. Normal builds show warnings and continue; `build --strict` fails before publication for either severity. `serve --watch` uses the same strict build and reloads only after a successful rebuild. `serve` never registers editor or login routes.
+`init` accepts only a nonexistent or completely empty directory. It creates a strict `oxpio.yaml` and a root `_index.md`, and never overwrites existing files. `validate` is read-only and returns a failure for either errors or warnings. It resolves `--output` exactly like `publish` (default `<vault>/public`); pass the same value when validating a custom-output publish. Only that resolved path is excluded as the formal output boundary. OXPIO does not infer additional output boundaries from directory names or existing `.oxpio-output` markers; the normal fixed vault-input exclusions still apply. `publish` always uses the strict quality policy and is the only public command that replaces formal output. `publish --dry-run` performs generation and validation in ephemeral storage without changing output. `serve --watch` uses the same shared publish service and reloads only after a successful publish. `serve` never registers editor or login routes.
 
-### Optional edit mode
+### Optional editor mode
 
 Enable the single-account editor explicitly with:
 
 ```bash
-oxpio edit --vault ./vault --port 8080
+oxpio editor --vault ./vault --port 8080
 ```
 
-The command builds before listening and serves the generated site anonymously. Configure an account interactively once with `oxpio edit --setup --vault ./vault`; setup requires a terminal, refuses an existing or invalid account, writes only an Argon2id PHC hash atomically, and never prints the password. The strict `edit` section contains only `username` and `passwordHash`:
+The command runs a strict publish before listening and serves the generated site anonymously. Configure an account interactively once with `oxpio editor --setup --vault ./vault`; setup requires a terminal, refuses an existing or invalid account, writes only an Argon2id PHC hash atomically, and never prints the password. The strict `editor` section contains only `username` and `passwordHash`:
 
 ```yaml
-edit:
+editor:
   username: admin
   passwordHash: $argon2id$v=19$m=65536,t=3,p=1$...
 ```
 
-After login, mapped article and section pages show an in-memory edit link. The embedded editor uses a locally bundled CodeMirror 6 Markdown editor with Markdown shortcuts, a toolbar, a frontmatter form that hides YAML by default, and a source mode for advanced edits. It supports server-rendered draft previews, an authenticated single-file Markdown/image upload to the Vault root or a selected existing folder, and local assets without CDN requests. Uploads never overwrite files or create parent folders implicitly. Preview/Diff uses the bundled CodeMirror Merge extension while rich preview continues through OXPIO's Go renderer; uncommitted candidates use same-origin IndexedDB and browser preferences use local browser storage only, never triggering a build. Draft recovery offers restore or discard when the server version changes; discard and successful save clean the path's drafts, and storage-quota failures remain visible. It preserves submitted source bytes, validates and rebuilds before an atomic source/output transaction, and reports warnings or build failures. New articles are drafts by default (`title`, `publish: false`, `type: doc`); posts require an explicit date. The File Manager supports creating folders and Markdown files, renaming managed article sources, and confirmed deletion with section/resource protection, path validation, and SHA-256 CAS checks. Failures do not reload the public site. `serve`, including `serve --watch`, remains read-only.
+After login, mapped article and section pages show an in-memory edit link. The embedded editor uses a locally bundled CodeMirror 6 Markdown editor with Markdown shortcuts, a toolbar, a frontmatter form that hides YAML by default, and a source mode for advanced edits. It supports server-rendered draft previews, an authenticated single-file Markdown/image upload to the Vault root or a selected existing folder, and local assets without CDN requests. Uploads never overwrite files or create parent folders implicitly. Preview/Diff uses the bundled CodeMirror Merge extension while rich preview continues through OXPIO's Go renderer; uncommitted candidates use same-origin IndexedDB and browser preferences use local browser storage only, never triggering a build. Draft recovery offers restore or discard when the server version changes; discard and successful save clean the path's drafts, and storage-quota failures remain visible. It preserves submitted source bytes, validates and rebuilds before an atomic source/output transaction, and reports warnings or build failures. New articles are drafts by default (`title`, `publish: false`, `type: doc`); posts require an explicit date. The File Manager supports creating folders and Markdown files, renaming managed article sources, and confirmed deletion with section/resource protection, path validation, and SHA-256 CAS checks. Failures do not reload the public site. `serve` is anonymous and read-only; `serve --watch` may replace formal output through the shared publish service but never writes source or configuration.
 
 ## Vault and section model
 
@@ -154,7 +158,7 @@ Empty means no default image. Local paths must be contained regular files and ca
 
 ## Rendering and metadata
 
-The fixed HTML shell is server-rendered and usable without JavaScript. It includes global navigation, section/version context, breadcrumbs, Sidebar data, source links, semantic landmarks, canonical URLs, descriptions, Open Graph/Twitter metadata, JSON-LD, RSS, Sitemap, robots, 404, and a shared offline runtime. Markdown supports the built-in wikilink, embed, callout, hashtag, heading/TOC, highlighting, raw-HTML, math, Mermaid, and attachment behavior; unresolved links and unsupported syntax become deterministic diagnostics without hiding authored content.
+The selected Go `html/template` theme is server-rendered and usable without JavaScript; local themes can replace the complete page shell. It includes global navigation, section/version context, breadcrumbs, Sidebar data, source links, semantic landmarks, canonical URLs, descriptions, Open Graph/Twitter metadata, JSON-LD, RSS, Sitemap, robots, 404, and a shared offline runtime. Markdown supports the built-in wikilink, embed, callout, hashtag, heading/TOC, highlighting, raw-HTML, math, Mermaid, and attachment behavior; unresolved links and unsupported syntax become deterministic diagnostics without hiding authored content.
 
 YouTube/Vimeo URLs in Markdown image syntax remain image destinations; OXPIO does not convert them into remote players. Use ordinary Markdown links for online videos. Authored external images and raw HTML can still initiate browser requests; fully offline content must use local resources.
 
@@ -209,7 +213,7 @@ Development checks use pinned Go, Node.js, Playwright, GoReleaser, actionlint, g
 ```bash
 make tools
 make check
-go test -race ./internal/analyze ./internal/build ./internal/cli ./internal/render ./internal/server ./internal/recommend/... ./internal/vault ./internal/link
+sh scripts/go-test-nonempty.sh -race ./internal/analyze ./internal/build ./internal/cli ./internal/edit ./internal/render ./internal/server ./internal/recommend/... ./internal/vault ./internal/link
 npm ci
 npm run build:editor
 npx --no-install playwright install chromium

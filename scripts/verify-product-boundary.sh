@@ -45,7 +45,7 @@ check_packages() {
     exit 1
   fi
 
-  invalid_build=$(printf '%s\n' "$imports" | awk -F'|' '$1 != "github.com/simp-lee/oxpio/internal/build" && $1 != "github.com/simp-lee/oxpio/internal/cli" && $1 != "github.com/simp-lee/oxpio/internal/edit" && $2 ~ /github.com\/simp-lee\/oxpio\/internal\/build/ {print $1}')
+  invalid_build=$(printf '%s\n' "$imports" | awk -F'|' '$1 != "github.com/simp-lee/oxpio/internal/build" && $1 != "github.com/simp-lee/oxpio/internal/application" && $1 != "github.com/simp-lee/oxpio/internal/cli" && $1 != "github.com/simp-lee/oxpio/internal/edit" && $2 ~ /github.com\/simp-lee\/oxpio\/internal\/build/ {print $1}')
   if [ -n "$invalid_build" ]; then
     printf 'lower packages import internal/build:\n%s\n' "$invalid_build" >&2
     exit 1
@@ -54,7 +54,7 @@ check_packages() {
 
 check_embed_inventory() {
   embed_files=$(git grep -l '//go:embed' -- '*.go' ':(exclude)**/*_test.go' | sort)
-  expected_embed_files=$(printf '%s\n' internal/branding/logo.go internal/edit/web.go internal/recommend/chinese/embed.go internal/render/site_assets.go internal/social/card.go | sort)
+  expected_embed_files=$(printf '%s\n' internal/branding/logo.go internal/edit/web.go internal/recommend/chinese/embed.go internal/render/site_assets.go internal/social/card.go internal/theme/theme.go | sort)
   if [ "$embed_files" != "$expected_embed_files" ]; then
     printf 'production embed owners changed:\n%s\n' "$embed_files" >&2
     exit 1
@@ -146,7 +146,8 @@ flowchart LR
   A --> B
 ```
 MARKDOWN
-    "$binary" build >/dev/null
+    "$binary" validate >/dev/null
+    "$binary" publish >/dev/null
   )
   output=$vault/public
 

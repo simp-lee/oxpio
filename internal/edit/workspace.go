@@ -76,7 +76,7 @@ func AtomicWriteFile(name string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	temporaryName := temporary.Name()
-	defer os.Remove(temporaryName)
+	defer func() { _ = os.Remove(temporaryName) }()
 	if err := temporary.Chmod(mode); err != nil {
 		_ = temporary.Close()
 		return err
@@ -101,7 +101,7 @@ func ensureWorkspaceControlDir(vault string) error {
 		return err
 	}
 	if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
-		return fmt.Errorf("Vault must be a regular directory")
+		return fmt.Errorf("vault must be a regular directory")
 	}
 	control := filepath.Join(vault, ".oxpio")
 	info, err = os.Lstat(control)

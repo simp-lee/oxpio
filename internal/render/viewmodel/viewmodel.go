@@ -23,18 +23,24 @@ type NavigationItem struct {
 	Current string
 }
 
-type Breadcrumb struct{ Name, URL, Href string }
-type Version struct {
-	ID, Label, URL, Href string
-	Current              bool
-}
-type Source struct{ Path, EditURL, ViewURL string }
-type SidebarNode struct {
-	Name, URL, Href, Source string
-	IsDir                   bool
-	Current                 bool
-	Children                []SidebarNode
-}
+type (
+	Breadcrumb struct{ Name, URL, Href string }
+	Version    struct {
+		ID, Label, URL, Href string
+		Current              bool
+	}
+)
+
+type (
+	Source      struct{ Path, EditURL, ViewURL string }
+	SidebarNode struct {
+		Name, URL, Href, Source string
+		IsDir                   bool
+		Current                 bool
+		Children                []SidebarNode
+	}
+)
+
 type RecommendationSignals struct {
 	Content float64
 	Link    float64
@@ -67,35 +73,37 @@ type Section struct {
 	Path, URL, Href, Title, Description, BannerURL, BannerAlt, TitleID string
 	Children, Articles                                                 []Card
 }
-type SEO struct{ Title, Description, Canonical, Image, TwitterCard, JSONLD string }
-type Page struct {
-	Schema      string
-	Kind        string
-	Site        Site
-	Title       string
-	Description string
-	URL         string
-	Href        string
-	Canonical   string
-	BasePath    string
-	Content     template.HTML
-	HeadHTML    template.HTML
-	Navigation  []NavigationItem
-	Breadcrumbs []Breadcrumb
-	Sidebar     []SidebarNode
-	Versions    []Version
-	Source      *Source
-	Section     *Section
-	Article     *Article
-	Entries     []Card
-	Tags        []string
-	Backlinks   []Card
-	Related     []Card
-	Pagination  Pagination
-	SEO         SEO
-	VersionID   string
-	HasMath     bool
-	HasMermaid  bool
-	NotFound    bool
-	Popover     bool
-}
+type (
+	SEO  struct{ Title, Description, Canonical, Image, TwitterCard, JSONLD string }
+	Page struct {
+		Schema      string
+		Kind        string
+		Site        Site
+		Title       string
+		Description string
+		URL         string
+		Href        string
+		Canonical   string
+		BasePath    string
+		Content     template.HTML
+		HeadHTML    template.HTML
+		Navigation  []NavigationItem
+		Breadcrumbs []Breadcrumb
+		Sidebar     []SidebarNode
+		Versions    []Version
+		Source      *Source
+		Section     *Section
+		Article     *Article
+		Entries     []Card
+		Tags        []string
+		Backlinks   []Card
+		Related     []Card
+		Pagination  Pagination
+		SEO         SEO
+		VersionID   string
+		HasMath     bool
+		HasMermaid  bool
+		NotFound    bool
+		Popover     bool
+	}
+)
