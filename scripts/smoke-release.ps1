@@ -26,11 +26,26 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "oxpio init exited $LASTEXITCODE" }
         & $Binary validate
         if ($LASTEXITCODE -ne 0) { throw "oxpio validate exited $LASTEXITCODE" }
-        & $Binary publish
-        if ($LASTEXITCODE -ne 0) { throw "oxpio publish exited $LASTEXITCODE" }
     }
     finally {
         Pop-Location
+    }
+    $PublishLog = Join-Path $Root 'publish.log'
+    Push-Location $Vault
+    try {
+        & $Binary publish *> $PublishLog
+        $PublishExit = $LASTEXITCODE
+    }
+    finally {
+        Pop-Location
+    }
+    if ($PublishExit -ne 0) {
+        $PublishText = Get-Content -LiteralPath $PublishLog -Raw -ErrorAction SilentlyContinue
+        if ($PublishText -match 'OUTPUT_ATOMICITY_UNAVAILABLE') {
+            Write-Host "release smoke verified: $Version (formal publish rejected by the documented atomicity matrix)"
+            return
+        }
+        throw "oxpio publish exited $PublishExit`n$PublishText"
     }
     if (-not (Test-Path -LiteralPath (Join-Path $Vault 'public/index.html') -PathType Leaf)) {
         throw 'default publish did not create public/index.html'

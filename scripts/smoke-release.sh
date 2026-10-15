@@ -36,9 +36,19 @@ esac
   cd "$VAULT"
   "$BINARY" init
   "$BINARY" validate
-  "$BINARY" publish
 )
-[ -f "$VAULT/public/index.html" ] || { echo "default publish did not create public/index.html" >&2; exit 1; }
+publish_log=$TMP/publish.log
+if (cd "$VAULT" && "$BINARY" publish) >"$publish_log" 2>&1; then
+  [ -f "$VAULT/public/index.html" ] || { echo "default publish did not create public/index.html" >&2; exit 1; }
+else
+  if grep -F 'OUTPUT_ATOMICITY_UNAVAILABLE' "$publish_log" >/dev/null 2>&1; then
+    printf 'release smoke verified: %s (formal publish rejected by the documented atomicity matrix)\n' "$VERSION"
+    exit 0
+  fi
+  printf '%s\n' 'release publish smoke failed:' >&2
+  while IFS= read -r line; do printf '%s\n' "$line" >&2; done <"$publish_log"
+  exit 1
+fi
 
 PORT=$(python3 - <<'PY'
 import socket

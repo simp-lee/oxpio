@@ -9,6 +9,7 @@ old root or the new root visible as a complete directory.
 | macOS | default filesystem | rejected unless a future probe proves exchange semantics | `OUTPUT_ATOMICITY_UNAVAILABLE` |
 | Windows | default filesystem | rejected unless a future probe proves directory replacement semantics | `OUTPUT_ATOMICITY_UNAVAILABLE` |
 
-This evidence records probe version 1. Unsupported filesystems fail closed;
-OXPIO does not use backup-rename, copy/delete, or a partially overwritten
-formal output as a fallback.
+This evidence records probe version 1. Unsupported filesystems fail closed; native release smoke treats the stable
+`OUTPUT_ATOMICITY_UNAVAILABLE` result on rejected targets as expected and does
+not start `serve`. OXPIO does not use backup-rename, copy/delete, or a partially
+overwritten formal output as a fallback.
