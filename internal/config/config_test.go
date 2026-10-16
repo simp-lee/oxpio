@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -28,6 +29,44 @@ func TestLoadForBuildRequiresStrictNavigationAndRejectsLegacyFields(t *testing.T
 				t.Fatal("LoadForBuild() error = nil, want strict schema error")
 			}
 		})
+	}
+}
+
+func TestPaginationPageSizeIsLimitedToOneThousand(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		pageSize int
+		wantErr  bool
+	}{
+		{name: "minimum", pageSize: 1},
+		{name: "maximum", pageSize: 1000},
+		{name: "zero", pageSize: 0, wantErr: true},
+		{name: "above maximum", pageSize: 1001, wantErr: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			content := "title: Site\nbaseURL: https://example.test/\nnavigation: []\npagination:\n  pageSize: " + strconv.Itoa(test.pageSize) + "\n"
+			cfg, err := LoadForBuild(writeConfigVault(t, content))
+			if test.wantErr {
+				if err == nil || !strings.Contains(err.Error(), "pagination.pageSize must be between 1 and 1000") {
+					t.Fatalf("LoadForBuild() error = %v, want pagination.pageSize range error", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("LoadForBuild() error = %v", err)
+			}
+			if cfg.Pagination.PageSize != test.pageSize {
+				t.Fatalf("Pagination.PageSize = %d, want %d", cfg.Pagination.PageSize, test.pageSize)
+			}
+		})
+	}
+
+	for _, pageSize := range []int{-1, 1001} {
+		cfg := structuredConfig(model.SourceConfig{}, nil)
+		cfg.Pagination.PageSize = pageSize
+		if _, err := NormalizeSiteConfig(cfg); err == nil || !strings.Contains(err.Error(), "pagination.pageSize must be between 1 and 1000") {
+			t.Fatalf("NormalizeSiteConfig(pageSize=%d) error = %v, want pagination.pageSize range error", pageSize, err)
+		}
 	}
 }
 

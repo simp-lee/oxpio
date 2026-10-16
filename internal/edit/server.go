@@ -3,7 +3,6 @@ package edit
 
 import (
 	"bytes"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
@@ -63,6 +62,9 @@ type Server struct {
 	previews     map[string]*editorPreview
 	previewRoots map[string]*internalserver.Server
 	closed       bool
+
+	clock  Clock
+	random RandomSource
 }
 
 var setupMu sync.Mutex
@@ -111,6 +113,13 @@ func New(vaultPath, outputPath string, port int, catalogs ...*model.SourceCatalo
 
 // NewWithListen validates the configured account and selected bind host.
 func NewWithListen(vaultPath, outputPath string, port int, listenHost string, catalogs ...*model.SourceCatalog) (*Server, error) {
+	return NewWithListenAndDependencies(vaultPath, outputPath, port, listenHost, Dependencies{}, catalogs...)
+}
+
+// NewWithListenAndDependencies validates the configured account and selected
+// bind host with explicit external input dependencies.
+func NewWithListenAndDependencies(vaultPath, outputPath string, port int, listenHost string, dependencies Dependencies, catalogs ...*model.SourceCatalog) (*Server, error) {
+	dependencies = dependencies.withDefaults()
 	if listenHost != "127.0.0.1" && listenHost != "0.0.0.0" {
 		return nil, fmt.Errorf("editor listen host must be 127.0.0.1 or 0.0.0.0")
 	}
@@ -155,6 +164,8 @@ func NewWithListen(vaultPath, outputPath string, port int, listenHost string, ca
 		sessions:     make(map[string]session),
 		previews:     make(map[string]*editorPreview),
 		previewRoots: make(map[string]*internalserver.Server),
+		clock:        dependencies.Clock,
+		random:       dependencies.Random,
 	}, nil
 }
 
@@ -709,18 +720,18 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
-		sessionID, err := newToken()
+		sessionID, err := s.newToken()
 		if err != nil {
 			http.Error(w, "could not create session", http.StatusInternalServerError)
 			return
 		}
-		csrf, err := newToken()
+		csrf, err := s.newToken()
 		if err != nil {
 			http.Error(w, "could not create session", http.StatusInternalServerError)
 			return
 		}
 		s.mu.Lock()
-		s.sessions[sessionID] = session{username: s.username, csrf: csrf, expires: time.Now().Add(sessionLifetime)}
+		s.sessions[sessionID] = session{username: s.username, csrf: csrf, expires: s.now().Add(sessionLifetime)}
 		s.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: sessionID, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(sessionLifetime / time.Second)})
 		w.Header().Set("Content-Type", "application/json")
@@ -834,7 +845,7 @@ func (s *Server) sessionForRequestWithID(r *http.Request) (string, session, bool
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	value, ok := s.sessions[cookie.Value]
-	if !ok || (!value.expires.IsZero() && time.Now().After(value.expires)) {
+	if !ok || (!value.expires.IsZero() && s.now().After(value.expires)) {
 		if ok {
 			delete(s.sessions, cookie.Value)
 		}
@@ -889,9 +900,27 @@ func writeJSON(w http.ResponseWriter, value any) {
 	_, _ = w.Write(data)
 }
 
-func newToken() (string, error) {
+func (s *Server) now() time.Time {
+	if s != nil && s.clock != nil {
+		return s.clock.Now()
+	}
+	return defaultClock.Now()
+}
+
+func (s *Server) newToken() (string, error) {
+	source := defaultRandomSource
+	if s != nil && s.random != nil {
+		source = s.random
+	}
+	return newToken(source)
+}
+
+func newToken(source RandomSource) (string, error) {
+	if source == nil {
+		return "", errors.New("random source is nil")
+	}
 	data := make([]byte, 32)
-	if _, err := rand.Read(data); err != nil {
+	if _, err := io.ReadFull(source, data); err != nil {
 		return "", err
 	}
 	return base64.RawURLEncoding.EncodeToString(data), nil

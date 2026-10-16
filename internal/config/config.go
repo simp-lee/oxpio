@@ -28,6 +28,7 @@ const (
 
 	defaultLanguage           = "en"
 	defaultPaginationPageSize = 20
+	maxPaginationPageSize     = 1000
 	defaultRelatedCount       = 5
 	defaultTimelinePath       = "notes"
 )
@@ -378,8 +379,8 @@ func validateParsedFileConfig(parsed fileConfig) error {
 	if parsed.Source.ViewURL != nil && strings.TrimSpace(*parsed.Source.ViewURL) == "" {
 		return fmt.Errorf("source.viewURL must be non-empty")
 	}
-	if parsed.Pagination.PageSize != nil && *parsed.Pagination.PageSize <= 0 {
-		return fmt.Errorf("pagination.pageSize must be greater than 0")
+	if parsed.Pagination.PageSize != nil && (*parsed.Pagination.PageSize < 1 || *parsed.Pagination.PageSize > maxPaginationPageSize) {
+		return fmt.Errorf("pagination.pageSize must be between 1 and %d", maxPaginationPageSize)
 	}
 	if parsed.Related.Count != nil && (*parsed.Related.Count < 1 || *parsed.Related.Count > 20) {
 		return fmt.Errorf("related.count must be between 1 and 20")
@@ -713,8 +714,8 @@ func normalizeAndValidate(cfg model.SiteConfig) (model.SiteConfig, error) {
 	cfg.ThemeDir = strings.TrimSpace(cfg.ThemeDir)
 	cfg.ThemeCSS = strings.TrimSpace(cfg.ThemeCSS)
 	cfg.CustomCSS = strings.TrimSpace(cfg.CustomCSS)
-	if cfg.Pagination.PageSize <= 0 {
-		return model.SiteConfig{}, fmt.Errorf("pagination.pageSize must be greater than 0")
+	if cfg.Pagination.PageSize < 1 || cfg.Pagination.PageSize > maxPaginationPageSize {
+		return model.SiteConfig{}, fmt.Errorf("pagination.pageSize must be between 1 and %d", maxPaginationPageSize)
 	}
 	if cfg.Related.Count < 1 || cfg.Related.Count > 20 {
 		return model.SiteConfig{}, fmt.Errorf("related.count must be between 1 and 20")

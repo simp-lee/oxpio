@@ -75,7 +75,7 @@ func TestStrictBuildVersionedMetadataDeterminismMatrix(t *testing.T) {
 						if _, err := BuildWithOptions(vault, output, Options{Concurrency: seedConcurrency}); err != nil {
 							t.Fatalf("build incremental precursor: %v", err)
 						}
-						if loadStrictCacheManifest(output) == nil {
+						if loadStrictCacheManifest(vault) == nil {
 							t.Fatal("incremental precursor did not produce a cache manifest")
 						}
 						if _, err := os.Stat(filepath.Join(output, "docs", "v1", "start-preview", "index.html")); err != nil {

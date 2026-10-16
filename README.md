@@ -192,7 +192,7 @@ All source assets pass through one contained asset planner. The planner owns Mar
 
 Themes live under `.oxpio/themes/<theme-id>/` and require `theme.yaml`, `layouts/base.html`, `section.html`, `article.html`, `tag.html`, `timeline.html`, and `404.html`. The embedded `base` theme is selected by default; `oxpio theme init` creates an editable `minimal` copy. Theme resources are planned with content-addressed URLs and are referenced from templates with `{{assetURL "assets/name.css"}}`. CSS dependencies and missing resources are validated before publication.
 
-Theme development uses `oxpio theme context`, `theme read`, `theme write`/`theme edit` with CAS hashes, `theme validate --theme ID`, and the isolated `theme preview --theme ID`. Templates receive the immutable `oxpio.theme.vm/v1` View Model and may use only `siteURL`, `routeURL`, `assetURL`, `formatDate`, and `emitJSONLD`; theme tools never publish or modify Markdown/config selection. Run `oxpio publish` explicitly after selecting a local theme.
+Theme development uses `oxpio theme context`, `theme read`, `theme write`/`theme edit` with CAS hashes, `theme validate --theme ID`, and the isolated `theme preview --theme ID`. JSON context exposes the selected theme inventory in `theme.files` and the complete inventory in every local `availableThemes[].files` entry, including Vault-relative path, kind, SHA-256, size, and root `custom.css` when present; embedded `base` reports identity only. Templates receive the immutable `oxpio.theme.vm/v1` View Model and may use only `siteURL`, `routeURL`, `assetURL`, `formatDate`, and `emitJSONLD`; theme tools never publish or modify Markdown/config selection. Run `oxpio publish` explicitly after selecting a local theme.
 
 ## Related recommendations
 

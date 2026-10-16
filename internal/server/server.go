@@ -207,7 +207,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		requestPath = r.URL.Path
 	}
 	cleanPath, _ := cleanRequestPath(requestPath)
-	if isEditControlPath(cleanPath) {
+	if isEditControlPath(cleanPath) || isInternalCachePath(cleanPath) {
 		http.NotFound(w, r)
 		return
 	}
@@ -217,6 +217,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	servePath, redirectPath := s.resolvePath(requestPath)
+	if isInternalCachePath(servePath) || isInternalCachePath(redirectPath) {
+		http.NotFound(w, r)
+		return
+	}
 	if redirectPath != "" {
 		if rawQuery := r.URL.RawQuery; rawQuery != "" {
 			redirectPath += "?" + rawQuery
@@ -226,6 +230,10 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if servePath != "" {
+		if isInternalCachePath(servePath) {
+			http.NotFound(w, r)
+			return
+		}
 		s.serveOutput(w, r, servePath)
 		return
 	}
@@ -339,6 +347,10 @@ func shouldServeLiveReloadRequest(r *http.Request) bool {
 }
 
 func (s *Server) serveOutput(w http.ResponseWriter, r *http.Request, servePath string) {
+	if isInternalCachePath(servePath) {
+		http.NotFound(w, r)
+		return
+	}
 	req := r.Clone(r.Context())
 	decodedServePath, err := url.PathUnescape(servePath)
 	if err != nil {
@@ -963,6 +975,17 @@ func canonicalPreviewOutputPath(decodedPath string, directory bool) string {
 
 func isEditControlPath(cleanPath string) bool {
 	return cleanPath == "/_oxpio" || strings.HasPrefix(cleanPath, "/_oxpio/")
+}
+
+func isInternalCachePath(cleanPath string) bool {
+	decoded, err := url.PathUnescape(cleanPath)
+	if err != nil {
+		return false
+	}
+	canonical := path.Clean("/" + strings.TrimPrefix(decoded, "/"))
+	const cachePrefix = "/.oxpio-cache"
+	return strings.EqualFold(canonical, cachePrefix) ||
+		len(canonical) > len(cachePrefix) && strings.EqualFold(canonical[:len(cachePrefix)], cachePrefix) && canonical[len(cachePrefix)] == '/'
 }
 
 func cleanRequestPath(requestPath string) (cleanPath string, hasTrailingSlash bool) {

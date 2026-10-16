@@ -18,6 +18,13 @@ const workspaceLockFilename = ".oxpio/lock"
 // short-lived transaction intent before the callback changes any product file.
 // Dry-run callers must not invoke it.
 func WithWorkspaceMutation(vault, operation string, paths []string, fn func() error) error {
+	return withWorkspaceMutation(vault, operation, paths, defaultClock, fn)
+}
+
+func withWorkspaceMutation(vault, operation string, paths []string, clock Clock, fn func() error) error {
+	if clock == nil {
+		return errors.New("workspace clock is nil")
+	}
 	if fn == nil {
 		return errors.New("workspace mutation callback is nil")
 	}
@@ -47,7 +54,7 @@ func WithWorkspaceMutation(vault, operation string, paths []string, fn func() er
 		Operation string   `json:"operation"`
 		Paths     []string `json:"paths"`
 		CreatedAt string   `json:"createdAt"`
-	}{operation, append([]string(nil), paths...), time.Now().UTC().Format(time.RFC3339Nano)}
+	}{operation, append([]string(nil), paths...), clock.Now().UTC().Format(time.RFC3339Nano)}
 	data, err := json.Marshal(intent)
 	if err != nil {
 		return err

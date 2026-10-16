@@ -169,7 +169,7 @@ Shared article body.
 		}
 	}
 
-	manifest := loadStrictCacheManifest(output)
+	manifest := loadStrictCacheManifest(vault)
 	if manifest == nil {
 		t.Fatal("strict cache manifest is missing")
 	}
@@ -266,14 +266,13 @@ Shared article body.
 		t.Fatalf("independent social card URLs = %d, want %d", len(socialRoutes), expectedArticles)
 	}
 
-	// The manifest excludes its own cache record, so the one extra physical
-	// file is the manifest itself. Every other generated file must have one
-	// owner record, preventing page-count growth from duplicating shared writers.
+	// Every generated output file must have one owner record, preventing
+	// page-count growth from duplicating shared writers.
 	expectedManifestOutputs := 1 + 1 + expectedSections + expectedArticles*2 + len(assetSources) + 2 + len(runtimeAssets) + 3
 	if len(manifest.Outputs) != expectedManifestOutputs {
 		t.Fatalf("manifest output count = %d, want %d", len(manifest.Outputs), expectedManifestOutputs)
 	}
-	if files := strictOutputBytes(t, output); len(files) != expectedManifestOutputs+1 {
-		t.Fatalf("physical output file count = %d, want %d", len(files), expectedManifestOutputs+1)
+	if files := strictOutputBytes(t, output); len(files) != expectedManifestOutputs {
+		t.Fatalf("physical output file count = %d, want %d", len(files), expectedManifestOutputs)
 	}
 }

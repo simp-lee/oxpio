@@ -40,6 +40,18 @@ func TestCommandRegistryDocumentsGlobalAndBoundaryFlags(t *testing.T) {
 	}
 }
 
+func TestThemeValidateDoesNotDeclareOutputBoundary(t *testing.T) {
+	spec, ok := FindCommand("theme validate")
+	if !ok {
+		t.Fatal("theme validate is not registered")
+	}
+	for _, flag := range spec.Flags {
+		if flag.Name == "output" {
+			t.Fatalf("theme validate flags = %#v, must not include output", spec.Flags)
+		}
+	}
+}
+
 func TestGrepRegistryDeclaresBoundsRepeatabilityAndAgentHelp(t *testing.T) {
 	spec, ok := FindCommand("grep")
 	if !ok {

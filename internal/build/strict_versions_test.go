@@ -111,7 +111,7 @@ versions:
 			t.Fatalf("RSS missing %q: %s", title, rss)
 		}
 	}
-	manifest := loadStrictCacheManifest(output)
+	manifest := loadStrictCacheManifest(vault)
 	for _, owner := range []string{"tag:v1:shared", "tag:v2:shared", "timeline:unversioned", "timeline:v1", "timeline:v2"} {
 		if cacheOutputByOwner(manifest, owner).OutputHash == "" {
 			t.Fatalf("cache owner %q is missing", owner)

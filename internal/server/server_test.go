@@ -130,6 +130,31 @@ func TestServerKeepsReservedEditControlUnavailable(t *testing.T) {
 	}
 }
 
+func TestServerKeepsInternalCacheUnavailable(t *testing.T) {
+	t.Parallel()
+
+	outputPath := t.TempDir()
+	writeServerTestFile(t, outputPath, "index.html", `<html data-oxpio-base-path="/blog/"><body>home</body></html>`)
+	writeServerTestFile(t, outputPath, ".oxpio-cache/manifest.json", "internal cache secret")
+
+	srv, err := New(outputPath, DefaultPort)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, requestPath := range []string{"/.oxpio-cache/manifest.json", "/%2Eoxpio-cache/manifest.json", "/.oxpio-cache%2Fmanifest.json", "/blog/.oxpio-cache/manifest.json"} {
+		t.Run(requestPath, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			srv.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, requestPath, nil))
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("GET %s status = %d, want %d", requestPath, recorder.Code, http.StatusNotFound)
+			}
+			if strings.Contains(recorder.Body.String(), "internal cache secret") {
+				t.Fatalf("GET %s exposed internal cache", requestPath)
+			}
+		})
+	}
+}
+
 func TestServerServesCleanURLsAndCustom404(t *testing.T) {
 	t.Parallel()
 

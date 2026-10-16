@@ -27,6 +27,34 @@ func TestRewritePreviewHTMLRewritesQuotedRootURLs(t *testing.T) {
 	}
 }
 
+func TestRewritePreviewHTMLRewritesMinifiedUnquotedRootURLs(t *testing.T) {
+	body := []byte(`<link rel=stylesheet href=/assets/oxpio-runtime/katex.min.css><script src=/assets/oxpio-runtime/katex.min.js></script><img src=/images/logo.svg><img srcset=/images/logo.svg>`)
+	got := string(rewritePreviewHTML(body, "/_oxpio/preview/token"))
+	for _, want := range []string{
+		`href=/_oxpio/preview/token/assets/oxpio-runtime/katex.min.css`,
+		`src=/_oxpio/preview/token/assets/oxpio-runtime/katex.min.js`,
+		`src=/_oxpio/preview/token/images/logo.svg`,
+		`srcset=/_oxpio/preview/token/images/logo.svg`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("rewritten minified HTML missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestRewritePreviewHTMLDoesNotConfusePrefixCollisions(t *testing.T) {
+	body := []byte(`<img src="/_oxpio/preview/token2/assets/logo.svg"><img srcset="/_oxpio/preview/token2/assets/logo.svg 1x">`)
+	got := string(rewritePreviewHTML(body, "/_oxpio/preview/token"))
+	for _, want := range []string{
+		`src="/_oxpio/preview/token/_oxpio/preview/token2/assets/logo.svg"`,
+		`srcset="/_oxpio/preview/token/_oxpio/preview/token2/assets/logo.svg 1x"`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("prefix-collision URL = %s, want %q", got, want)
+		}
+	}
+}
+
 func TestServePreviewRejectsAnonymousAndExpiredTokens(t *testing.T) {
 	output := t.TempDir()
 	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("<!doctype html><html><body>public</body></html>"), 0o644); err != nil {

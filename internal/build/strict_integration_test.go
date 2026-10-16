@@ -91,10 +91,16 @@ func TestStrictBuildUsesCanonicalSectionPlanAndRichMarkdown(t *testing.T) {
 	if result.NotePages != 2 {
 		t.Fatalf("NotePages = %d, want 2", result.NotePages)
 	}
-	for _, rel := range []string{"index.html", "guide/index.html", "guide/article/index.html", "roadmap/index.html", "tags/feature/index.html", "updates/index.html", "404.html", "assets/custom.css", ".oxpio-cache/manifest.json", "sitemap.xml", "index.xml"} {
+	for _, rel := range []string{"index.html", "guide/index.html", "guide/article/index.html", "roadmap/index.html", "tags/feature/index.html", "updates/index.html", "404.html", "assets/custom.css", "sitemap.xml", "index.xml"} {
 		if _, err := os.Stat(filepath.Join(outputPath, filepath.FromSlash(rel))); err != nil {
 			t.Fatalf("missing output %q: %v", rel, err)
 		}
+	}
+	if _, err := os.Stat(filepath.Join(outputPath, filepath.FromSlash(".oxpio-cache/manifest.json"))); !os.IsNotExist(err) {
+		t.Fatalf("internal cache leaked into formal output: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vaultPath, filepath.FromSlash(strictCacheManifestRelativePath))); err != nil {
+		t.Fatalf("missing internal cache manifest: %v", err)
 	}
 	article := readBuildOutputFile(t, outputPath, "guide/article/index.html")
 	articleHTML := string(article)

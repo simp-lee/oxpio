@@ -225,6 +225,13 @@ func TestThemeValidateRedactsHiddenSourceDiagnostics(t *testing.T) {
 	}
 }
 
+func TestThemeValidateRejectsOutputFlag(t *testing.T) {
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"theme", "validate", "--output", filepath.Join(t.TempDir(), "public")})
+	if err == nil || stdout != "" || stderr != "" || !strings.Contains(err.Error(), "unknown flag") {
+		t.Fatalf("theme validate --output = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+}
+
 func TestValidateRedactsHiddenDraftSourceDiagnostics(t *testing.T) {
 	vault := t.TempDir()
 	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")

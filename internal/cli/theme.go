@@ -83,7 +83,7 @@ func newThemeInitCommand() *cobra.Command {
 			if start != end {
 				return errors.New("CONCURRENT_INPUT: Vault inputs changed during dry-run")
 			}
-			return writeThemeData(cmd, map[string]any{"theme": name, "dryRun": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": impactedPages, "artifacts": artifacts, "next": "theme validate then explicitly publish"})
+			return writeThemeData(cmd, map[string]any{"theme": name, "dryRun": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": impactedPages, "artifacts": artifacts, "published": nil, "next": "theme validate then explicitly publish"})
 		}
 		if err := workspace.WithLock(vault, func() error {
 			if err := checkTarget(); err != nil {
@@ -93,7 +93,7 @@ func newThemeInitCommand() *cobra.Command {
 		}); err != nil {
 			return err
 		}
-		return writeThemeData(cmd, map[string]any{"theme": name, "created": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": impactedPages, "artifacts": artifacts, "next": "theme validate then explicitly publish"})
+		return writeThemeData(cmd, map[string]any{"theme": name, "created": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": impactedPages, "artifacts": artifacts, "published": nil, "next": "theme validate then explicitly publish"})
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
@@ -177,7 +177,6 @@ func newThemeValidateCommand() *cobra.Command {
 		return writeThemeData(cmd, map[string]any{"theme": selectedTheme, "apiVersion": internaltheme.APIVersion, "manifest": internaltheme.ManifestOf(source), "errors": errors, "warnings": warnings, "valid": true})
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
-	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&themeID, "theme", "", "Temporarily select a theme")
 	return cmd
 }
@@ -192,6 +191,24 @@ func themeDiagnosticCounts(items []internaldiag.Diagnostic) (warnings, errors in
 		}
 	}
 	return warnings, errors
+}
+
+// themeContextFiles returns a Vault-relative inventory for a theme. The
+// selected theme is exposed at the top level and every local theme in
+// availableThemes gets the same inventory so an Agent can discover CAS inputs
+// before selecting it. Embedded base files are intentionally not included.
+func themeContextFiles(themeID string, files []internaltheme.File, customCSS *internaltheme.File) []internaltheme.File {
+	result := make([]internaltheme.File, 0, len(files)+1)
+	if themeID != internaltheme.BaseID {
+		for _, file := range files {
+			file.Path = filepath.ToSlash(filepath.Join(".oxpio", "themes", themeID, file.Path))
+			result = append(result, file)
+		}
+	}
+	if customCSS != nil {
+		result = append(result, *customCSS)
+	}
+	return result
 }
 
 func newThemeContextCommand() *cobra.Command {
@@ -218,17 +235,16 @@ func newThemeContextCommand() *cobra.Command {
 			return err
 		}
 		manifest := internaltheme.ManifestOf(source)
-		for index := range manifest.Files {
-			if cfg.Theme != internaltheme.BaseID {
-				manifest.Files[index].Path = filepath.ToSlash(filepath.Join(".oxpio", "themes", cfg.Theme, manifest.Files[index].Path))
-			}
-		}
+		var customCSS *internaltheme.File
 		if cfg.CustomCSS != "" {
-			if data, readErr := os.ReadFile(cfg.CustomCSS); readErr == nil {
-				digest := sha256.Sum256(data)
-				manifest.Files = append(manifest.Files, internaltheme.File{Path: "custom.css", Kind: "text", Hash: fmt.Sprintf("%x", digest), Size: len(data)})
+			data, readErr := os.ReadFile(cfg.CustomCSS)
+			if readErr != nil {
+				return readErr
 			}
+			digest := sha256.Sum256(data)
+			customCSS = &internaltheme.File{Path: "custom.css", Kind: "text", Hash: fmt.Sprintf("%x", digest), Size: len(data)}
 		}
+		manifest.Files = themeContextFiles(cfg.Theme, manifest.Files, customCSS)
 		available := make([]map[string]any, 0)
 		baseSource, baseErr := internaltheme.BaseSource()
 		if baseErr != nil {
@@ -246,7 +262,7 @@ func newThemeContextCommand() *cobra.Command {
 					return loadErr
 				}
 				candidateManifest := internaltheme.ManifestOf(candidate)
-				available = append(available, map[string]any{"id": entry.Name(), "apiVersion": candidateManifest.APIVersion, "name": candidateManifest.Name, "hash": candidateManifest.Hash})
+				available = append(available, map[string]any{"id": entry.Name(), "apiVersion": candidateManifest.APIVersion, "name": candidateManifest.Name, "hash": candidateManifest.Hash, "files": themeContextFiles(entry.Name(), candidateManifest.Files, customCSS)})
 			}
 		}
 		sort.Slice(available, func(i, j int) bool { return available[i]["id"].(string) < available[j]["id"].(string) })
@@ -823,7 +839,7 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 			return errors.New("CONCURRENT_INPUT: Vault inputs changed during dry-run")
 		}
 		impactedPages, artifacts := themeMutationSummary(vault, rel)
-		return writeThemeData(cmd, map[string]any{"dryRun": true, "changes": []any{change}, "impactedPages": impactedPages, "artifacts": artifacts, "next": "theme validate then explicitly publish"})
+		return writeThemeData(cmd, map[string]any{"dryRun": true, "changes": []any{change}, "impactedPages": impactedPages, "artifacts": artifacts, "published": nil, "next": "theme validate then explicitly publish"})
 	}
 	if err := os.MkdirAll(filepath.Dir(candidate), 0o755); err != nil {
 		return err
@@ -841,7 +857,7 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 		return writeErr
 	}
 	impactedPages, artifacts := themeMutationSummary(vault, rel)
-	return writeThemeData(cmd, map[string]any{"changes": []any{change}, "path": rel, "impactedPages": impactedPages, "artifacts": artifacts, "next": "theme validate then explicitly publish"})
+	return writeThemeData(cmd, map[string]any{"changes": []any{change}, "path": rel, "impactedPages": impactedPages, "artifacts": artifacts, "published": nil, "next": "theme validate then explicitly publish"})
 }
 
 func themeMutationSummary(vault, rel string) (int, map[string]int) {

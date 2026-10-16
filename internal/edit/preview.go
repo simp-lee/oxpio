@@ -247,7 +247,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, previewFailureMessage("could not create preview server", cleanupErr), http.StatusInternalServerError)
 		return
 	}
-	token, err := newToken()
+	token, err := s.newToken()
 	if err != nil {
 		cleanupErr := s.discardUnpublishedPreview(static, root)
 		http.Error(w, previewFailureMessage("could not create preview token", cleanupErr), http.StatusInternalServerError)
@@ -272,14 +272,15 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, previewFailureMessage("editor is closed", cleanupErr), http.StatusServiceUnavailable)
 		return
 	}
-	if err := s.cleanupPreviewsLocked(time.Now()); err != nil {
+	now := s.now()
+	if err := s.cleanupPreviewsLocked(now); err != nil {
 		s.previewMu.Unlock()
 		cleanupErr := errors.Join(err, s.discardUnpublishedPreview(static, root))
 		http.Error(w, previewFailureMessage("could not clean up expired preview", cleanupErr), http.StatusInternalServerError)
 		return
 	}
 	delete(s.previewRoots, root)
-	s.previews[token] = &editorPreview{static: static, root: root, contentHTML: contentHTML, expires: time.Now().Add(previewLifetime)}
+	s.previews[token] = &editorPreview{static: static, root: root, contentHTML: contentHTML, expires: now.Add(previewLifetime)}
 	s.previewMu.Unlock()
 	response := map[string]any{
 		"url":          fullURL,
@@ -345,7 +346,7 @@ func (s *Server) discardUnpublishedPreview(static *internalserver.Server, root s
 }
 
 func (s *Server) lookupPreview(token string) (*editorPreview, error) {
-	now := time.Now()
+	now := s.now()
 	s.previewMu.Lock()
 	defer s.previewMu.Unlock()
 	if cleanupErr := s.cleanupPreviewsLocked(now); cleanupErr != nil {
@@ -391,19 +392,28 @@ func previewFailureMessage(message string, cleanupErr error) string {
 }
 
 var (
-	previewURLAttributePattern    = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data-src)\s*=\s*)(["'])(/[^"']*)`)
-	previewSrcsetAttributePattern = regexp.MustCompile(`(?i)(\bsrcset\s*=\s*)(["'])(/[^"']*)`)
+	previewURLAttributePattern            = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data-src)\s*=\s*)(["'])(/[^"']*)`)
+	previewUnquotedURLAttributePattern    = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data-src)\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
+	previewSrcsetAttributePattern         = regexp.MustCompile(`(?i)(\bsrcset\s*=\s*)(["'])(/[^"']*)`)
+	previewUnquotedSrcsetAttributePattern = regexp.MustCompile(`(?i)(\bsrcset\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
 )
 
 func rewritePreviewHTML(body []byte, prefix string) []byte {
 	text := previewURLAttributePattern.ReplaceAllStringFunc(string(body), func(match string) string {
 		parts := previewURLAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 4 || strings.HasPrefix(parts[3], "//") || strings.HasPrefix(parts[3], prefix) {
+		if len(parts) != 4 {
 			return match
 		}
-		return parts[1] + parts[2] + prefix + parts[3]
+		return parts[1] + parts[2] + rewritePreviewRootURL(parts[3], prefix)
 	})
-	return []byte(previewSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
+	text = previewUnquotedURLAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := previewUnquotedURLAttributePattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		return parts[1] + rewritePreviewRootURL(parts[2], prefix)
+	})
+	text = previewSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
 		parts := previewSrcsetAttributePattern.FindStringSubmatch(match)
 		if len(parts) != 4 {
 			return match
@@ -411,14 +421,28 @@ func rewritePreviewHTML(body []byte, prefix string) []byte {
 		candidates := strings.Split(parts[3], ",")
 		for index, candidate := range candidates {
 			fields := strings.Fields(candidate)
-			if len(fields) == 0 || strings.HasPrefix(fields[0], "//") || !strings.HasPrefix(fields[0], "/") || strings.HasPrefix(fields[0], prefix) {
+			if len(fields) == 0 || strings.HasPrefix(fields[0], "//") || !strings.HasPrefix(fields[0], "/") {
 				continue
 			}
-			fields[0] = prefix + fields[0]
+			fields[0] = rewritePreviewRootURL(fields[0], prefix)
 			candidates[index] = strings.Join(fields, " ")
 		}
 		return parts[1] + parts[2] + strings.Join(candidates, ",")
+	})
+	return []byte(previewUnquotedSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := previewUnquotedSrcsetAttributePattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		return parts[1] + rewritePreviewRootURL(parts[2], prefix)
 	}))
+}
+
+func rewritePreviewRootURL(value, prefix string) string {
+	if strings.HasPrefix(value, "//") || value == prefix || strings.HasPrefix(value, prefix+"/") {
+		return value
+	}
+	return prefix + value
 }
 
 // jsonUnmarshal is kept local to the edit package so preview requests share

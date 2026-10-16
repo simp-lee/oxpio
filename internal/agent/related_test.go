@@ -2,6 +2,7 @@ package agent
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"testing"
 
@@ -114,8 +115,9 @@ func TestRelatedRejectsSectionsAndHiddenArticles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Related(snapshot, "_index.md"); err == nil {
-		t.Fatal("Related accepted a section source")
+	var relatedErr RelatedError
+	if _, err := Related(snapshot, "_index.md"); err == nil || !errors.As(err, &relatedErr) || relatedErr.Code != "INVALID_ARGUMENT" || relatedErr.Category != "parameter" || relatedErr.ExitCode() != 2 {
+		t.Fatalf("Related section error = %v, want INVALID_ARGUMENT/parameter exit 2", err)
 	}
 	if _, err := Related(snapshot, "private/secret.md"); err != internalapplication.ErrHiddenSource {
 		t.Fatalf("Related hidden error = %v", err)

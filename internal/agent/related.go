@@ -30,6 +30,28 @@ type RelatedResult struct {
 	Candidates []RelatedCandidate `json:"candidates"`
 }
 
+type RelatedError struct {
+	Code     string
+	Category string
+	Message  string
+	Exit     int
+	Cause    error
+}
+
+func (e RelatedError) Error() string { return e.Message }
+func (e RelatedError) Unwrap() error { return e.Cause }
+func (e RelatedError) ExitCode() int { return e.Exit }
+func (e RelatedError) Diagnostic() Diagnostic {
+	return Diagnostic{Code: e.Code, Severity: "error", Category: e.Category, Message: e.Message}
+}
+
+func invalidRelatedSourceError() error {
+	return RelatedError{
+		Code: "INVALID_ARGUMENT", Category: "parameter",
+		Message: "related source must be an ordinary article", Exit: 2,
+	}
+}
+
 // Related returns the production recommendation list for one public ordinary
 // article. It never broadens the public query scope and does not use search.
 func Related(snapshot internalapplication.Snapshot, relPath string) (RelatedResult, error) {
@@ -38,7 +60,7 @@ func Related(snapshot internalapplication.Snapshot, relPath string) (RelatedResu
 		return RelatedResult{}, err
 	}
 	if entry.Kind != "article" {
-		return RelatedResult{}, fmt.Errorf("related source must be an ordinary article")
+		return RelatedResult{}, invalidRelatedSourceError()
 	}
 	planned := snapshot.Analysis.Plan
 	if planned == nil || planned.Index == nil {
@@ -46,7 +68,7 @@ func Related(snapshot internalapplication.Snapshot, relPath string) (RelatedResu
 	}
 	note := planned.Index.Notes[entry.RelPath]
 	if note == nil || note.Frontmatter.Type != "doc" && note.Frontmatter.Type != "post" && note.Frontmatter.Type != "page" {
-		return RelatedResult{}, fmt.Errorf("related source must be an ordinary article")
+		return RelatedResult{}, invalidRelatedSourceError()
 	}
 	recommendations, err := internalapplication.RelatedRecommendations(snapshot)
 	if err != nil {

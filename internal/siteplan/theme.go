@@ -3,12 +3,12 @@ package siteplan
 import (
 	"bytes"
 	"encoding/xml"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"path"
 	"path/filepath"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -19,9 +19,9 @@ import (
 	"github.com/simp-lee/oxpio/internal/model"
 	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	"github.com/simp-lee/oxpio/internal/vault"
+	"github.com/tdewolff/parse/v2"
+	parsejs "github.com/tdewolff/parse/v2/js"
 )
-
-var themeJavaScriptImportPattern = regexp.MustCompile(`(?m)(\b(?:import|export)\s+(?:[^;\n]*?\s+from\s+)?|\bimport\s*\(\s*)(?:"([^"]+)"|'([^']+)')`)
 
 // ValidateThemeSource validates a theme with the same content-addressed asset
 // planner used by a strict site plan, without scanning or writing a vault.
@@ -285,6 +285,10 @@ func rewriteThemeSVGReferences(data []byte, assetName string, assetSources map[s
 }
 
 func rewriteThemeJavaScriptImports(data []byte, source string, assetSources map[string]string, resolve func(string) (*model.PlannedAsset, error)) ([]byte, error) {
+	specifiers, err := themeJavaScriptImportSpecifiers(data)
+	if err != nil {
+		return nil, err
+	}
 	assetName := ""
 	for name, candidate := range assetSources {
 		if candidate == source {
@@ -292,21 +296,13 @@ func rewriteThemeJavaScriptImports(data []byte, source string, assetSources map[
 			break
 		}
 	}
-	if assetName == "" {
-		return data, nil
-	}
-	matches := themeJavaScriptImportPattern.FindAllSubmatchIndex(data, -1)
-	if len(matches) == 0 {
+	if assetName == "" || len(specifiers) == 0 {
 		return data, nil
 	}
 	var rewritten strings.Builder
 	last := 0
-	for _, match := range matches {
-		refStart, refEnd := match[4], match[5]
-		if refStart < 0 {
-			refStart, refEnd = match[6], match[7]
-		}
-		raw := string(data[refStart:refEnd])
+	for _, specifier := range specifiers {
+		raw := specifier.raw
 		parsed, err := url.Parse(raw)
 		if err != nil || parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(raw, "//") || strings.HasPrefix(raw, "/") || strings.ContainsAny(raw, "\\\\\r\n\x00") {
 			return nil, fmt.Errorf("theme JavaScript import %q is not a local asset", raw)
@@ -329,11 +325,125 @@ func rewriteThemeJavaScriptImports(data []byte, source string, assetSources map[
 		if err != nil {
 			return nil, err
 		}
-		rewritten.Write(data[last:refStart])
+		rewritten.Write(data[last:specifier.start])
+		rewritten.WriteByte(data[specifier.start])
 		rewritten.WriteString(path.Base(dependency.DstPath))
 		rewritten.WriteString(suffix)
-		last = refEnd
+		rewritten.WriteByte(data[specifier.end-1])
+		last = specifier.end
 	}
 	rewritten.Write(data[last:])
 	return []byte(rewritten.String()), nil
+}
+
+type themeJavaScriptToken struct {
+	kind       parsejs.TokenType
+	start, end int
+}
+
+type themeJavaScriptSpecifier struct {
+	start, end int
+	raw        string
+}
+
+func themeJavaScriptImportSpecifiers(data []byte) ([]themeJavaScriptSpecifier, error) {
+	if !bytes.Contains(data, []byte("import")) && !bytes.Contains(data, []byte("export")) {
+		return nil, nil
+	}
+	tokens, err := lexThemeJavaScript(data)
+	if err != nil {
+		return nil, err
+	}
+	specifiers := make([]themeJavaScriptSpecifier, 0)
+	for index, token := range tokens {
+		if token.kind != parsejs.ImportToken && token.kind != parsejs.ExportToken {
+			continue
+		}
+		if token.kind == parsejs.ImportToken && index > 0 && (tokens[index-1].kind == parsejs.DotToken || tokens[index-1].kind == parsejs.OptChainToken) {
+			continue
+		}
+		if token.kind == parsejs.ImportToken && index+1 < len(tokens) {
+			switch tokens[index+1].kind {
+			case parsejs.DotToken:
+				// import.meta is not an asset import.
+				continue
+			case parsejs.OpenParenToken:
+				if index+2 >= len(tokens) || !isThemeJavaScriptStringToken(tokens[index+2].kind) {
+					return nil, errors.New("theme JavaScript import must use a statically analyzable string literal")
+				}
+				specifier, literalErr := themeJavaScriptSpecifierFromToken(data, tokens[index+2])
+				if literalErr != nil {
+					return nil, literalErr
+				}
+				if index+3 >= len(tokens) || (tokens[index+3].kind != parsejs.CloseParenToken && tokens[index+3].kind != parsejs.CommaToken) {
+					return nil, errors.New("theme JavaScript import must use a statically analyzable string literal")
+				}
+				specifiers = append(specifiers, specifier)
+				continue
+			}
+		}
+		start := index + 1
+		if token.kind == parsejs.ImportToken && start < len(tokens) && isThemeJavaScriptStringToken(tokens[start].kind) {
+			specifier, literalErr := themeJavaScriptSpecifierFromToken(data, tokens[start])
+			if literalErr != nil {
+				return nil, literalErr
+			}
+			specifiers = append(specifiers, specifier)
+			continue
+		}
+		for current := start; current+1 < len(tokens); current++ {
+			if tokens[current].kind == parsejs.SemicolonToken {
+				break
+			}
+			if tokens[current].kind != parsejs.FromToken || !isThemeJavaScriptStringToken(tokens[current+1].kind) {
+				continue
+			}
+			specifier, literalErr := themeJavaScriptSpecifierFromToken(data, tokens[current+1])
+			if literalErr != nil {
+				return nil, literalErr
+			}
+			specifiers = append(specifiers, specifier)
+			break
+		}
+	}
+	return specifiers, nil
+}
+
+func lexThemeJavaScript(data []byte) ([]themeJavaScriptToken, error) {
+	input := parse.NewInputBytes(data)
+	defer input.Restore()
+	lexer := parsejs.NewLexer(input)
+	tokens := make([]themeJavaScriptToken, 0)
+	for {
+		start := input.Offset()
+		token, _ := lexer.Next()
+		end := input.Offset()
+		switch token {
+		case parsejs.WhitespaceToken, parsejs.LineTerminatorToken, parsejs.CommentToken, parsejs.CommentLineTerminatorToken:
+			continue
+		case parsejs.ErrorToken:
+			if lexer.Err() == io.EOF {
+				return tokens, nil
+			}
+			return nil, fmt.Errorf("theme JavaScript import cannot be analyzed: %w", lexer.Err())
+		default:
+			tokens = append(tokens, themeJavaScriptToken{kind: token, start: start, end: end})
+		}
+	}
+}
+
+func isThemeJavaScriptStringToken(token parsejs.TokenType) bool {
+	return token == parsejs.StringToken || token == parsejs.TemplateToken
+}
+
+func themeJavaScriptSpecifierFromToken(data []byte, token themeJavaScriptToken) (themeJavaScriptSpecifier, error) {
+	literal := data[token.start:token.end]
+	if len(literal) < 2 || (literal[0] != '\'' && literal[0] != '"' && literal[0] != '`') || literal[len(literal)-1] != literal[0] {
+		return themeJavaScriptSpecifier{}, errors.New("theme JavaScript import must use a statically analyzable string literal")
+	}
+	raw := string(literal[1 : len(literal)-1])
+	if token.kind == parsejs.TemplateToken && strings.ContainsAny(raw, "\\\\\r\n") {
+		return themeJavaScriptSpecifier{}, errors.New("theme JavaScript import must use a statically analyzable string literal")
+	}
+	return themeJavaScriptSpecifier{start: token.start, end: token.end, raw: raw}, nil
 }

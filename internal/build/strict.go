@@ -31,6 +31,7 @@ import (
 	"github.com/simp-lee/oxpio/internal/siteplan"
 	"github.com/simp-lee/oxpio/internal/slug"
 	"github.com/simp-lee/oxpio/internal/social"
+	internalworkspace "github.com/simp-lee/oxpio/internal/workspace"
 	"github.com/tdewolff/minify/v2"
 	minhtml "github.com/tdewolff/minify/v2/html"
 	xhtml "golang.org/x/net/html"
@@ -71,7 +72,9 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 	if err != nil {
 		return result, err
 	}
-	previousCache := loadStrictCacheManifest(boundary.OutputPath)
+	previousCache := loadStrictCacheManifest(boundary.VaultPath)
+	var allAssets map[string]*model.Asset
+	var outputs *strictOutputRegistry
 	defer func() {
 		if err != nil {
 			if cleanupErr := publisher.Abort(); cleanupErr != nil {
@@ -94,9 +97,18 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 				_, _ = fmt.Fprintf(diagnosticsWriter, "cleanup %s: %s\n", d.KindOutputCleanup, commit.CleanupError)
 			}
 		}
+		if !ephemeral {
+			if cacheErr := writeStrictCacheManifest(boundary.VaultPath, plan, planned.Index, allAssets, outputs); cacheErr != nil {
+				warning := fmt.Errorf("write strict cache manifest: %w", cacheErr)
+				result.OutputCleanupError = errors.Join(result.OutputCleanupError, warning)
+				if diagnosticsWriter != nil {
+					_, _ = fmt.Fprintf(diagnosticsWriter, "cleanup %s: %s\n", d.KindOutputCleanup, warning)
+				}
+			}
+		}
 	}()
 	staging := publisher.StagingPath()
-	outputs := newStrictOutputRegistry(boundary.OutputPath, previousCache)
+	outputs = newStrictOutputRegistry(boundary.OutputPath, previousCache)
 	if err := outputs.write(staging, managedOutputMarkerFilename, "output marker", []byte(managedOutputMarkerContents)); err != nil {
 		return result, err
 	}
@@ -288,7 +300,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 			}
 		}
 	}
-	allAssets := assetCollector.Snapshot()
+	allAssets = assetCollector.Snapshot()
 	for source, seed := range assets {
 		if allAssets[source] == nil {
 			clone := *seed
@@ -363,9 +375,6 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		}
 	}
 	if err := writeStrictMetadataOutputs(staging, plan, planned.Index, outputs); err != nil {
-		return result, err
-	}
-	if err := writeStrictCacheManifest(staging, plan, planned.Index, allAssets, outputs); err != nil {
 		return result, err
 	}
 	if diagnosticsWriter != nil {
@@ -1309,11 +1318,21 @@ func strictCacheRelativePath(vaultRoot, value string) string {
 	return filepath.ToSlash(relative)
 }
 
-func loadStrictCacheManifest(outputRoot string) *strictCacheManifest {
-	if strings.TrimSpace(outputRoot) == "" {
+const strictCacheManifestRelativePath = ".oxpio/cache/manifest.json"
+
+func strictCacheManifestPath(vaultRoot string) string {
+	return filepath.Join(vaultRoot, filepath.FromSlash(strictCacheManifestRelativePath))
+}
+
+func loadStrictCacheManifest(vaultRoot string) *strictCacheManifest {
+	if strings.TrimSpace(vaultRoot) == "" {
 		return nil
 	}
-	data, err := os.ReadFile(filepath.Join(outputRoot, ".oxpio-cache", "manifest.json"))
+	manifestPath := strictCacheManifestPath(vaultRoot)
+	if _, _, err := internalfsutil.InspectContainedRegularFile(vaultRoot, manifestPath); err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(manifestPath)
 	if err != nil {
 		return nil
 	}
@@ -1324,7 +1343,7 @@ func loadStrictCacheManifest(outputRoot string) *strictCacheManifest {
 	return &manifest
 }
 
-func writeStrictCacheManifest(outputRoot string, plan *model.SitePlan, index *model.VaultIndex, assets map[string]*model.Asset, outputs *strictOutputRegistry) error {
+func writeStrictCacheManifest(vaultRoot string, plan *model.SitePlan, index *model.VaultIndex, assets map[string]*model.Asset, outputs *strictOutputRegistry) error {
 	manifest := strictCacheManifest{Version: 2, Dependencies: make([]strictCacheDependency, 0), Outputs: make([]strictCacheOutput, 0)}
 	if outputs != nil {
 		manifest.Dependencies = append(manifest.Dependencies, outputs.dependencies...)
@@ -1407,7 +1426,18 @@ func writeStrictCacheManifest(outputRoot string, plan *model.SitePlan, index *mo
 	if err != nil {
 		return err
 	}
-	return outputs.write(outputRoot, ".oxpio-cache/manifest.json", "cache", data)
+	manifestPath := strictCacheManifestPath(vaultRoot)
+	cacheDir := filepath.Dir(manifestPath)
+	if err := internalfsutil.EnsureNoSymlinkComponents(cacheDir); err != nil {
+		return fmt.Errorf("prepare strict cache directory: %w", err)
+	}
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		return fmt.Errorf("create strict cache directory: %w", err)
+	}
+	if err := internalworkspace.AtomicWriteFile(manifestPath, data, 0o644); err != nil {
+		return fmt.Errorf("atomic write strict cache manifest: %w", err)
+	}
+	return nil
 }
 
 func writeStrictConfiguredAssets(vaultRoot, outputRoot string, plan *model.SitePlan, outputs *strictOutputRegistry) error {

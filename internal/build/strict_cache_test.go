@@ -20,7 +20,7 @@ func TestStrictCacheManifestSeparatesInputsFromOutputs(t *testing.T) {
 	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
 		t.Fatal(err)
 	}
-	first := loadStrictCacheManifest(output)
+	first := loadStrictCacheManifest(vault)
 	if first == nil || len(first.Dependencies) == 0 || len(first.Outputs) == 0 {
 		t.Fatal("cache manifest does not contain separate dependency and output records")
 	}
@@ -33,7 +33,7 @@ func TestStrictCacheManifestSeparatesInputsFromOutputs(t *testing.T) {
 	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
 		t.Fatal(err)
 	}
-	second := loadStrictCacheManifest(output)
+	second := loadStrictCacheManifest(vault)
 	secondDependency, secondOutput := cacheDependencyByOwner(second, "custom CSS"), cacheOutputByOwner(second, "custom CSS")
 	if firstDependency.InputSignature == secondDependency.InputSignature {
 		t.Fatal("custom CSS input signature did not change")
@@ -86,7 +86,7 @@ func TestStrictCacheInvalidatesRelatedCardMetadata(t *testing.T) {
 	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
 		t.Fatal(err)
 	}
-	first := cacheDependencyByOwner(loadStrictCacheManifest(output), "article:alpha.md")
+	first := cacheDependencyByOwner(loadStrictCacheManifest(vault), "article:alpha.md")
 	if first.InputSignature == "" {
 		t.Fatal("related article cache dependency is missing")
 	}
@@ -95,7 +95,7 @@ func TestStrictCacheInvalidatesRelatedCardMetadata(t *testing.T) {
 	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
 		t.Fatal(err)
 	}
-	second := cacheDependencyByOwner(loadStrictCacheManifest(output), "article:alpha.md")
+	second := cacheDependencyByOwner(loadStrictCacheManifest(vault), "article:alpha.md")
 	if first.InputSignature == second.InputSignature {
 		t.Fatal("related card metadata change did not invalidate the source article cache")
 	}
@@ -120,7 +120,7 @@ func TestStrictCacheTracksRecursiveThemeCSSDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	first := loadStrictCacheManifest(output)
+	first := loadStrictCacheManifest(vault)
 	firstDependency, firstOutput := cacheDependencyByOwner(first, "custom CSS"), cacheOutputByOwner(first, "custom CSS")
 	oldNested := firstResult.Assets[".oxpio/themes/cache/assets/nested.css"].DstPath
 
@@ -129,7 +129,7 @@ func TestStrictCacheTracksRecursiveThemeCSSDependencies(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	second := loadStrictCacheManifest(output)
+	second := loadStrictCacheManifest(vault)
 	secondDependency, secondOutput := cacheDependencyByOwner(second, "custom CSS"), cacheOutputByOwner(second, "custom CSS")
 	if firstDependency.InputSignature == secondDependency.InputSignature || firstOutput.OutputHash == secondOutput.OutputHash {
 		t.Fatal("recursive theme CSS change did not invalidate the fixed custom CSS output")

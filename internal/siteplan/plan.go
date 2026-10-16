@@ -203,7 +203,7 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 		record(collector, diag.KindSection, "_index.md", "vault root must contain _index.md")
 	}
 
-	versions, versionByPath := planVersions(cfg.Versions, resolvedVault, sections, collector)
+	versions, versionByPath := planVersions(cfg.Versions, resolvedVault, sections, sources, scan.ResourceFiles, collector)
 	for _, section := range sections {
 		if versionID := versionByPath[section.RelPath]; versionID != "" {
 			section.VersionID = versionID
@@ -430,7 +430,7 @@ func hasSectionParent(sections map[string]*model.Section, sectionPath string) bo
 	}
 }
 
-func planVersions(config *model.VersionsConfig, vaultRoot string, sections map[string]*model.Section, collector *diag.Collector) ([]*model.Version, map[string]string) {
+func planVersions(config *model.VersionsConfig, vaultRoot string, sections map[string]*model.Section, sources vault.StrictFrontmatterResult, resourceFiles []string, collector *diag.Collector) ([]*model.Version, map[string]string) {
 	if config == nil {
 		return nil, map[string]string{}
 	}
@@ -512,6 +512,33 @@ func planVersions(config *model.VersionsConfig, vaultRoot string, sections map[s
 			}
 		}
 	}
+	for _, source := range sources.Sources {
+		physical := path.Dir(source.RelPath)
+		if physical == "." || (physical != root && !isDescendant(physical, root)) {
+			continue
+		}
+		if isVersionPath(physical, versions) {
+			continue
+		}
+		// The root and sections leading to a configured version source are
+		// unversioned containers. Other Markdown sources under versions.root
+		// must belong to a declared version instead of being published as a
+		// silent unversioned tree.
+		if source.Section != nil && isVersionContainerPath(physical, root, versions) {
+			continue
+		}
+		record(collector, diag.KindVersion, source.RelPath, "content under version root %q is not covered by a version source", root)
+	}
+	for _, relPath := range resourceFiles {
+		physical := path.Dir(relPath)
+		if physical == "." || (physical != root && !isDescendant(physical, root)) {
+			continue
+		}
+		if isVersionPath(physical, versions) || isVersionContainerPath(physical, root, versions) {
+			continue
+		}
+		record(collector, diag.KindVersion, relPath, "resource under version root %q is not covered by a version source", root)
+	}
 	return versions, versionByPath
 }
 
@@ -543,6 +570,27 @@ func validVersionID(value string) bool {
 
 func isDescendant(value, parent string) bool {
 	return value != parent && strings.HasPrefix(value, parent+"/")
+}
+
+func isVersionPath(value string, versions []*model.Version) bool {
+	for _, version := range versions {
+		if version != nil && (value == version.Source || isDescendant(value, version.Source)) {
+			return true
+		}
+	}
+	return false
+}
+
+func isVersionContainerPath(value, root string, versions []*model.Version) bool {
+	if value == root {
+		return true
+	}
+	for _, version := range versions {
+		if version != nil && isDescendant(version.Source, value) {
+			return true
+		}
+	}
+	return false
 }
 
 func attachSections(plan *model.SitePlan, sections map[string]*model.Section, versions []*model.Version, collector *diag.Collector) {
@@ -1911,7 +1959,7 @@ func joinRoute(section, segment string) string {
 func encodePath(value string) string {
 	parts := strings.Split(value, "/")
 	for i, part := range parts {
-		parts[i] = encodeSegment(norm.NFKC.String(part))
+		parts[i] = encodeSegment(part)
 	}
 	return strings.Join(parts, "/")
 }

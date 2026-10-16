@@ -444,6 +444,29 @@ func TestBuildWithConfigVersionCorrespondenceRequiresSameArticleType(t *testing.
 	}
 }
 
+func TestBuildWithConfigRejectsContentOutsideConfiguredVersionSources(t *testing.T) {
+	vault := t.TempDir()
+	writePlanFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writePlanFile(t, vault, "docs/_index.md", "---\ntitle: Docs\npublish: true\n---\n")
+	writePlanFile(t, vault, "docs/v1/_index.md", "---\ntitle: Version 1\npublish: true\n---\n")
+	writePlanFile(t, vault, "docs/other/_index.md", "---\ntitle: Other\npublish: true\n---\n")
+	writePlanFile(t, vault, "docs/other/a.md", "---\ntitle: Other article\npublish: true\ntype: doc\n---\n")
+	cfg := model.SiteConfig{Title: "Site", BaseURL: "https://example.test/", Versions: &model.VersionsConfig{
+		Root: "docs", Default: "v1", Entries: []model.VersionEntry{{ID: "v1", Label: "Version 1", Source: "v1"}},
+	}}
+
+	result, err := BuildWithConfig(vault, cfg)
+	if err == nil {
+		t.Fatal("BuildWithConfig() error = nil, want unowned version-root content rejection")
+	}
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Kind == diag.KindVersion && diagnostic.Location.Path == "docs/other/a.md" && strings.Contains(diagnostic.Message, "not covered by a version source") {
+			return
+		}
+	}
+	t.Fatalf("missing unowned content diagnostic: %v", result.Diagnostics)
+}
+
 func TestBuildWithConfigAllowsVersionContainerSectionsAndTheirBanner(t *testing.T) {
 	vault := t.TempDir()
 	writePlanFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
@@ -472,6 +495,27 @@ func TestBuildWithConfigAllowsVersionContainerSectionsAndTheirBanner(t *testing.
 	if version := sections["docs/sources/v1"]; version == nil || version.Route != "/docs/v1/" || version.VersionID != "v1" {
 		t.Fatalf("version source = %#v, want v1 landing", version)
 	}
+}
+
+func TestBuildWithConfigPreservesUnicodeSpellingInSectionRoutes(t *testing.T) {
+	vault := t.TempDir()
+	writePlanFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writePlanFile(t, vault, "ｄｏｃｓ/_index.md", "---\ntitle: Docs\npublish: true\n---\n")
+
+	result, err := BuildWithConfig(vault, model.SiteConfig{Title: "Site", BaseURL: "https://example.test/"})
+	if err != nil {
+		t.Fatalf("BuildWithConfig() error = %v; diagnostics=%v", err, result.Diagnostics)
+	}
+	for _, section := range result.Plan.Sections {
+		if section != nil && section.RelPath == "ｄｏｃｓ" {
+			want := "/%EF%BD%84%EF%BD%8F%EF%BD%83%EF%BD%93/"
+			if section.Route != want {
+				t.Fatalf("fullwidth section route = %q, want original spelling percent-encoded as %q", section.Route, want)
+			}
+			return
+		}
+	}
+	t.Fatal("fullwidth section was not planned")
 }
 
 func TestBuildWithConfigNormalizesUnicodeRoutesAndClaimsReservedOutputs(t *testing.T) {
@@ -669,6 +713,82 @@ func TestPlanVaultCSSRejectsExternalAndInvalidUTF8RootStyles(t *testing.T) {
 	planVaultCSS(plan, vault.ScanResult{}, vault.ScanResult{}, nil, collector)
 	if !collector.HasErrors() {
 		t.Fatal("invalid UTF-8 custom CSS was accepted")
+	}
+}
+
+func TestPlanThemeJavaScriptImportsRejectNonStaticSpecifiers(t *testing.T) {
+	for _, source := range []string{
+		"import(\"./chunk.js\"); import(`./${name}.js`)",
+		"import(name)",
+		"import(\"./\" + name + \".js\")",
+	} {
+		plan := &model.SitePlan{}
+		inputs := map[string][]byte{
+			"assets/app.js":   []byte(source),
+			"assets/chunk.js": []byte("export default 1;"),
+		}
+		assetSources := map[string]string{
+			"app.js":   "assets/app.js",
+			"chunk.js": "assets/chunk.js",
+		}
+		collector := diag.NewCollector()
+		planThemeAssets(plan, vault.ScanResult{}, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+		if !collector.HasErrors() || !strings.Contains(diagnosticMessages(collector.Diagnostics()), "statically analyzable") {
+			t.Fatalf("theme import %q diagnostics = %#v", source, collector.Diagnostics())
+		}
+	}
+}
+
+func TestPlanThemeJavaScriptImportsRewriteStaticSpecifiers(t *testing.T) {
+	plan := &model.SitePlan{}
+	inputs := map[string][]byte{
+		"assets/app.js":   []byte("import(`./chunk.js`); console.log(import.meta.url);"),
+		"assets/chunk.js": []byte("export default 1;"),
+	}
+	assetSources := map[string]string{
+		"app.js":   "assets/app.js",
+		"chunk.js": "assets/chunk.js",
+	}
+	collector := diag.NewCollector()
+	planThemeAssets(plan, vault.ScanResult{}, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+	if collector.HasErrors() {
+		t.Fatalf("theme asset diagnostics = %#v", collector.Diagnostics())
+	}
+	planned := plan.ThemeAssets["assets/app.js"]
+	if planned == nil || !bytes.Contains(planned.Data, []byte("chunk.")) {
+		t.Fatalf("rewritten JavaScript = %q", planned.Data)
+	}
+}
+
+func TestPlanThemeJavaScriptExportsOnlyRewriteFromSpecifiers(t *testing.T) {
+	plan := &model.SitePlan{}
+	literal := []byte(`export const assetName = "./literal.js"`)
+	inputs := map[string][]byte{"assets/app.js": literal}
+	assetSources := map[string]string{"app.js": "assets/app.js"}
+	collector := diag.NewCollector()
+	planThemeAssets(plan, vault.ScanResult{}, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+	if collector.HasErrors() {
+		t.Fatalf("theme asset diagnostics = %#v", collector.Diagnostics())
+	}
+	planned := plan.ThemeAssets["assets/app.js"]
+	if planned == nil || !bytes.Equal(planned.Data, literal) {
+		t.Fatalf("export literal JavaScript = %q, want %q", planned.Data, literal)
+	}
+}
+
+func TestPlanThemeJavaScriptImportTextIsNotRewritten(t *testing.T) {
+	plan := &model.SitePlan{}
+	literal := []byte(`const text = "import(\"./literal.js\")"; /* export {value} from "./comment.js" */`)
+	inputs := map[string][]byte{"assets/app.js": literal}
+	assetSources := map[string]string{"app.js": "assets/app.js"}
+	collector := diag.NewCollector()
+	planThemeAssets(plan, vault.ScanResult{}, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+	if collector.HasErrors() {
+		t.Fatalf("theme asset diagnostics = %#v", collector.Diagnostics())
+	}
+	planned := plan.ThemeAssets["assets/app.js"]
+	if planned == nil || !bytes.Equal(planned.Data, literal) {
+		t.Fatalf("import-like text = %q, want %q", planned.Data, literal)
 	}
 }
 
