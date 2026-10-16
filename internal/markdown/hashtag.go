@@ -34,11 +34,28 @@ func (r renderHashtagResolver) ResolveHashtag(node *gmhashtag.Node) ([]byte, err
 	}
 
 	tag := r.index.Tags[tagName]
-	if tag == nil || strings.TrimSpace(tag.Slug) == "" {
+	if tag == nil {
+		return nil, nil
+	}
+	encodedTagPath := slug.EncodePath(tag.Slug)
+	if r.outputNote != nil {
+		if partitionTags, ok := r.index.TagsByPartition[r.outputNote.VersionID]; ok {
+			tag = partitionTags[tagName]
+			if tag == nil {
+				return nil, nil
+			}
+			if routes := r.index.TagRoutesByPartition[r.outputNote.VersionID]; routes != nil {
+				if route := strings.Trim(routes[tagName], "/"); route != "" {
+					encodedTagPath = route
+				}
+			}
+		}
+	}
+	if strings.TrimSpace(encodedTagPath) == "" {
 		return nil, nil
 	}
 
-	href := relativeDirectoryURLToNoteOutput(r.outputNote, slug.EncodePath(tag.Slug))
+	href := relativeDirectoryURLToNoteOutput(r.outputNote, encodedTagPath)
 	if href == "" {
 		return nil, nil
 	}

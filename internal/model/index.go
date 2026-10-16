@@ -26,6 +26,10 @@ type VaultIndex struct {
 	NoteByName           map[string][]*Note
 	AliasByName          map[string][]*Note
 	Tags                 map[string]*Tag
+	// TagsByPartition and TagRoutesByPartition are filled by the site planner
+	// after public indexing so Markdown tag links use the current version scope.
+	TagsByPartition      map[string]map[string]*Tag
+	TagRoutesByPartition map[string]map[string]string
 	Assets               map[string]*Asset
 	AssetLookup          map[string]string
 	Resources            map[string]string
@@ -43,11 +47,12 @@ type VaultIndex struct {
 }
 
 // UnpublishedLookup retains enough metadata for later path/name/alias resolution
-// after unpublished notes are removed from the public lookup tables.
+// after unpublished notes and sections are removed from the public lookup tables.
 type UnpublishedLookup struct {
 	Notes       map[string]*Note
 	NoteByName  map[string][]*Note
 	AliasByName map[string][]*Note
+	Sections    map[string]*Section
 }
 
 // LinkGraph stores forward and backward note relationships.

@@ -471,7 +471,7 @@ func hasHiddenMutationDiagnostics(diagnostics []internaldiag.Diagnostic, catalog
 }
 
 func hiddenMutationDiagnostic(item internaldiag.Diagnostic, catalog *internalmodel.SourceCatalog) bool {
-	if string(item.Kind) == "unpublished_wikilink" {
+	if item.Kind == internaldiag.KindPermission || string(item.Kind) == "unpublished_wikilink" {
 		return true
 	}
 	prefixes := make([]string, 0)

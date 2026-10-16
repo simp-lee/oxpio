@@ -178,12 +178,99 @@ func TestJSONDiagnosticsRedactHiddenTargets(t *testing.T) {
 	vault := t.TempDir()
 	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
-	writeValidateFile(t, vault, "public.md", "---\ntitle: Public\npublish: true\ntype: doc\n---\n[[private/article]]\n")
+	writeValidateFile(t, vault, "public.md", "---\ntitle: Public\npublish: true\ntype: doc\n---\n[[private/article]]\n\n[private article](private/article.md)\n\n[[private/_index]]\n")
 	writeValidateFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n")
 	writeValidateFile(t, vault, "private/article.md", "---\ntitle: Private article\npublish: true\ntype: doc\n---\nSecret\n")
 	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", vault, "--format", "json"})
-	if err == nil || stderr != "" || strings.Contains(stdout, "private/article.md") || strings.Contains(stdout, "Private article") {
+	if err == nil || stderr != "" || !strings.Contains(stdout, `"errors":3`) || !strings.Contains(stdout, `"warnings":0`) || !strings.Contains(stdout, `"category":"permission"`) || strings.Contains(stdout, "private/article.md") || strings.Contains(stdout, "Private article") {
 		t.Fatalf("hidden JSON failure = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
+func TestValidateRejectsHiddenMarkdownResourceErrorsWithoutLeakingSource(t *testing.T) {
+	vault := t.TempDir()
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeValidateFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n")
+	writeValidateFile(t, vault, "private/article.md", "---\ntitle: Private article\npublish: true\ntype: doc\n---\n![missing](missing.png)\n")
+
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", vault, "--format", "json"})
+	if err == nil || stderr != "" || !strings.Contains(stdout, `"ok":false`) || !strings.Contains(stdout, `"errors":`) || strings.Contains(stdout, "private/article.md") {
+		t.Fatalf("hidden Markdown validation = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
+func TestValidateRedactsHiddenSourceDiagnosticsBeforePlanning(t *testing.T) {
+	vault := t.TempDir()
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeValidateFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n")
+	writeValidateFile(t, vault, "private/draft.md", "---\ntitle: [\npublish: false\ntype: doc\n---\nHidden\n")
+
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", vault, "--format", "json"})
+	if err == nil || stderr != "" || !strings.Contains(stdout, `"ok":false`) || strings.Contains(stdout, "private/draft.md") {
+		t.Fatalf("pre-plan hidden validation = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
+func TestThemeValidateRedactsHiddenSourceDiagnostics(t *testing.T) {
+	vault := t.TempDir()
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeValidateFile(t, vault, "draft.md", "---\ntitle: Draft\npublish: false\ntype: doc\n---\n![missing](missing.png)\n")
+
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"theme", "validate", "--vault", vault, "--format", "json"})
+	if err == nil || stderr != "" || !strings.Contains(stdout, `"ok":false`) || strings.Contains(stdout, "draft.md") {
+		t.Fatalf("theme validation = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
+func TestValidateRedactsHiddenDraftSourceDiagnostics(t *testing.T) {
+	vault := t.TempDir()
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeValidateFile(t, vault, "draft.md", "---\ntitle: Draft\npublish: false\ntype: doc\n---\n![missing](missing.png)\n")
+
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", vault, "--format", "json"})
+	if err == nil || stderr != "" || !strings.Contains(stdout, `"ok":false`) || strings.Contains(stdout, "draft.md") {
+		t.Fatalf("hidden draft validation = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
+func TestPublicSourceHiddenResourceLinkIsReportedOnce(t *testing.T) {
+	vault := t.TempDir()
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeValidateFile(t, vault, "public.md", "---\ntitle: Public\npublish: true\ntype: doc\n---\n[secret](private/secret.txt)\n")
+	writeValidateFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n")
+	writeValidateFile(t, vault, "private/secret.txt", "secret\n")
+
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", vault, "--format", "json"})
+	if err == nil || stderr != "" || !strings.Contains(stdout, `"errors":1`) || strings.Contains(stdout, "private/secret.txt") {
+		t.Fatalf("hidden resource link validation = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+}
+
+func TestPublicSourceCannotPublishHiddenResource(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeValidateFile(t, vault, "public.md", "---\ntitle: Public\npublish: true\ntype: doc\n---\n![secret](private/secret.png)\n")
+	writeValidateFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n")
+	writeValidateFile(t, vault, "private/secret.png", "secret bytes\n")
+
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"validate", "--vault", vault, "--output", output, "--format", "json"})
+	if err == nil || stderr != "" || !strings.Contains(stdout, "not available to public sources") || strings.Contains(stdout, "private/secret.png") {
+		t.Fatalf("hidden resource validation = stdout %q, stderr %q, error %v", stdout, stderr, err)
+	}
+	if _, stderr, err = executeForTest(t, defaultCommandDependencies(), []string{"publish", "--vault", vault, "--output", output}); err == nil || !strings.Contains(stderr, "not available to public sources") {
+		t.Fatalf("hidden resource publish = stderr %q, error %v", stderr, err)
+	}
+	if _, statErr := os.Stat(output); statErr == nil {
+		t.Fatal("failed publish created formal output")
+	} else if !os.IsNotExist(statErr) {
+		t.Fatalf("stat failed output: %v", statErr)
 	}
 }
 

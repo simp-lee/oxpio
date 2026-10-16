@@ -76,7 +76,7 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 	if extras.tag != nil {
 		page.Kind = "tag"
 	}
-	if plan.Timeline != nil && (currentRoute == plan.Config.Timeline.Path || strings.HasPrefix(currentRoute, "/"+strings.Trim(plan.Config.Timeline.Path, "/")+"/")) {
+	if isTimelineRoute(plan, currentRoute) {
 		page.Kind = "timeline"
 	}
 	if page.Kind == "timeline" {
@@ -138,10 +138,8 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 	if strings.HasPrefix(currentRoute, "/tags/") {
 		page.Kind = "tag"
 	}
-	if plan.Timeline != nil {
-		if currentRoute == plan.Config.Timeline.Path || strings.HasPrefix(currentRoute, "/"+strings.Trim(plan.Config.Timeline.Path, "/")+"/") {
-			page.Kind = "timeline"
-		}
+	if isTimelineRoute(plan, currentRoute) {
+		page.Kind = "timeline"
 	}
 	if pagination, ok := themedPaginationForRoute(plan, page.Entries, currentRoute); ok {
 		page.Pagination = pagination
@@ -402,6 +400,25 @@ func themedTimelinePagination(plan *model.SitePlan, entries []viewmodel.Card, ro
 	return themedPagination(plan, entries, route, current, total)
 }
 
+func isTimelineRoute(plan *model.SitePlan, route string) bool {
+	if plan == nil {
+		return false
+	}
+	if plan.Timeline != nil {
+		if _, ok := plan.Timeline.PageForRoute(route); ok {
+			return true
+		}
+	}
+	for _, partition := range plan.Partitions {
+		if partition != nil && partition.Timeline != nil {
+			if _, ok := partition.Timeline.PageForRoute(route); ok {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func strictPagePlanForRoute(plan *model.SitePlan, route string) *model.TimelinePagePlan {
 	if plan == nil {
 		return nil
@@ -415,6 +432,26 @@ func strictPagePlanForRoute(plan *model.SitePlan, route string) *model.TimelineP
 	if plan.Timeline != nil {
 		if _, ok := plan.Timeline.PageForRoute(route); ok {
 			return plan.Timeline
+		}
+	}
+	for _, partition := range plan.Partitions {
+		if partition == nil {
+			continue
+		}
+		if pages := partition.TagPages[route]; pages != nil {
+			return pages
+		}
+		for _, pages := range partition.TagPages {
+			if pages != nil {
+				if _, ok := pages.PageForRoute(route); ok {
+					return pages
+				}
+			}
+		}
+		if partition.Timeline != nil {
+			if _, ok := partition.Timeline.PageForRoute(route); ok {
+				return partition.Timeline
+			}
 		}
 	}
 	for _, pages := range plan.SectionPages {

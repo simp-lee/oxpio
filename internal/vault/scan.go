@@ -174,6 +174,16 @@ func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) 
 	return result, nil
 }
 
+// WithResourceFiles returns a copy whose resource lookup tables are rebuilt
+// from the supplied resource projection. The full scan remains available to
+// callers that retain the original ScanResult.
+func (r ScanResult) WithResourceFiles(resourceFiles []string) ScanResult {
+	r.ResourceFiles = append([]string(nil), resourceFiles...)
+	r.resourceSet = model.BuildExactLookupPaths(r.ResourceFiles)
+	r.resourceLookup, r.resourceConflicts = model.BuildCanonicalLookupPaths(r.ResourceFiles)
+	return r
+}
+
 // LookupResourcePath returns the scanned vault-relative resource path that
 // matches relPath after exact and canonical Unicode lookup.
 func (r ScanResult) LookupResourcePath(relPath string) model.PathLookupResult {
@@ -192,6 +202,58 @@ func (r ScanResult) LookupResourcePath(relPath string) model.PathLookupResult {
 	}
 
 	return model.PathLookupResult{Path: r.resourceLookup[canonicalKey]}
+}
+
+// PublishableResourceFiles projects the scanned resource inventory onto
+// sections that are effectively public. Resources remain scanned and can be
+// validated, but hidden-section resources are not resolvable by public output.
+func PublishableResourceFiles(resourceFiles []string, sections []*model.Section) []string {
+	if len(sections) == 0 {
+		return append([]string(nil), resourceFiles...)
+	}
+
+	result := make([]string, 0, len(resourceFiles))
+	for _, resource := range resourceFiles {
+		if resourceIsEffectivelyPublished(resource, sections) {
+			result = append(result, resource)
+		}
+	}
+	return result
+}
+
+// IsResourceEffectivelyPublished reports whether the resource owner section is
+// visible in the public projection. A missing section falls back to the root
+// scope, matching the scanner's vault-wide resource behavior.
+func IsResourceEffectivelyPublished(resource string, sections []*model.Section) bool {
+	if len(sections) == 0 {
+		return true
+	}
+	return resourceIsEffectivelyPublished(resource, sections)
+}
+
+func resourceIsEffectivelyPublished(resource string, sections []*model.Section) bool {
+	physical := path.Dir(resource)
+	bestDepth := -1
+	published := true
+	for _, section := range sections {
+		if section == nil {
+			continue
+		}
+		sectionPath := section.RelPath
+		matches := sectionPath == "." || physical == sectionPath || strings.HasPrefix(physical, sectionPath+"/")
+		if !matches {
+			continue
+		}
+		depth := 0
+		if sectionPath != "." {
+			depth = len(strings.Split(sectionPath, "/"))
+		}
+		if depth > bestDepth {
+			bestDepth = depth
+			published = section.EffectivePublish
+		}
+	}
+	return published
 }
 
 func normalizeOverlayMarkdown(vaultPath, outputPath string, input map[string][]byte) (map[string][]byte, error) {

@@ -57,19 +57,36 @@ type RouteOutputIndex struct {
 	FoldedPrefix map[string]string
 }
 
+// ContentPartition is the independent public collection for unversioned
+// content or one configured version entry. VersionID is empty for the
+// unversioned partition.
+type ContentPartition struct {
+	VersionID string
+	Articles  []*Note
+	Documents []*Note
+	Posts     []*Note
+	Pages     []*Note
+	Tags      map[string]*Tag
+	TagRoutes map[string]string
+	TagPages  map[string]*TimelinePagePlan
+	Timeline  *TimelinePagePlan
+}
+
 // SitePlan is the immutable normalized handoff from vault analysis to later
 // validation, asset planning, and rendering. Slices are sorted by the planner;
 // consumers must treat the pointed-to values as read-only.
 type SitePlan struct {
-	VaultPath    string
-	Config       SiteConfig
-	Root         *Section
-	Sections     []*Section
-	Articles     []*Note
-	Documents    []*Note
-	Posts        []*Note
-	Pages        []*Note
-	Versions     []*Version
+	VaultPath string
+	Config    SiteConfig
+	Root      *Section
+	Sections  []*Section
+	Articles  []*Note
+	Documents []*Note
+	Posts     []*Note
+	Pages     []*Note
+	Versions  []*Version
+	// Partitions is keyed by VersionID; the empty key is unversioned.
+	Partitions   map[string]*ContentPartition
 	Timeline     *TimelinePagePlan
 	SectionPages map[string]*TimelinePagePlan
 	TagPages     map[string]*TimelinePagePlan

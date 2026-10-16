@@ -122,10 +122,10 @@ func newThemeValidateCommand() *cobra.Command {
 				return planErr
 			}
 			if planErr != nil {
-				return diagnosticError{err: planErr, diagnostics: diagnosticsFromBuild(planned.Diagnostics)}
+				return diagnosticError{err: planErr, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned)}
 			}
 			if failure := internalanalyze.Failure(planned.Diagnostics); failure != nil {
-				return diagnosticError{err: failure, diagnostics: diagnosticsFromBuild(planned.Diagnostics)}
+				return diagnosticError{err: failure, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned)}
 			}
 			var source internaltheme.Source
 			if themeID == internaltheme.BaseID {
@@ -159,10 +159,10 @@ func newThemeValidateCommand() *cobra.Command {
 			return analyzeErr
 		}
 		if analyzeErr != nil {
-			return diagnosticError{err: analyzeErr, diagnostics: diagnosticsFromBuild(planned.Diagnostics)}
+			return diagnosticError{err: analyzeErr, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned)}
 		}
 		if failure := internalanalyze.Failure(planned.Diagnostics); failure != nil {
-			return diagnosticError{err: failure, diagnostics: diagnosticsFromBuild(planned.Diagnostics)}
+			return diagnosticError{err: failure, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned)}
 		}
 		var source internaltheme.Source
 		if selectedTheme == internaltheme.BaseID {

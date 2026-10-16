@@ -32,6 +32,7 @@ const (
 	KindVersion           Kind = "version"
 	KindMetadata          Kind = "metadata"
 	KindOrder             Kind = "order"
+	KindPermission        Kind = "permission"
 )
 
 // Location pinpoints the source of a diagnostic in a vault file.

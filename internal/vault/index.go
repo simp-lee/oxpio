@@ -23,14 +23,18 @@ import (
 
 // BuildIndexOptions controls optional pass-1 outputs and bounded concurrency.
 type BuildIndexOptions struct {
-	Concurrency            int
-	CollectRelatedSemantic bool
-	ResourceSections       []*model.Section
+	Concurrency                 int
+	CollectRelatedSemantic      bool
+	ResourceSections            []*model.Section
+	IncludeUnpublishedResources bool
 }
 
-// IndexResult owns the immutable index and any optional build-only sidecars.
+// IndexResult owns the immutable public index and any optional build-only sidecars.
+// ValidationIndex is retained only for internal full-source validation; it must
+// never be handed to public rendering or response layers.
 type IndexResult struct {
 	Index           *model.VaultIndex
+	ValidationIndex *model.VaultIndex
 	RelatedSemantic []model.RelatedSemanticDocument
 }
 
@@ -38,6 +42,7 @@ type indexBuildOptions struct {
 	concurrency            int
 	collectRelatedSemantic bool
 	resourceVersions       map[string]string
+	fullResourceScan       ScanResult
 	onNoteStart            func(*model.Note)
 	onNoteDone             func(*model.Note)
 }
@@ -48,14 +53,16 @@ type indexedNoteResult struct {
 	relatedSemantic *model.RelatedSemanticDocument
 }
 
-// BuildStrictIndex indexes only the articles selected by the canonical site
-// plan. It deliberately does not assign fallback slugs or read a second
+// BuildStrictIndex builds the public projection selected by the canonical site
+// plan and a separate full-source index used only for strict validation. It
+// deliberately does not assign fallback slugs or read a second
 // frontmatter/configuration contract.
 func BuildStrictIndex(scanResult ScanResult, sources StrictFrontmatterResult, public []*model.Note, publicSections []*model.Section, diagCollector *diag.Collector, options BuildIndexOptions) (IndexResult, error) {
 	unpublished := model.UnpublishedLookup{
 		Notes:       make(map[string]*model.Note),
 		NoteByName:  make(map[string][]*model.Note),
 		AliasByName: make(map[string][]*model.Note),
+		Sections:    make(map[string]*model.Section),
 	}
 	publicPaths := make(map[string]struct{}, len(public))
 	for _, note := range public {
@@ -97,12 +104,18 @@ func BuildStrictIndex(scanResult ScanResult, sources StrictFrontmatterResult, pu
 	if len(scopeSections) == 0 {
 		scopeSections = publicSections
 	}
-	resourceVersions := resourceVersionMap(scanResult.ResourceFiles, scopeSections)
+	resourceFiles := scanResult.ResourceFiles
+	if !options.IncludeUnpublishedResources {
+		resourceFiles = PublishableResourceFiles(resourceFiles, scopeSections)
+	}
+	publicScanResult := scanResult.WithResourceFiles(resourceFiles)
+	resourceVersions := resourceVersionMap(resourceFiles, scopeSections)
 	idx.ResourceVersions = resourceVersions
-	indexedNotes := indexPublicNotes(public, scanResult, parser, diagCollector, indexBuildOptions{
+	indexedNotes := indexNotes(public, publicScanResult, parser, diagCollector, indexBuildOptions{
 		concurrency:            options.Concurrency,
 		collectRelatedSemantic: options.CollectRelatedSemantic,
 		resourceVersions:       resourceVersions,
+		fullResourceScan:       scanResult,
 	})
 	var relatedSemantic []model.RelatedSemanticDocument
 	if options.CollectRelatedSemantic && len(indexedNotes) > 0 {
@@ -130,7 +143,7 @@ func BuildStrictIndex(scanResult ScanResult, sources StrictFrontmatterResult, pu
 		}
 	}
 	idx.SetAssets(idx.Assets)
-	idx.SetResources(scanResult.ResourceFiles)
+	idx.SetResources(resourceFiles)
 	sectionNotes := make([]*model.Note, 0, len(publicSections))
 	for _, section := range publicSections {
 		if section != nil {
@@ -139,10 +152,10 @@ func BuildStrictIndex(scanResult ScanResult, sources StrictFrontmatterResult, pu
 			if section.Route != "" {
 				idx.SectionsByRoute[section.Route] = section
 			}
-			sectionNotes = append(sectionNotes, &model.Note{RelPath: section.SourcePath, RawContent: cloneBytes(section.RawContent), BodyStartLine: section.BodyStartLine, Route: section.Route, VersionID: section.VersionID, Slug: strings.Trim(section.Route, "/"), Frontmatter: model.Frontmatter{Title: section.Title}})
+			sectionNotes = append(sectionNotes, sectionIndexNote(section))
 		}
 	}
-	for _, indexed := range indexPublicNotes(sectionNotes, scanResult, parser, diagCollector, indexBuildOptions{concurrency: options.Concurrency, resourceVersions: resourceVersions}) {
+	for _, indexed := range indexNotes(sectionNotes, publicScanResult, parser, diagCollector, indexBuildOptions{concurrency: options.Concurrency, resourceVersions: resourceVersions, fullResourceScan: scanResult}) {
 		if indexed.note == nil {
 			continue
 		}
@@ -151,25 +164,217 @@ func BuildStrictIndex(scanResult ScanResult, sources StrictFrontmatterResult, pu
 			if section == nil || section.SourcePath != indexed.note.RelPath {
 				continue
 			}
-			section.RawContent = cloneBytes(indexed.note.RawContent)
-			section.Headings = append([]model.Heading(nil), indexed.note.Headings...)
-			if indexed.note.HeadingSections != nil {
-				section.HeadingSections = make(map[string]model.SectionRange, len(indexed.note.HeadingSections))
-				for key, value := range indexed.note.HeadingSections {
-					section.HeadingSections[key] = value
-				}
-			}
-			section.OutLinks = append([]model.LinkRef(nil), indexed.note.OutLinks...)
-			section.Embeds = append([]model.EmbedRef(nil), indexed.note.Embeds...)
-			section.ImageRefs = append([]model.ImageRef(nil), indexed.note.ImageRefs...)
-			section.HasMath = indexed.note.HasMath
-			section.HasMermaid = indexed.note.HasMermaid
+			applyIndexedSection(section, indexed.note)
 			break
 		}
 	}
 	idx.SetAssets(idx.Assets)
 	idx.Tags = buildTagIndex(public)
-	return IndexResult{Index: idx, RelatedSemantic: relatedSemantic}, nil
+
+	// The public index intentionally omits hidden Markdown and resources. Parse
+	// the omitted source with the same analyzer against the full scan so hidden
+	// bodies cannot bypass resource/link validation.
+	sourceSections := sourceSectionModels(sources, scopeSections, publicSections)
+	sourceResourceVersions := resourceVersionMap(scanResult.ResourceFiles, sourceSections)
+	hiddenArticles := make([]*model.Note, 0, len(sources.AllArticles))
+	for _, note := range sources.AllArticles {
+		if note == nil {
+			continue
+		}
+		if _, ok := publicPaths[note.RelPath]; !ok {
+			hiddenArticles = append(hiddenArticles, note)
+		}
+	}
+	hiddenIndexedNotes := indexNotes(hiddenArticles, scanResult, parser, diagCollector, indexBuildOptions{
+		concurrency:      options.Concurrency,
+		resourceVersions: sourceResourceVersions,
+		fullResourceScan: scanResult,
+	})
+	publicSectionPaths := make(map[string]struct{}, len(publicSections))
+	for _, section := range publicSections {
+		if section != nil {
+			publicSectionPaths[section.SourcePath] = struct{}{}
+		}
+	}
+	for _, section := range sourceSections {
+		if section == nil {
+			continue
+		}
+		if _, ok := publicSectionPaths[section.SourcePath]; !ok {
+			idx.Unpublished.Sections[section.SourcePath] = section
+		}
+	}
+	hiddenSectionNotes := make([]*model.Note, 0, len(sourceSections))
+	for _, section := range sourceSections {
+		if section == nil {
+			continue
+		}
+		if _, ok := publicSectionPaths[section.SourcePath]; !ok {
+			hiddenSectionNotes = append(hiddenSectionNotes, sectionIndexNote(section))
+		}
+	}
+	hiddenIndexedSections := indexNotes(hiddenSectionNotes, scanResult, parser, diagCollector, indexBuildOptions{
+		concurrency:      options.Concurrency,
+		resourceVersions: sourceResourceVersions,
+		fullResourceScan: scanResult,
+	})
+	for _, indexed := range hiddenIndexedSections {
+		if indexed.note == nil {
+			continue
+		}
+		for _, section := range sourceSections {
+			if section != nil && section.SourcePath == indexed.note.RelPath {
+				applyIndexedSection(section, indexed.note)
+				break
+			}
+		}
+	}
+
+	return IndexResult{
+		Index:           idx,
+		ValidationIndex: buildValidationIndex(idx, sourceSections, hiddenIndexedNotes, hiddenIndexedSections, scanResult, sourceResourceVersions),
+		RelatedSemantic: relatedSemantic,
+	}, nil
+}
+
+func sectionIndexNote(section *model.Section) *model.Note {
+	if section == nil {
+		return nil
+	}
+	return &model.Note{
+		RelPath: section.SourcePath, SectionPath: section.RelPath,
+		RawContent: cloneBytes(section.RawContent), BodyStartLine: section.BodyStartLine,
+		Route: section.Route, VersionID: section.VersionID, Slug: strings.Trim(section.Route, "/"),
+		Frontmatter: model.Frontmatter{Title: section.Title},
+	}
+}
+
+func sourceSectionModels(sources StrictFrontmatterResult, scoped, public []*model.Section) []*model.Section {
+	bySource := make(map[string]*model.Section, len(scoped)+len(public))
+	for _, section := range scoped {
+		if section != nil {
+			bySource[section.SourcePath] = section
+		}
+	}
+	for _, section := range public {
+		if section != nil {
+			bySource[section.SourcePath] = section
+		}
+	}
+
+	result := make([]*model.Section, 0, len(sources.Sections))
+	for _, source := range sources.Sections {
+		if source == nil {
+			continue
+		}
+		if section := bySource[source.RelPath]; section != nil {
+			result = append(result, section)
+			continue
+		}
+		result = append(result, &model.Section{
+			RelPath: source.SectionPath, SourcePath: source.RelPath,
+			Title: source.Frontmatter.Title, Description: source.Frontmatter.Description,
+			Publish: source.Frontmatter.Publish != nil && *source.Frontmatter.Publish,
+			Order:   source.Frontmatter.Order, Banner: source.Frontmatter.Banner, BannerAlt: source.Frontmatter.BannerAlt,
+			RawContent: cloneBytes(source.RawContent), BodyStartLine: source.BodyStartLine,
+		})
+	}
+	return result
+}
+
+func applyIndexedSection(section *model.Section, note *model.Note) {
+	if section == nil || note == nil {
+		return
+	}
+	section.RawContent = cloneBytes(note.RawContent)
+	section.Headings = append([]model.Heading(nil), note.Headings...)
+	if note.HeadingSections != nil {
+		section.HeadingSections = make(map[string]model.SectionRange, len(note.HeadingSections))
+		for key, value := range note.HeadingSections {
+			section.HeadingSections[key] = value
+		}
+	} else {
+		section.HeadingSections = nil
+	}
+	section.OutLinks = append([]model.LinkRef(nil), note.OutLinks...)
+	section.Embeds = append([]model.EmbedRef(nil), note.Embeds...)
+	section.ImageRefs = append([]model.ImageRef(nil), note.ImageRefs...)
+	section.HasMath = note.HasMath
+	section.HasMermaid = note.HasMermaid
+}
+
+func buildValidationIndex(public *model.VaultIndex, sections []*model.Section, hidden, hiddenSections []indexedNoteResult, scan ScanResult, resourceVersions map[string]string) *model.VaultIndex {
+	if public == nil {
+		return nil
+	}
+	result := &model.VaultIndex{
+		AttachmentFolderPath: public.AttachmentFolderPath,
+		Notes:                make(map[string]*model.Note, len(public.Notes)+len(hidden)),
+		Sections:             make(map[string]*model.Section, len(sections)),
+		SectionsBySource:     make(map[string]*model.Section, len(sections)),
+		SectionsByRoute:      make(map[string]*model.Section, len(public.SectionsByRoute)),
+		NoteBySlug:           make(map[string]*model.Note, len(public.NoteBySlug)),
+		NoteByName:           make(map[string][]*model.Note, len(public.NoteByName)),
+		AliasByName:          make(map[string][]*model.Note, len(public.AliasByName)),
+		Tags:                 make(map[string]*model.Tag),
+		Assets:               make(map[string]*model.Asset),
+		Unpublished:          public.Unpublished,
+		ResourceVersions:     resourceVersions,
+	}
+	for relPath, note := range public.Notes {
+		result.Notes[relPath] = note
+	}
+	for slug, note := range public.NoteBySlug {
+		result.NoteBySlug[slug] = note
+	}
+	for name, notes := range public.NoteByName {
+		result.NoteByName[name] = append([]*model.Note(nil), notes...)
+	}
+	for alias, notes := range public.AliasByName {
+		result.AliasByName[alias] = append([]*model.Note(nil), notes...)
+	}
+	for route, section := range public.SectionsByRoute {
+		result.SectionsByRoute[route] = section
+	}
+	for _, section := range sections {
+		if section == nil {
+			continue
+		}
+		result.Sections[section.RelPath] = section
+		result.SectionsBySource[section.SourcePath] = section
+		if section.Route != "" {
+			result.SectionsByRoute[section.Route] = section
+		}
+	}
+	mergeIndexedAssets(result.Assets, public.Assets)
+	for _, indexed := range hidden {
+		if indexed.note == nil {
+			continue
+		}
+		result.Notes[indexed.note.RelPath] = indexed.note
+		if indexed.note.Slug != "" {
+			result.NoteBySlug[indexed.note.Slug] = indexed.note
+		}
+		key := noteLookupName(indexed.note.RelPath)
+		result.NoteByName[key] = append(result.NoteByName[key], indexed.note)
+		for _, alias := range indexed.note.Aliases {
+			if key := aliasLookupName(alias); key != "" {
+				result.AliasByName[key] = append(result.AliasByName[key], indexed.note)
+			}
+		}
+		mergeIndexedAssets(result.Assets, indexed.assets)
+	}
+	for _, indexed := range hiddenSections {
+		mergeIndexedAssets(result.Assets, indexed.assets)
+	}
+	allNotes := make([]*model.Note, 0, len(result.Notes))
+	for _, note := range result.Notes {
+		allNotes = append(allNotes, note)
+	}
+	result.Tags = buildTagIndex(allNotes)
+	result.SetAssets(result.Assets)
+	result.SetResources(scan.ResourceFiles)
+	return result
 }
 
 func resourceVersionMap(resourceFiles []string, sections []*model.Section) map[string]string {
@@ -191,7 +396,7 @@ func resourceVersionMap(resourceFiles []string, sections []*model.Section) map[s
 	return result
 }
 
-func indexPublicNotes(
+func indexNotes(
 	notes []*model.Note,
 	scanResult ScanResult,
 	parser goldmark.Markdown,
@@ -264,7 +469,11 @@ func buildIndexedNoteResult(
 	assets := make(map[string]*model.Asset)
 	root := parser.Parser().Parse(text.NewReader(note.RawContent))
 	lineStarts := lineStartOffsets(note.RawContent)
-	inlineTags := extractNoteMetadata(note, scanResult, assets, diagCollector, root, note.RawContent, lineStarts, options.resourceVersions)
+	fullResourceScan := options.fullResourceScan
+	if fullResourceScan.ResourceFiles == nil && len(scanResult.ResourceFiles) > 0 {
+		fullResourceScan = scanResult
+	}
+	inlineTags := extractNoteMetadata(note, scanResult, fullResourceScan, assets, diagCollector, root, note.RawContent, lineStarts, options.resourceVersions)
 	note.Tags = mergeNoteTags(note.Tags, inlineTags)
 
 	var relatedSemantic *model.RelatedSemanticDocument
@@ -333,6 +542,7 @@ func mergeIndexedAssets(dst map[string]*model.Asset, src map[string]*model.Asset
 func extractNoteMetadata(
 	note *model.Note,
 	scanResult ScanResult,
+	fullResourceScan ScanResult,
 	assets map[string]*model.Asset,
 	diagCollector *diag.Collector,
 	root gast.Node,
@@ -370,22 +580,31 @@ func extractNoteMetadata(
 				resource := resourcepath.LookupPath(note, scanResult.AttachmentFolderPath, resourceTarget, scanResult.LookupResourcePath)
 				if resource.Path != "" && resourceVersionAllowed(note, resourceVersions, resource.Path) {
 					registerAsset(assets, resource.Path)
-				} else {
+				} else if len(resource.Ambiguous) > 0 {
 					registerAmbiguousAssets(assets, resource.Ambiguous)
+				} else if isHiddenResourceTarget(note, scanResult, fullResourceScan, resourceTarget, false) {
+					recordHiddenResourcePermission(diagCollector, note, current, lineStarts, lineOffset)
 				}
 			}
 		case *gmwikilink.Node:
 			if current.Embed {
-				embedRef := extractEmbedRef(note, scanResult, current, source, lineStarts, lineOffset)
+				embedRef := extractEmbedRef(note, fullResourceScan, current, source, lineStarts, lineOffset)
 				note.Embeds = append(note.Embeds, embedRef)
 				imageLookup := lookupImageEmbedAssetPath(note, scanResult, embedRef.Target)
 				if embedRef.IsImage {
 					if imageLookup.Path != "" && resourceVersionAllowed(note, resourceVersions, imageLookup.Path) {
 						registerAsset(assets, imageLookup.Path)
+					} else if len(imageLookup.Ambiguous) > 0 {
+						registerAmbiguousAssets(assets, imageLookup.Ambiguous)
+						recordAmbiguousImageEmbed(diagCollector, note, embedRef.Target, imageLookup.Ambiguous, current, lineStarts, lineOffset)
+					} else if isHiddenResourceTarget(note, scanResult, fullResourceScan, embedRef.Target, true) {
+						recordHiddenResourcePermission(diagCollector, note, current, lineStarts, lineOffset)
 					}
 				} else if resourcepath.LooksLikeImage(embedRef.Target) && len(imageLookup.Ambiguous) > 0 {
 					registerAmbiguousAssets(assets, imageLookup.Ambiguous)
 					recordAmbiguousImageEmbed(diagCollector, note, embedRef.Target, imageLookup.Ambiguous, current, lineStarts, lineOffset)
+				} else if isHiddenResourceTarget(note, scanResult, fullResourceScan, embedRef.Target, true) {
+					recordHiddenResourcePermission(diagCollector, note, current, lineStarts, lineOffset)
 				}
 			} else {
 				note.OutLinks = append(note.OutLinks, extractLinkRef(current, source, lineStarts, lineOffset))
@@ -400,6 +619,8 @@ func extractNoteMetadata(
 			} else if len(lookup.Ambiguous) > 0 {
 				registerAmbiguousAssets(assets, lookup.Ambiguous)
 				recordAmbiguousMarkdownImage(diagCollector, note, rawDestination, lookup.Ambiguous, current, lineStarts, lineOffset)
+			} else if isHiddenResourceTarget(note, scanResult, fullResourceScan, markdown.NormalizeDestination(rawDestination), true) {
+				recordHiddenResourcePermission(diagCollector, note, current, lineStarts, lineOffset)
 			} else {
 				recordUnresolvedMarkdownImage(diagCollector, note, rawDestination, current, lineStarts, lineOffset)
 			}
@@ -414,17 +635,17 @@ func extractNoteMetadata(
 				closure := current.ClosureLine
 				raw = append(raw, closure.Value(source)...)
 			}
-			extractRawHTMLAssets(note, scanResult, assets, diagCollector, current, raw, lineStarts, lineOffset, resourceVersions, &rawHTMLContext)
+			extractRawHTMLAssets(note, scanResult, fullResourceScan, assets, diagCollector, current, raw, lineStarts, lineOffset, resourceVersions, &rawHTMLContext)
 		case *gast.RawHTML:
 			raw := current.Segments.Value(source)
-			extractRawHTMLAssets(note, scanResult, assets, diagCollector, current, raw, lineStarts, lineOffset, resourceVersions, &rawHTMLContext)
+			extractRawHTMLAssets(note, scanResult, fullResourceScan, assets, diagCollector, current, raw, lineStarts, lineOffset, resourceVersions, &rawHTMLContext)
 		case *gast.Text:
 			if rawHTMLContext.InStyle() {
 				targets, err := markdown.CSSResourceTargets(current.Segment.Value(source))
 				if err != nil {
 					recordRawHTMLAssetError(diagCollector, note, "", current, lineStarts, lineOffset, "inspect raw HTML style resources: %v", err)
 				} else {
-					extractRawHTMLAssetTargets(note, scanResult, assets, diagCollector, current, targets, lineStarts, lineOffset, resourceVersions)
+					extractRawHTMLAssetTargets(note, scanResult, fullResourceScan, assets, diagCollector, current, targets, lineStarts, lineOffset, resourceVersions)
 				}
 			}
 		case *gast.FencedCodeBlock:
@@ -507,16 +728,16 @@ func resourceVersionAllowed(note *model.Note, resourceVersions map[string]string
 	return versionID == "" || note == nil || note.VersionID == versionID
 }
 
-func extractRawHTMLAssets(note *model.Note, scanResult ScanResult, assets map[string]*model.Asset, diagCollector *diag.Collector, node gast.Node, raw []byte, lineStarts []int, lineOffset int, resourceVersions map[string]string, context *markdown.RawHTMLResourceContext) {
+func extractRawHTMLAssets(note *model.Note, scanResult ScanResult, fullResourceScan ScanResult, assets map[string]*model.Asset, diagCollector *diag.Collector, node gast.Node, raw []byte, lineStarts []int, lineOffset int, resourceVersions map[string]string, context *markdown.RawHTMLResourceContext) {
 	targets, err := context.Targets(raw)
 	if err != nil {
 		recordRawHTMLAssetError(diagCollector, note, "", node, lineStarts, lineOffset, "inspect raw HTML resources: %v", err)
 		return
 	}
-	extractRawHTMLAssetTargets(note, scanResult, assets, diagCollector, node, targets, lineStarts, lineOffset, resourceVersions)
+	extractRawHTMLAssetTargets(note, scanResult, fullResourceScan, assets, diagCollector, node, targets, lineStarts, lineOffset, resourceVersions)
 }
 
-func extractRawHTMLAssetTargets(note *model.Note, scanResult ScanResult, assets map[string]*model.Asset, diagCollector *diag.Collector, node gast.Node, targets []string, lineStarts []int, lineOffset int, resourceVersions map[string]string) {
+func extractRawHTMLAssetTargets(note *model.Note, scanResult ScanResult, fullResourceScan ScanResult, assets map[string]*model.Asset, diagCollector *diag.Collector, node gast.Node, targets []string, lineStarts []int, lineOffset int, resourceVersions map[string]string) {
 	for _, target := range targets {
 		if !resourcepath.IsLocalTarget(target) {
 			continue
@@ -535,7 +756,11 @@ func extractRawHTMLAssetTargets(note *model.Note, scanResult ScanResult, assets 
 			continue
 		}
 		if lookup.Path == "" {
-			recordRawHTMLAssetError(diagCollector, note, target, node, lineStarts, lineOffset, "raw HTML resource %q could not be resolved to a publishable vault asset", target)
+			if isHiddenResourceTarget(note, scanResult, fullResourceScan, targetPath, false) {
+				recordHiddenResourcePermission(diagCollector, note, node, lineStarts, lineOffset)
+			} else {
+				recordRawHTMLAssetError(diagCollector, note, target, node, lineStarts, lineOffset, "raw HTML resource %q could not be resolved to a publishable vault asset", target)
+			}
 			continue
 		}
 		if !resourceVersionAllowed(note, resourceVersions, lookup.Path) {
@@ -556,6 +781,36 @@ func recordRawHTMLAssetError(diagCollector *diag.Collector, note *model.Note, ta
 		Location: diag.Location{Path: note.RelPath, Line: lineNumberForNode(node, lineStarts, lineOffset)},
 		Target:   target,
 		Message:  fmt.Sprintf(format, args...),
+	})
+}
+
+func isHiddenResourceTarget(note *model.Note, publicScan, fullScan ScanResult, target string, imageEmbed bool) bool {
+	if len(fullScan.ResourceFiles) == 0 {
+		return false
+	}
+	publicLookup := resourcepath.LookupPath(note, publicScan.AttachmentFolderPath, target, publicScan.LookupResourcePath)
+	if imageEmbed {
+		publicLookup = resourcepath.LookupImageEmbedPath(note, publicScan.AttachmentFolderPath, target, publicScan.LookupResourcePath)
+	}
+	if publicLookup.Path != "" || len(publicLookup.Ambiguous) > 0 {
+		return false
+	}
+	fullLookup := resourcepath.LookupPath(note, fullScan.AttachmentFolderPath, target, fullScan.LookupResourcePath)
+	if imageEmbed {
+		fullLookup = resourcepath.LookupImageEmbedPath(note, fullScan.AttachmentFolderPath, target, fullScan.LookupResourcePath)
+	}
+	return fullLookup.Path != "" || len(fullLookup.Ambiguous) > 0
+}
+
+func recordHiddenResourcePermission(diagCollector *diag.Collector, note *model.Note, node gast.Node, lineStarts []int, lineOffset int) {
+	if diagCollector == nil || note == nil {
+		return
+	}
+	diagCollector.Add(diag.Diagnostic{
+		Severity: diag.SeverityError,
+		Kind:     diag.KindUnresolvedAsset,
+		Location: diag.Location{Path: note.RelPath, Line: lineNumberForNode(node, lineStarts, lineOffset)},
+		Message:  "referenced resource is not available to public sources",
 	})
 }
 

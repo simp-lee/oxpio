@@ -35,12 +35,13 @@ import (
 // output is considered. Diagnostics are sorted and safe to pass to a later
 // shared analyzer.
 type Result struct {
-	Plan            *model.SitePlan
-	Scan            vault.ScanResult
-	Sources         vault.StrictFrontmatterResult
-	Index           *model.VaultIndex
-	RelatedSemantic []model.RelatedSemanticDocument
-	Diagnostics     []diag.Diagnostic
+	Plan                *model.SitePlan
+	Scan                vault.ScanResult
+	PublicResourceFiles []string
+	Sources             vault.StrictFrontmatterResult
+	Index               *model.VaultIndex
+	RelatedSemantic     []model.RelatedSemanticDocument
+	Diagnostics         []diag.Diagnostic
 }
 
 // Build loads the vault-local configuration and creates a strict site plan.
@@ -165,6 +166,7 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 	plan := &model.SitePlan{
 		VaultPath: resolvedVault, Config: cfg,
 		Routes:           make(map[string]string),
+		Partitions:       make(map[string]*model.ContentPartition),
 		SectionPages:     make(map[string]*model.TimelinePagePlan),
 		TagPages:         make(map[string]*model.TimelinePagePlan),
 		PublicPageRoutes: map[string]struct{}{routeKey("/404.html"): {}},
@@ -218,12 +220,14 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 	assignSectionRoutes(plan, sections, versions, cfg.Versions, previewPath, collector)
 	assignArticles(plan, sections, versions, cfg.Versions, sources.AllArticles, previewPath, collector)
 	validateNavigation(sections, cfg.Navigation, cfg.BaseURL, cfg.FieldLines, collector)
+	resourceSections := allSections(sections)
+	publicResourceFiles := vault.PublishableResourceFiles(scan.ResourceFiles, resourceSections)
+	if previewPath != "" {
+		publicResourceFiles = append([]string(nil), scan.ResourceFiles...)
+	}
 	frontmatterAssets, assetOwners := validatePlannedAssets(resolvedVault, outputPath, plan, sections, sources, scan.ResourceFiles, collector)
 	buildVersionCorrespondence(versions, collector)
 	finalizeCollections(plan, sections, versions, collector)
-	if cfg.Timeline.Enabled {
-		plan.Timeline = model.NewTimelinePagePlan(cfg.Timeline.Path, cfg.Pagination.PageSize, len(plan.Posts))
-	}
 	for _, section := range plan.Sections {
 		if section == nil || section.Route == "" {
 			continue
@@ -239,42 +243,22 @@ func buildWithConfigAndOutputAndOverlay(vaultPath string, cfg model.SiteConfig, 
 	// The normalized plan always retains the source-AST semantic owner. Page
 	// rendering may disable the related section, but the independent Agent
 	// related query must use the same parsed source and production engine.
-	indexResult, indexErr := vault.BuildStrictIndex(scan, sources, plan.Articles, plan.Sections, collector, vault.BuildIndexOptions{Concurrency: concurrency, CollectRelatedSemantic: true, ResourceSections: allSections(sections)})
+	indexResult, indexErr := vault.BuildStrictIndex(scan, sources, plan.Articles, plan.Sections, collector, vault.BuildIndexOptions{Concurrency: concurrency, CollectRelatedSemantic: true, ResourceSections: resourceSections, IncludeUnpublishedResources: previewPath != ""})
 	if indexErr != nil {
 		record(collector, diag.KindSchema, resolvedVault, "index strict Markdown: %v", indexErr)
 	}
-	validateStrictOptionalInputs(resolvedVault, outputPath, plan, scan, indexResult.Index, collector)
-	planVaultCSS(plan, scan, indexResult.Index, collector)
+	publicScan := scan.WithResourceFiles(publicResourceFiles)
+	validateStrictOptionalInputs(resolvedVault, outputPath, plan, publicScan, scan, indexResult.Index, collector)
+	planVaultCSS(plan, publicScan, scan, indexResult.Index, collector)
 	if indexResult.Index != nil {
-		for _, tag := range sortedStrictTags(indexResult.Index.Tags) {
-			if tag != nil {
-				claimPublicPageRoute(plan, "/"+encodePath(tag.Slug)+"/", "tag:"+tag.Name, collector)
-			}
-		}
-		if plan.Timeline != nil {
-			for _, page := range plan.Timeline.Pages {
-				claimPublicPageRoute(plan, page.Route, "timeline", collector)
-			}
-		}
-		for _, tag := range sortedStrictTags(indexResult.Index.Tags) {
-			if tag == nil {
-				continue
-			}
-			route := "/" + encodePath(tag.Slug) + "/"
-			pages := model.NewRoutePagePlan(route, cfg.Pagination.PageSize, len(tag.Notes))
-			plan.TagPages[route] = pages
-			for _, page := range pages.Pages {
-				if page.Number > 1 {
-					claimPublicPageRoute(plan, page.Route, "tag:"+tag.Name, collector)
-				}
-			}
-		}
-		validateStrictMarkdown(plan, indexResult.Index, collector)
+		finalizePartitionCollections(plan, indexResult.Index, versions, collector)
+		applyPartitionTagMaps(plan, indexResult.ValidationIndex)
+		validateStrictMarkdown(plan, indexResult.Index, indexResult.ValidationIndex, sources, collector)
 	}
 
-	_ = validateAssetDestinations(resolvedVault, plan, frontmatterAssets, assetOwners, indexResult.Index, scan.ResourceFiles, collector)
+	_ = validateAssetDestinations(resolvedVault, plan, frontmatterAssets, assetOwners, indexResult.Index, publicResourceFiles, collector)
 	validateThemeAssets(plan, collector)
-	result := &Result{Plan: plan, Scan: scan, Sources: sources, Index: indexResult.Index, RelatedSemantic: indexResult.RelatedSemantic, Diagnostics: collector.Diagnostics()}
+	result := &Result{Plan: plan, Scan: scan, PublicResourceFiles: append([]string(nil), publicResourceFiles...), Sources: sources, Index: indexResult.Index, RelatedSemantic: indexResult.RelatedSemantic, Diagnostics: collector.Diagnostics()}
 	if collector.HasErrors() {
 		return result, fmt.Errorf("site plan has %d error(s)", collector.ErrorCount())
 	}
@@ -858,7 +842,7 @@ func navigationRouteTargetKey(route string, parsed *url.URL) string {
 	return key
 }
 
-func validateStrictOptionalInputs(vaultRoot, outputPath string, plan *model.SitePlan, scan vault.ScanResult, index *model.VaultIndex, collector *diag.Collector) {
+func validateStrictOptionalInputs(vaultRoot, outputPath string, plan *model.SitePlan, scan, fullScan vault.ScanResult, index *model.VaultIndex, collector *diag.Collector) {
 	if plan == nil || collector == nil {
 		return
 	}
@@ -898,7 +882,7 @@ func validateStrictOptionalInputs(vaultRoot, outputPath string, plan *model.Site
 		inputs[source] = data
 		assetSources[assetName] = source
 	}
-	planThemeAssets(plan, scan, index, inputs, assetSources, "", collector)
+	planThemeAssets(plan, scan, fullScan, index, inputs, assetSources, "", collector)
 }
 
 func validateThemeAssets(plan *model.SitePlan, collector *diag.Collector) {
@@ -926,8 +910,20 @@ func assetRecord(collector *diag.Collector, owner string, line int, field, targe
 	})
 }
 
+func assetPermissionRecord(collector *diag.Collector, owner string, line int, field string) {
+	if collector == nil {
+		return
+	}
+	collector.Add(diag.Diagnostic{
+		Severity: diag.SeverityError, Kind: diag.KindUnresolvedAsset,
+		Location: diag.Location{Path: owner, Line: line}, Field: field,
+		Message: "referenced resource is not available to public sources",
+	})
+}
+
 func validatePlannedAssets(vaultRoot, outputPath string, plan *model.SitePlan, sections map[string]*model.Section, sources vault.StrictFrontmatterResult, resourceFiles []string, collector *diag.Collector) (map[string]*model.Asset, map[string]assetDiagnostic) {
 	seen := make(map[string]struct{})
+	resourceSections := allSections(sections)
 	validated := make(map[string]*model.Asset)
 	owners := make(map[string]assetDiagnostic)
 	resourceVersions := make(map[string]string, len(resourceFiles))
@@ -965,6 +961,10 @@ func validatePlannedAssets(vaultRoot, outputPath string, plan *model.SitePlan, s
 		}
 		if !internalasset.IsPublishableAssetPath(source) || strings.Contains(source, `\`) || strings.HasPrefix(source, "/") || strings.Contains(source, "?") || strings.Contains(source, "#") || path.Clean(source) != source || strings.HasPrefix(path.Clean(source), "../") || !portableVaultAssetPath(source) {
 			assetRecord(collector, owner, line, kind, source, "%s must be a normalized vault-relative local asset", kind)
+			return
+		}
+		if isPublicPlannedAssetOwner(plan, owner) && !vault.IsResourceEffectivelyPublished(source, resourceSections) {
+			assetPermissionRecord(collector, owner, line, kind)
 			return
 		}
 		lower := strings.ToLower(source)
@@ -1026,6 +1026,26 @@ func validatePlannedAssets(vaultRoot, outputPath string, plan *model.SitePlan, s
 		}
 	}
 	return validated, owners
+}
+
+func isPublicPlannedAssetOwner(plan *model.SitePlan, owner string) bool {
+	if plan == nil {
+		return false
+	}
+	if owner == internalconfig.Filename {
+		return true
+	}
+	for _, section := range plan.Sections {
+		if section != nil && section.SourcePath == owner {
+			return true
+		}
+	}
+	for _, article := range plan.Articles {
+		if article != nil && article.RelPath == owner {
+			return true
+		}
+	}
+	return false
 }
 
 func plannedAssetReference(plan *model.SitePlan, kind, owner string) bool {
@@ -1177,41 +1197,126 @@ func (validationAssetSink) Register(value string) string {
 	return "assets/" + strings.TrimPrefix(value, "/")
 }
 
-func validateStrictMarkdown(plan *model.SitePlan, index *model.VaultIndex, collector *diag.Collector) {
-	if plan == nil || index == nil || collector == nil {
+func validateStrictMarkdown(plan *model.SitePlan, publicIndex, sourceIndex *model.VaultIndex, sources vault.StrictFrontmatterResult, collector *diag.Collector) {
+	if plan == nil || collector == nil {
 		return
 	}
+	if publicIndex != nil {
+		for _, article := range plan.Articles {
+			if article == nil {
+				continue
+			}
+			indexed := publicIndex.Notes[article.RelPath]
+			if indexed == nil {
+				continue
+			}
+			validateStrictMarkdownNote(publicIndex, indexed, plan.PublicPageRoutes, collector)
+		}
+		for _, section := range plan.Sections {
+			if section == nil {
+				continue
+			}
+			validateStrictMarkdownNote(publicIndex, sectionMarkdownNote(section), plan.PublicPageRoutes, collector)
+		}
+	}
+	if sourceIndex == nil {
+		return
+	}
+
+	publicArticles := make(map[string]struct{}, len(plan.Articles))
 	for _, article := range plan.Articles {
+		if article != nil {
+			publicArticles[article.RelPath] = struct{}{}
+		}
+	}
+	for _, article := range sources.AllArticles {
 		if article == nil {
 			continue
 		}
-		indexed := index.Notes[article.RelPath]
-		if indexed == nil {
+		if _, ok := publicArticles[article.RelPath]; ok {
 			continue
 		}
-		validateStrictMarkdownNote(index, indexed, plan.PublicPageRoutes, collector)
+		indexed := sourceIndex.Notes[article.RelPath]
+		if indexed != nil {
+			validateStrictMarkdownNote(sourceIndex, indexed, plan.PublicPageRoutes, collector)
+		}
 	}
+
+	publicSections := make(map[string]struct{}, len(plan.Sections))
 	for _, section := range plan.Sections {
-		if section == nil {
+		if section != nil {
+			publicSections[section.SourcePath] = struct{}{}
+		}
+	}
+	for _, source := range sources.Sections {
+		if source == nil {
 			continue
 		}
-		note := &model.Note{
-			RelPath: section.SourcePath, BodyStartLine: section.BodyStartLine, RawContent: section.RawContent,
-			Route: section.Route, VersionID: section.VersionID, Slug: strings.Trim(section.Route, "/"), Headings: section.Headings,
-			HeadingSections: section.HeadingSections, OutLinks: section.OutLinks, Embeds: section.Embeds,
-			ImageRefs: section.ImageRefs, HasMath: section.HasMath, HasMermaid: section.HasMermaid,
+		if _, ok := publicSections[source.RelPath]; ok {
+			continue
 		}
-		validateStrictMarkdownNote(index, note, plan.PublicPageRoutes, collector)
+		section := sourceIndex.SectionsBySource[source.RelPath]
+		if section != nil {
+			validateStrictMarkdownNote(sourceIndex, sectionMarkdownNote(section), plan.PublicPageRoutes, collector)
+		}
+	}
+}
+
+func sectionMarkdownNote(section *model.Section) *model.Note {
+	if section == nil {
+		return nil
+	}
+	return &model.Note{
+		RelPath: section.SourcePath, BodyStartLine: section.BodyStartLine, RawContent: section.RawContent,
+		Route: section.Route, VersionID: section.VersionID, Slug: strings.Trim(section.Route, "/"), Headings: section.Headings,
+		HeadingSections: section.HeadingSections, OutLinks: section.OutLinks, Embeds: section.Embeds,
+		ImageRefs: section.ImageRefs, HasMath: section.HasMath, HasMermaid: section.HasMermaid,
 	}
 }
 
 func validateStrictMarkdownNote(index *model.VaultIndex, note *model.Note, publicPageRoutes map[string]struct{}, collector *diag.Collector) {
-	md, _ := markdown.NewMarkdownWithPageRoutes(index, note, validationAssetSink{}, collector, publicPageRoutes)
-	var rendered bytes.Buffer
-	if err := md.Convert(note.RawContent, &rendered); err != nil {
-		collector.Errorf(diag.KindSchema, diag.Location{Path: note.RelPath}, "render Markdown: %v", err)
+	if index == nil || note == nil || collector == nil {
 		return
 	}
+	renderedDiagnostics := diag.NewCollector()
+	md, _ := markdown.NewMarkdownWithPageRoutes(index, note, validationAssetSink{}, renderedDiagnostics, publicPageRoutes)
+	var rendered bytes.Buffer
+	if err := md.Convert(note.RawContent, &rendered); err != nil {
+		renderedDiagnostics.Errorf(diag.KindSchema, diag.Location{Path: note.RelPath}, "render Markdown: %v", err)
+	}
+	mergeStrictMarkdownDiagnostics(collector, collector.Diagnostics(), renderedDiagnostics.Diagnostics())
+}
+
+func mergeStrictMarkdownDiagnostics(collector *diag.Collector, existing, rendered []diag.Diagnostic) {
+	if collector == nil {
+		return
+	}
+	hiddenResourceCounts := make(map[string]int)
+	for _, item := range existing {
+		if isHiddenResourceDiagnostic(item) {
+			hiddenResourceCounts[strictDiagnosticLocationKey(item)]++
+		}
+	}
+	for _, item := range rendered {
+		key := strictDiagnosticLocationKey(item)
+		if isRenderedResourceDiagnostic(item) && hiddenResourceCounts[key] > 0 {
+			hiddenResourceCounts[key]--
+			continue
+		}
+		collector.Add(item)
+	}
+}
+
+func isHiddenResourceDiagnostic(item diag.Diagnostic) bool {
+	return item.Severity == diag.SeverityError && item.Kind == diag.KindUnresolvedAsset && item.Message == "referenced resource is not available to public sources"
+}
+
+func isRenderedResourceDiagnostic(item diag.Diagnostic) bool {
+	return item.Severity == diag.SeverityError && item.Kind == diag.KindUnresolvedAsset
+}
+
+func strictDiagnosticLocationKey(item diag.Diagnostic) string {
+	return fmt.Sprintf("%s\\x00%d", item.Location.Path, item.Location.Line)
 }
 
 func sortedStrictTags(tags map[string]*model.Tag) []*model.Tag {
@@ -1336,6 +1441,122 @@ func finalizeCollections(plan *model.SitePlan, sections map[string]*model.Sectio
 		}
 		section.Breadcrumbs = breadcrumbs(section)
 	}
+}
+
+func finalizePartitionCollections(plan *model.SitePlan, index *model.VaultIndex, versions []*model.Version, collector *diag.Collector) {
+	if plan == nil || index == nil {
+		return
+	}
+	partitionIDs := []string{""}
+	for _, version := range versions {
+		if version == nil || version.Root == nil || !version.Root.EffectivePublish || version.Root.Route == "" {
+			continue
+		}
+		partitionIDs = append(partitionIDs, version.ID)
+	}
+
+	plan.Partitions = make(map[string]*model.ContentPartition, len(partitionIDs))
+	index.TagsByPartition = make(map[string]map[string]*model.Tag, len(partitionIDs))
+	index.TagRoutesByPartition = make(map[string]map[string]string, len(partitionIDs))
+	for _, versionID := range partitionIDs {
+		partition := &model.ContentPartition{
+			VersionID: versionID,
+			Tags:      make(map[string]*model.Tag),
+			TagRoutes: make(map[string]string),
+			TagPages:  make(map[string]*model.TimelinePagePlan),
+		}
+		for _, article := range plan.Articles {
+			if article == nil || article.VersionID != versionID {
+				continue
+			}
+			partition.Articles = append(partition.Articles, article)
+			switch article.Frontmatter.Type {
+			case "doc":
+				partition.Documents = append(partition.Documents, article)
+			case "post":
+				partition.Posts = append(partition.Posts, article)
+			case "page":
+				partition.Pages = append(partition.Pages, article)
+			}
+		}
+
+		for _, sourceTag := range sortedStrictTags(index.Tags) {
+			if sourceTag == nil {
+				continue
+			}
+			notes := make([]string, 0, len(sourceTag.Notes))
+			for _, relPath := range sourceTag.Notes {
+				note := index.Notes[relPath]
+				if note != nil && note.VersionID == versionID {
+					notes = append(notes, relPath)
+				}
+			}
+			if len(notes) == 0 {
+				continue
+			}
+			tag := &model.Tag{Name: sourceTag.Name, Slug: sourceTag.Slug, Notes: notes}
+			partition.Tags[tag.Name] = tag
+			route := partitionCollectionRoute(plan, versionID, tag.Slug)
+			partition.TagRoutes[tag.Name] = route
+			pages := model.NewRoutePagePlan(route, plan.Config.Pagination.PageSize, len(notes))
+			partition.TagPages[route] = pages
+			owner := "tag:" + partitionOwner(versionID) + ":" + tag.Name
+			for _, page := range pages.Pages {
+				claimPublicPageRoute(plan, page.Route, owner, collector)
+			}
+		}
+
+		if plan.Config.Timeline.Enabled {
+			route := partitionCollectionRoute(plan, versionID, plan.Config.Timeline.Path)
+			partition.Timeline = model.NewRoutePagePlan(route, plan.Config.Pagination.PageSize, len(partition.Posts))
+			owner := "timeline:" + partitionOwner(versionID)
+			for _, page := range partition.Timeline.Pages {
+				claimPublicPageRoute(plan, page.Route, owner, collector)
+			}
+		}
+		plan.Partitions[versionID] = partition
+		index.TagsByPartition[versionID] = partition.Tags
+		index.TagRoutesByPartition[versionID] = partition.TagRoutes
+	}
+
+	// These fields remain the canonical unversioned aliases for single-version
+	// callers and for the existing route lookup helpers.
+	if unversioned := plan.Partitions[""]; unversioned != nil {
+		plan.Timeline = unversioned.Timeline
+		plan.TagPages = unversioned.TagPages
+	}
+}
+
+func applyPartitionTagMaps(plan *model.SitePlan, index *model.VaultIndex) {
+	if plan == nil || index == nil {
+		return
+	}
+	index.TagsByPartition = make(map[string]map[string]*model.Tag, len(plan.Partitions))
+	index.TagRoutesByPartition = make(map[string]map[string]string, len(plan.Partitions))
+	for versionID, partition := range plan.Partitions {
+		if partition == nil {
+			continue
+		}
+		index.TagsByPartition[versionID] = partition.Tags
+		index.TagRoutesByPartition[versionID] = partition.TagRoutes
+	}
+}
+
+func partitionCollectionRoute(plan *model.SitePlan, versionID, relative string) string {
+	prefix := "/"
+	if versionID != "" {
+		if version := findVersion(plan.Versions, versionID); version != nil && version.Root != nil {
+			prefix = version.Root.Route
+		}
+	}
+	return joinRoute(prefix, relative)
+}
+
+func partitionOwner(versionID string) string {
+	if versionID == "" {
+		return "unversioned"
+	}
+	return versionID
 }
 
 func validateCollectionTies(plan *model.SitePlan, collector *diag.Collector) {

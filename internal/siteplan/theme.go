@@ -45,7 +45,7 @@ func ValidateThemeSource(vaultRoot string, source internaltheme.Source) error {
 		assetSources[name] = physical
 	}
 	collector := diag.NewCollector()
-	planThemeAssets(plan, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+	planThemeAssets(plan, vault.ScanResult{}, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
 	if collector.HasErrors() {
 		items := collector.Diagnostics()
 		if len(items) > 0 {
@@ -59,7 +59,7 @@ func ValidateThemeSource(vaultRoot string, source internaltheme.Source) error {
 // Theme inputs are admitted explicitly, not via Markdown's resource discovery.
 // Keep their exact physical identities (including NFC/NFD distinctions), and
 // allocate their emitted bytes through the shared content-addressed planner.
-func planThemeAssets(plan *model.SitePlan, scan vault.ScanResult, index *model.VaultIndex, inputs map[string][]byte, assetSources map[string]string, cssSource string, collector *diag.Collector) {
+func planThemeAssets(plan *model.SitePlan, scan, fullScan vault.ScanResult, index *model.VaultIndex, inputs map[string][]byte, assetSources map[string]string, cssSource string, collector *diag.Collector) {
 	plan.ThemeAssets = make(map[string]*model.PlannedAsset, len(inputs))
 	plan.ThemeAssetURLs = make(map[string]string, len(assetSources))
 	plan.Config.ThemeCSS = ""
@@ -91,7 +91,7 @@ func planThemeAssets(plan *model.SitePlan, scan vault.ScanResult, index *model.V
 		}
 		if strings.EqualFold(path.Ext(source), ".css") {
 			data, err = asset.RewriteCSSURLs(data, func(raw string) (string, error) {
-				return rewriteVaultCSSURL(plan, scan, index, source, raw, resolveVault)
+				return rewriteVaultCSSURL(plan, scan, fullScan, index, source, raw, resolveVault)
 			})
 			if err != nil {
 				return nil, err

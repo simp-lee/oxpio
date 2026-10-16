@@ -110,11 +110,11 @@ func TestVaultResolverResolveWikilink_UnpublishedDowngradesToPlainText(t *testin
 	}
 
 	want := []diag.Diagnostic{{
-		Severity: diag.SeverityWarning,
-		Kind:     kindUnpublishedWikilink,
+		Severity: diag.SeverityError,
+		Kind:     diag.KindPermission,
 		Location: diag.Location{Path: current.RelPath, Line: 12},
 		Target:   "Private",
-		Message:  `wikilink "Private" points to unpublished note "private/secret.md"; rendering as plain text`,
+		Message:  `wikilink target is outside the selected public scope; rendering as plain text`,
 	}}
 	if got := collector.Diagnostics(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("collector.Diagnostics() = %#v, want %#v", got, want)
@@ -148,11 +148,43 @@ func TestVaultResolverResolveWikilink_ExplicitPathDoesNotFallbackToBasename(t *t
 	}
 
 	want := []diag.Diagnostic{{
-		Severity: diag.SeverityWarning,
-		Kind:     kindUnpublishedWikilink,
+		Severity: diag.SeverityError,
+		Kind:     diag.KindPermission,
 		Location: diag.Location{Path: current.RelPath, Line: 14},
 		Target:   "private/secret",
-		Message:  `wikilink "private/secret" points to unpublished note "private/secret.md"; rendering as plain text`,
+		Message:  `wikilink target is outside the selected public scope; rendering as plain text`,
+	}}
+	if got := collector.Diagnostics(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("collector.Diagnostics() = %#v, want %#v", got, want)
+	}
+}
+
+func TestVaultResolverResolveWikilink_CrossVersionHiddenTargetIsPermissionError(t *testing.T) {
+	t.Parallel()
+
+	current := testNote("v1/current.md", "v1/current")
+	current.VersionID = "v1"
+	current.OutLinks = []model.LinkRef{{RawTarget: "private/secret", Line: 18}}
+
+	private := testNote("private/secret.md", "private/secret")
+	private.VersionID = "v2"
+	collector := diag.NewCollector()
+	resolver := NewRenderVaultResolver(buildIndex([]*model.Note{current}, []*model.Note{private}), current, current, "", collector)
+
+	got, err := resolver.ResolveWikilink(&gmwikilink.Node{Target: []byte("private/secret")})
+	if err != nil {
+		t.Fatalf("ResolveWikilink() error = %v", err)
+	}
+	if got != nil {
+		t.Fatalf("ResolveWikilink() = %q, want nil destination", string(got))
+	}
+
+	want := []diag.Diagnostic{{
+		Severity: diag.SeverityError,
+		Kind:     diag.KindPermission,
+		Location: diag.Location{Path: current.RelPath, Line: 18},
+		Target:   "private/secret",
+		Message:  `wikilink target is outside the selected public scope; rendering as plain text`,
 	}}
 	if got := collector.Diagnostics(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("collector.Diagnostics() = %#v, want %#v", got, want)
@@ -411,11 +443,11 @@ func TestVaultResolverResolveWikilink_ExplicitPathCanonicalizesUnicodeUnpublishe
 	}
 
 	want := []diag.Diagnostic{{
-		Severity: diag.SeverityWarning,
-		Kind:     kindUnpublishedWikilink,
+		Severity: diag.SeverityError,
+		Kind:     diag.KindPermission,
 		Location: diag.Location{Path: current.RelPath, Line: 29},
 		Target:   "private/Café Guide",
-		Message:  `wikilink "private/Café Guide" points to unpublished note "` + unpublished.RelPath + `"; rendering as plain text`,
+		Message:  `wikilink target is outside the selected public scope; rendering as plain text`,
 	}}
 	if got := collector.Diagnostics(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("collector.Diagnostics() = %#v, want %#v", got, want)

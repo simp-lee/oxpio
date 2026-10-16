@@ -17,10 +17,7 @@ import (
 	gmwikilink "go.abhg.dev/goldmark/wikilink"
 )
 
-const (
-	kindAmbiguousWikilink   diag.Kind = "ambiguous_wikilink"
-	kindUnpublishedWikilink diag.Kind = "unpublished_wikilink"
-)
+const kindAmbiguousWikilink diag.Kind = "ambiguous_wikilink"
 
 // VaultResolver resolves Obsidian wikilinks against the immutable pass-1 index.
 type VaultResolver struct {
@@ -36,10 +33,11 @@ type VaultResolver struct {
 
 // LookupResult describes a resolved note target without applying render-time side effects.
 type LookupResult struct {
-	Note            *model.Note
-	FragmentID      string
-	Ambiguous       []string
-	CanvasResource  bool
+	Note           *model.Note
+	FragmentID     string
+	Ambiguous      []string
+	CanvasResource bool
+	// Unpublished marks a hidden note or section target.
 	Unpublished     bool
 	MissingFragment bool
 	Section         *model.Section
@@ -82,7 +80,7 @@ func (r *VaultResolver) ResolveWikilink(node *gmwikilink.Node) ([]byte, error) {
 	target := strings.TrimSpace(string(node.Target))
 	fragment := strings.TrimSpace(string(node.Fragment))
 	lookup := LookupTarget(r.Index, r.CurrentNote, target, fragment)
-	if len(lookup.Ambiguous) > 1 {
+	if len(lookup.Ambiguous) > 1 && !lookup.Unpublished {
 		if lookup.Section != nil {
 			r.recordAmbiguousSection(rawTarget, sourceRef, lookup.Section, lookup.Ambiguous)
 		} else {
@@ -91,6 +89,9 @@ func (r *VaultResolver) ResolveWikilink(node *gmwikilink.Node) ([]byte, error) {
 	}
 
 	switch {
+	case lookup.Section != nil && lookup.Unpublished:
+		r.recordUnpublishedSection(rawTarget, sourceRef)
+		return nil, nil
 	case lookup.Section != nil && lookup.MissingFragment:
 		r.recordMissingSectionFragment(rawTarget, sourceRef, lookup.Section, fragment)
 		return nil, nil
@@ -144,13 +145,27 @@ func LookupRouteTarget(idx *model.VaultIndex, current *model.Note, target string
 		route += "/"
 	}
 	for _, note := range sortedRouteNotes(idx.Notes) {
-		if note != nil && note.Route != "" && slug.CanonicalRoute(note.Route) == route && inVersionScope(current, note) {
+		if note != nil && !isUnpublishedNoteInIndex(idx, note) && note.Route != "" && slug.CanonicalRoute(note.Route) == route && inVersionScope(current, note) {
 			return finalizeLookup(resolutionResult{note: note}, fragment)
 		}
 	}
+	for _, note := range sortedRouteNotes(idx.Unpublished.Notes) {
+		if note != nil && note.Route != "" && slug.CanonicalRoute(note.Route) == route {
+			lookup := finalizeLookup(resolutionResult{note: note}, fragment)
+			lookup.Unpublished = true
+			return lookup
+		}
+	}
 	for _, section := range sortedRouteSections(idx.SectionsByRoute) {
-		if section != nil && section.Route != "" && slug.CanonicalRoute(section.Route) == route && inSectionVersionScope(current, section) {
-			return finalizeSectionLookup(section, fragment)
+		if section != nil && section.Route != "" && slug.CanonicalRoute(section.Route) == route && (inSectionVersionScope(current, section) || isUnpublishedSectionInIndex(idx, section)) {
+			return finalizeSectionLookupForIndex(idx, section, fragment)
+		}
+	}
+	for _, section := range sortedUnpublishedSections(idx.Unpublished.Sections) {
+		if section != nil && section.Route != "" && slug.CanonicalRoute(section.Route) == route {
+			lookup := finalizeSectionLookupForIndex(idx, section, fragment)
+			lookup.Unpublished = true
+			return lookup
 		}
 	}
 	return LookupResult{}
@@ -169,13 +184,27 @@ func sortedRouteNotes(notes map[string]*model.Note) []*model.Note {
 
 func sortedRouteSections(sections map[string]*model.Section) []*model.Section {
 	result := make([]*model.Section, 0, len(sections))
+	seen := make(map[string]struct{}, len(sections))
 	for _, section := range sections {
-		if section != nil {
-			result = append(result, section)
+		if section == nil {
+			continue
 		}
+		key := section.SourcePath
+		if key == "" {
+			key = section.RelPath
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		result = append(result, section)
 	}
 	sort.Slice(result, func(i, j int) bool { return result[i].RelPath < result[j].RelPath })
 	return result
+}
+
+func sortedUnpublishedSections(sections map[string]*model.Section) []*model.Section {
+	return sortedRouteSections(sections)
 }
 
 // LookupPathTarget resolves a normalized article, section, or section-source
@@ -188,13 +217,13 @@ func LookupPathTarget(idx *model.VaultIndex, current *model.Note, target string,
 	if note := resolver.exactPublicPathMatch(target); note != nil && inVersionScope(current, note) {
 		return finalizeLookup(resolutionResult{note: note}, fragment)
 	}
-	if note := resolver.exactUnpublishedPathMatch(target); note != nil && inVersionScope(current, note) {
+	if note := resolver.exactUnpublishedPathMatch(target); note != nil {
 		result := finalizeLookup(resolutionResult{note: note}, fragment)
 		result.Unpublished = true
 		return result
 	}
-	if section := resolver.exactSectionPathMatch(target); section != nil && inSectionVersionScope(current, section) {
-		return finalizeSectionLookup(section, fragment)
+	if section := resolver.exactSectionPathMatch(target); section != nil && (inSectionVersionScope(current, section) || resolver.isUnpublishedSection(section)) {
+		return finalizeSectionLookupForIndex(idx, section, fragment)
 	}
 	return LookupResult{}
 }
@@ -221,12 +250,12 @@ func (r *VaultResolver) resolvePublic(target string) resolutionResult {
 		return resolutionResult{}
 	}
 
-	filenameCandidates := scopedNotes(r.CurrentNote, r.Index.NoteByName[noteLookupKey(target)])
+	filenameCandidates := r.publicNotes(scopedNotes(r.CurrentNote, r.Index.NoteByName[noteLookupKey(target)]))
 	if len(filenameCandidates) == 1 {
 		return resolutionResult{note: filenameCandidates[0]}
 	}
 
-	aliasCandidates := scopedNotes(r.CurrentNote, r.Index.AliasByName[aliasLookupKey(target)])
+	aliasCandidates := r.publicNotes(scopedNotes(r.CurrentNote, r.Index.AliasByName[aliasLookupKey(target)]))
 	if len(aliasCandidates) == 1 {
 		return resolutionResult{note: aliasCandidates[0]}
 	}
@@ -257,6 +286,17 @@ func (r *VaultResolver) resolveUnpublished(target string) resolutionResult {
 		return result
 	}
 
+	if result := resolveCandidateSet(r.CurrentNote, aliasCandidates); result.note != nil {
+		return result
+	}
+
+	// A hidden target outside the current version is still a permission error,
+	// not an unresolved public link.
+	filenameCandidates = uniqueNotes(r.Index.Unpublished.NoteByName[noteLookupKey(target)])
+	if result := resolveCandidateSet(r.CurrentNote, filenameCandidates); result.note != nil {
+		return result
+	}
+	aliasCandidates = uniqueNotes(r.Index.Unpublished.AliasByName[aliasLookupKey(target)])
 	return resolveCandidateSet(r.CurrentNote, aliasCandidates)
 }
 
@@ -265,9 +305,17 @@ func (r *VaultResolver) resolveSectionSource(target string) (*model.Section, []s
 		return nil, nil
 	}
 
-	candidates := make([]rankedSectionCandidate, 0, len(r.Index.Sections))
-	for _, section := range r.Index.Sections {
-		if section == nil || !inSectionVersionScope(r.CurrentNote, section) {
+	sections := make(map[string]*model.Section, len(r.Index.Sections)+len(r.Index.Unpublished.Sections))
+	for key, section := range r.Index.Sections {
+		sections[key] = section
+	}
+	for key, section := range r.Index.Unpublished.Sections {
+		sections[key] = section
+	}
+
+	candidates := make([]rankedSectionCandidate, 0, len(sections))
+	for _, section := range sections {
+		if section == nil || (!r.isUnpublishedSection(section) && !inSectionVersionScope(r.CurrentNote, section)) {
 			continue
 		}
 		candidatePath := normalizeVaultPath(section.SourcePath)
@@ -317,7 +365,11 @@ func (r *VaultResolver) exactPublicPathMatch(target string) *model.Note {
 	if r == nil || r.Index == nil {
 		return nil
 	}
-	return exactPathMatch(target, r.Index.Notes)
+	note := exactPathMatch(target, r.Index.Notes)
+	if isUnpublishedNoteInIndex(r.Index, note) {
+		return nil
+	}
+	return note
 }
 
 func (r *VaultResolver) exactUnpublishedPathMatch(target string) *model.Note {
@@ -331,7 +383,10 @@ func (r *VaultResolver) exactSectionPathMatch(target string) *model.Section {
 	if r == nil || r.Index == nil {
 		return nil
 	}
-	return exactSectionPathMatch(target, r.Index)
+	if section := exactSectionPathMatch(target, r.Index); section != nil {
+		return section
+	}
+	return exactUnpublishedSectionPathMatch(target, r.Index.Unpublished.Sections)
 }
 
 func (r *VaultResolver) lookup(target string, fragment string) LookupResult {
@@ -346,13 +401,13 @@ func (r *VaultResolver) lookup(target string, fragment string) LookupResult {
 		if note := r.exactPublicPathMatch(target); note != nil && inVersionScope(r.CurrentNote, note) {
 			return finalizeLookup(resolutionResult{note: note}, fragment)
 		}
-		if note := r.exactUnpublishedPathMatch(target); note != nil && inVersionScope(r.CurrentNote, note) {
+		if note := r.exactUnpublishedPathMatch(target); note != nil {
 			result := finalizeLookup(resolutionResult{note: note}, fragment)
 			result.Unpublished = true
 			return result
 		}
-		if section := r.exactSectionPathMatch(target); section != nil && inSectionVersionScope(r.CurrentNote, section) {
-			return finalizeSectionLookup(section, fragment)
+		if section := r.exactSectionPathMatch(target); section != nil && (inSectionVersionScope(r.CurrentNote, section) || r.isUnpublishedSection(section)) {
+			return finalizeSectionLookupForIndex(r.Index, section, fragment)
 		}
 		return canvasLookupResult(r.Index, r.CurrentNote, target)
 	}
@@ -368,7 +423,7 @@ func (r *VaultResolver) lookup(target string, fragment string) LookupResult {
 	}
 
 	if section, ambiguous := r.resolveSectionSource(target); section != nil {
-		lookup := finalizeSectionLookup(section, fragment)
+		lookup := finalizeSectionLookupForIndex(r.Index, section, fragment)
 		lookup.Ambiguous = append([]string(nil), ambiguous...)
 		return lookup
 	}
@@ -408,6 +463,16 @@ func finalizeSectionLookup(section *model.Section, fragment string) LookupResult
 	}
 
 	lookup.FragmentID = fragmentID
+	return lookup
+}
+
+func finalizeSectionLookupForIndex(idx *model.VaultIndex, section *model.Section, fragment string) LookupResult {
+	lookup := finalizeSectionLookup(section, fragment)
+	if idx != nil && section != nil {
+		if _, hidden := idx.Unpublished.Sections[section.SourcePath]; hidden {
+			lookup.Unpublished = true
+		}
+	}
 	return lookup
 }
 
@@ -481,6 +546,39 @@ func scopedNotes(current *model.Note, candidates []*model.Note) []*model.Note {
 	return result
 }
 
+func (r *VaultResolver) publicNotes(candidates []*model.Note) []*model.Note {
+	if r == nil || r.Index == nil || len(candidates) == 0 {
+		return candidates
+	}
+	result := make([]*model.Note, 0, len(candidates))
+	for _, candidate := range candidates {
+		if candidate != nil && !isUnpublishedNoteInIndex(r.Index, candidate) {
+			result = append(result, candidate)
+		}
+	}
+	return result
+}
+
+func isUnpublishedNoteInIndex(idx *model.VaultIndex, note *model.Note) bool {
+	if idx == nil || note == nil {
+		return false
+	}
+	_, ok := idx.Unpublished.Notes[note.RelPath]
+	return ok
+}
+
+func isUnpublishedSectionInIndex(idx *model.VaultIndex, section *model.Section) bool {
+	if idx == nil || section == nil {
+		return false
+	}
+	_, ok := idx.Unpublished.Sections[section.SourcePath]
+	return ok
+}
+
+func (r *VaultResolver) isUnpublishedSection(section *model.Section) bool {
+	return r != nil && isUnpublishedSectionInIndex(r.Index, section)
+}
+
 func uniqueNotes(candidates []*model.Note) []*model.Note {
 	if len(candidates) == 0 {
 		return nil
@@ -551,6 +649,41 @@ func exactPathMatch(target string, notes map[string]*model.Note) *model.Note {
 		matched = note
 	}
 
+	return matched
+}
+
+func exactUnpublishedSectionPathMatch(target string, sections map[string]*model.Section) *model.Section {
+	if len(sections) == 0 {
+		return nil
+	}
+
+	for _, candidate := range candidatePaths(target) {
+		for _, section := range sections {
+			if section != nil && (section.SourcePath == candidate || section.RelPath == candidate) {
+				return section
+			}
+		}
+	}
+
+	canonicalCandidates := canonicalCandidatePaths(target)
+	if len(canonicalCandidates) == 0 {
+		return nil
+	}
+	var matched *model.Section
+	for _, section := range sections {
+		if section == nil {
+			continue
+		}
+		_, sourceMatch := canonicalCandidates[model.CanonicalResourceLookupPath(section.SourcePath)]
+		_, directoryMatch := canonicalCandidates[model.CanonicalResourceLookupPath(section.RelPath)]
+		if !sourceMatch && !directoryMatch {
+			continue
+		}
+		if matched != nil && matched.SourcePath != section.SourcePath {
+			return nil
+		}
+		matched = section
+	}
 	return matched
 }
 
@@ -991,7 +1124,15 @@ func (r *VaultResolver) recordUnpublished(rawTarget string, ref *model.LinkRef, 
 		return
 	}
 
-	r.Diag.Add(diag.Diagnostic{Severity: diag.SeverityWarning, Kind: kindUnpublishedWikilink, Location: r.location(ref), Target: rawTarget, Message: fmt.Sprintf("wikilink %q points to unpublished note %q; rendering as plain text", rawTarget, note.RelPath)})
+	r.Diag.Add(diag.Diagnostic{Severity: diag.SeverityError, Kind: diag.KindPermission, Location: r.location(ref), Target: rawTarget, Message: "wikilink target is outside the selected public scope; rendering as plain text"})
+}
+
+func (r *VaultResolver) recordUnpublishedSection(rawTarget string, ref *model.LinkRef) {
+	if r == nil || r.Diag == nil {
+		return
+	}
+
+	r.Diag.Add(diag.Diagnostic{Severity: diag.SeverityError, Kind: diag.KindPermission, Location: r.location(ref), Target: rawTarget, Message: "wikilink target is outside the selected public scope; rendering as plain text"})
 }
 
 func (r *VaultResolver) recordMissingFragment(rawTarget string, ref *model.LinkRef, note *model.Note, fragment string) {

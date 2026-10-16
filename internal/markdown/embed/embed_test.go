@@ -298,11 +298,11 @@ func TestRenderEmbedFallsBackToPlainTextForUnpublishedBlockReferences(t *testing
 	}
 
 	want := []diag.Diagnostic{{
-		Severity: diag.SeverityWarning,
-		Kind:     diag.KindUnsupportedSyntax,
+		Severity: diag.SeverityError,
+		Kind:     diag.KindPermission,
 		Location: diag.Location{Path: current.RelPath, Line: 7},
 		Target:   "Private#^block-ref",
-		Message:  `embed "Private#^block-ref" block reference embeds are not supported; rendering as plain text`,
+		Message:  `note embed target is outside the selected public scope; rendering as plain text`,
 	}}
 	if got := collector.Diagnostics(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("collector.Diagnostics() = %#v, want %#v", got, want)
@@ -432,11 +432,11 @@ func TestRenderEmbedFallsBackToVisiblePlainTextForDegradedNoteEmbeds(t *testing.
 			},
 			wantHTML: "Private",
 			wantDiag: diag.Diagnostic{
-				Severity: diag.SeverityWarning,
-				Kind:     kindUnpublishedEmbed,
+				Severity: diag.SeverityError,
+				Kind:     diag.KindPermission,
 				Location: diag.Location{Path: "notes/current.md", Line: 6},
 				Target:   "Private",
-				Message:  `note embed "Private" points to unpublished note "private/secret.md"; rendering as plain text`,
+				Message:  `note embed target is outside the selected public scope; rendering as plain text`,
 			},
 		},
 		{

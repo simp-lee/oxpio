@@ -1025,7 +1025,7 @@ func relativeVaultPath(candidate string, args []string) (string, bool) {
 
 func redactHiddenDiagnostics(diagnostics []internalagent.Diagnostic, planned *internalsiteplan.Result) []internalagent.Diagnostic {
 	if planned == nil || planned.Plan == nil {
-		return diagnostics
+		return redactUnavailableDiagnostics(diagnostics)
 	}
 	prefixes := make([]string, 0)
 	sectionPublish := make(map[string]bool)
@@ -1062,8 +1062,17 @@ func redactHiddenDiagnostics(diagnostics []internalagent.Diagnostic, planned *in
 			prefixes = append(prefixes, filepath.ToSlash(source.SectionPath), filepath.ToSlash(source.RelPath))
 		}
 	}
+	publicArticles := make(map[string]struct{}, len(planned.Plan.Articles))
+	for _, article := range planned.Plan.Articles {
+		if article != nil {
+			publicArticles[article.RelPath] = struct{}{}
+		}
+	}
 	for _, source := range planned.Sources.Sources {
-		if source.Article != nil && isSectionHidden(source.Article.SectionPath) {
+		if source.Article == nil {
+			continue
+		}
+		if _, ok := publicArticles[source.Article.RelPath]; !ok || isSectionHidden(source.Article.SectionPath) {
 			prefixes = append(prefixes, filepath.ToSlash(source.RelPath))
 		}
 	}
@@ -1072,7 +1081,7 @@ func redactHiddenDiagnostics(diagnostics []internalagent.Diagnostic, planned *in
 
 func redactHiddenCatalogDiagnostics(diagnostics []internalagent.Diagnostic, catalog *model.SourceCatalog) []internalagent.Diagnostic {
 	if catalog == nil {
-		return diagnostics
+		return redactUnavailableDiagnostics(diagnostics)
 	}
 	prefixes := make([]string, 0)
 	for _, entry := range catalog.Entries {
@@ -1082,6 +1091,17 @@ func redactHiddenCatalogDiagnostics(diagnostics []internalagent.Diagnostic, cata
 		prefixes = append(prefixes, entry.RelPath, entry.SectionPath)
 	}
 	return redactHiddenByPrefixes(diagnostics, prefixes)
+}
+
+func redactUnavailableDiagnostics(diagnostics []internalagent.Diagnostic) []internalagent.Diagnostic {
+	result := make([]internalagent.Diagnostic, len(diagnostics))
+	copy(result, diagnostics)
+	for index := range result {
+		result[index].Path = nil
+		result[index].Target = nil
+		result[index].Message = "target is not available in the selected read scope"
+	}
+	return result
 }
 
 func redactHiddenByPrefixes(diagnostics []internalagent.Diagnostic, prefixes []string) []internalagent.Diagnostic {
@@ -1098,12 +1118,15 @@ func redactHiddenByPrefixes(diagnostics []internalagent.Diagnostic, prefixes []s
 	result := make([]internalagent.Diagnostic, len(diagnostics))
 	copy(result, diagnostics)
 	for index := range result {
-		hidden := result[index].Path != nil && isHidden(*result[index].Path)
+		hiddenPath := result[index].Path != nil && isHidden(*result[index].Path)
+		hiddenTarget := result[index].Category == string(internaldiag.KindPermission)
 		if result[index].Target != nil && isHidden(*result[index].Target) {
-			hidden = true
+			hiddenTarget = true
 		}
-		if hidden {
+		if hiddenPath {
 			result[index].Path = nil
+		}
+		if hiddenPath || hiddenTarget {
 			result[index].Target = nil
 			result[index].Message = "target is not available in the selected read scope"
 		}

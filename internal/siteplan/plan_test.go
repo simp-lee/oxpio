@@ -334,6 +334,39 @@ func TestBuildWithConfigRejectsMissingIndexAndHiddenOverride(t *testing.T) {
 	}
 }
 
+func TestBuildWithConfigValidatesHiddenMarkdownBodyBeforePublicProjection(t *testing.T) {
+	vault := t.TempDir()
+	writePlanFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writePlanFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n![missing section image](missing-section.png)\n")
+	writePlanFile(t, vault, "private/article.md", "---\ntitle: Private article\npublish: true\ntype: doc\n---\n![missing](missing.png)\n")
+
+	result, err := BuildWithConfig(vault, model.SiteConfig{Title: "Site", BaseURL: "https://example.test/"})
+	if err == nil {
+		t.Fatal("BuildWithConfig() error = nil, want hidden Markdown resource failure")
+	}
+	foundArticle, foundSection := false, false
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Kind != diag.KindUnresolvedAsset || !strings.Contains(diagnostic.Message, "could not be resolved") {
+			continue
+		}
+		switch diagnostic.Location.Path {
+		case "private/article.md":
+			foundArticle = true
+		case "private/_index.md":
+			foundSection = true
+		}
+	}
+	if !foundArticle || !foundSection {
+		t.Fatalf("diagnostics = %#v, want hidden article and section unresolved image diagnostics", result.Diagnostics)
+	}
+	if result.Index == nil || result.Index.Notes["private/article.md"] != nil {
+		t.Fatalf("public index leaked hidden article: %#v", result.Index)
+	}
+	if result.Index == nil || result.Index.Sections["private"] != nil {
+		t.Fatalf("public index leaked hidden section: %#v", result.Index)
+	}
+}
+
 func TestBuildWithConfigPlansVersionCorrespondenceBySourcePathAndFallbacks(t *testing.T) {
 	vault := t.TempDir()
 	writePlanFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
@@ -625,7 +658,7 @@ func TestPlanVaultCSSRejectsExternalAndInvalidUTF8RootStyles(t *testing.T) {
 	}
 	plan := &model.SitePlan{VaultPath: root, Config: model.SiteConfig{CustomCSS: custom}}
 	collector := diag.NewCollector()
-	planVaultCSS(plan, vault.ScanResult{}, nil, collector)
+	planVaultCSS(plan, vault.ScanResult{}, vault.ScanResult{}, nil, collector)
 	if !collector.HasErrors() {
 		t.Fatal("external custom CSS was accepted")
 	}
@@ -633,7 +666,7 @@ func TestPlanVaultCSSRejectsExternalAndInvalidUTF8RootStyles(t *testing.T) {
 		t.Fatal(err)
 	}
 	collector = diag.NewCollector()
-	planVaultCSS(plan, vault.ScanResult{}, nil, collector)
+	planVaultCSS(plan, vault.ScanResult{}, vault.ScanResult{}, nil, collector)
 	if !collector.HasErrors() {
 		t.Fatal("invalid UTF-8 custom CSS was accepted")
 	}
@@ -650,7 +683,7 @@ func TestPlanThemeSVGReferencesUseHashedAssetNames(t *testing.T) {
 		"other.svg": "assets/other.svg",
 	}
 	collector := diag.NewCollector()
-	planThemeAssets(plan, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+	planThemeAssets(plan, vault.ScanResult{}, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
 	if collector.HasErrors() {
 		t.Fatalf("theme asset diagnostics = %#v", collector.Diagnostics())
 	}

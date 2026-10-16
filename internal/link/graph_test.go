@@ -304,11 +304,11 @@ func TestBuildGraphDoesNotDuplicateResolutionDiagnostics(t *testing.T) {
 			Message:  `wikilink "Docs" matched multiple notes at the same path distance (alpha/docs.md, beta/docs.md); choosing "alpha/docs.md"`,
 		},
 		{
-			Severity: diag.SeverityWarning,
-			Kind:     diag.Kind("unpublished_wikilink"),
+			Severity: diag.SeverityError,
+			Kind:     diag.KindPermission,
 			Location: diag.Location{Path: current.RelPath, Line: 3},
 			Target:   "Private",
-			Message:  `wikilink "Private" points to unpublished note "private/secret.md"; rendering as plain text`,
+			Message:  `wikilink target is outside the selected public scope; rendering as plain text`,
 		},
 	}
 	if got := collector.Diagnostics(); !reflect.DeepEqual(got, wantDiagnostics) {

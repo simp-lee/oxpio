@@ -100,36 +100,62 @@ func RenderStrictNotFound(plan *model.SitePlan) ([]byte, error) {
 	return strictDocument(plan, "/404.html", "Not found", "", nil, "", nil, "", nil, "", StrictSidebarNodes(plan, ""), `The requested page could not be found.`, themedPageExtras{})
 }
 
-// RenderStrictTag renders a deterministic tag archive from the normalized index.
+// RenderStrictTag renders a deterministic unversioned tag archive from the
+// normalized index.
 func RenderStrictTag(plan *model.SitePlan, tag *model.Tag, notes []*model.Note) ([]byte, error) {
 	if tag == nil {
 		return nil, fmt.Errorf("tag page requires a plan and tag")
 	}
-	return RenderStrictTagPage(plan, tag, "/"+slug.EncodePath(tag.Slug)+"/", notes)
+	return RenderStrictTagPageForVersion(plan, tag, "/"+slug.EncodePath(tag.Slug)+"/", "", notes)
 }
 
-// RenderStrictTagPage renders one canonical page of a tag article list.
+// RenderStrictTagPage renders one canonical page of an unversioned tag list.
 func RenderStrictTagPage(plan *model.SitePlan, tag *model.Tag, route string, notes []*model.Note) ([]byte, error) {
+	return RenderStrictTagPageForVersion(plan, tag, route, "", notes)
+}
+
+// RenderStrictTagPageForVersion renders a tag page in the selected partition.
+func RenderStrictTagPageForVersion(plan *model.SitePlan, tag *model.Tag, route, versionID string, notes []*model.Note) ([]byte, error) {
 	if plan == nil || tag == nil {
 		return nil, fmt.Errorf("tag page requires a plan and tag")
 	}
-	return strictDocument(plan, route, "Tag: "+tag.Name, "", nil, "", nil, "", nil, "", StrictSidebarNodes(plan, ""), "", themedPageExtras{tag: tag, entries: notes})
+	return strictDocument(plan, route, "Tag: "+tag.Name, "", nil, versionID, nil, "", nil, "", StrictSidebarNodes(plan, versionID), "", themedPageExtras{tag: tag, entries: notes})
 }
 
-// RenderStrictTimeline renders the optional recent-article archive.
+// RenderStrictTimeline renders the optional unversioned recent-article archive.
 func RenderStrictTimeline(plan *model.SitePlan, route string, notes []*model.Note) ([]byte, error) {
+	return RenderStrictTimelineForVersion(plan, route, "", notes)
+}
+
+// RenderStrictTimelineForVersion renders a timeline in the selected partition.
+func RenderStrictTimelineForVersion(plan *model.SitePlan, route, versionID string, notes []*model.Note) ([]byte, error) {
 	if plan == nil || strings.Trim(route, "/") == "" {
 		return nil, fmt.Errorf("timeline page requires a plan and route")
 	}
-	return strictDocument(plan, route, "Recent articles", "", nil, "", nil, "", nil, "", StrictSidebarNodes(plan, ""), "", themedPageExtras{entries: notes})
+	return strictDocument(plan, route, "Recent articles", "", nil, versionID, nil, "", nil, "", StrictSidebarNodes(plan, versionID), "", themedPageExtras{entries: notes})
 }
 
 func timelinePageInfo(plan *model.SitePlan, route string) (page, total int) {
-	if plan == nil || plan.Timeline == nil || len(plan.Timeline.Pages) == 0 {
+	if plan == nil {
 		return 1, 1
 	}
-	total = len(plan.Timeline.Pages)
-	planned, ok := plan.Timeline.PageForRoute(route)
+	var timeline *model.TimelinePagePlan
+	for _, partition := range plan.Partitions {
+		if partition != nil && partition.Timeline != nil {
+			if _, ok := partition.Timeline.PageForRoute(route); ok {
+				timeline = partition.Timeline
+				break
+			}
+		}
+	}
+	if timeline == nil {
+		timeline = plan.Timeline
+	}
+	if timeline == nil || len(timeline.Pages) == 0 {
+		return 1, 1
+	}
+	total = len(timeline.Pages)
+	planned, ok := timeline.PageForRoute(route)
 	if !ok {
 		return 1, total
 	}

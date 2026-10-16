@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/simp-lee/oxpio/internal/asset"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	"github.com/simp-lee/oxpio/internal/diag"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
@@ -22,7 +23,7 @@ const customCSSDestination = "assets/custom.css"
 // planVaultCSS rewrites the optional vault stylesheet and every local CSS
 // resource already discovered in content. Recursive imports and URL targets are
 // admitted through the same emitted-byte asset plan.
-func planVaultCSS(plan *model.SitePlan, scan vault.ScanResult, index *model.VaultIndex, collector *diag.Collector) {
+func planVaultCSS(plan *model.SitePlan, scan, fullScan vault.ScanResult, index *model.VaultIndex, collector *diag.Collector) {
 	if plan == nil {
 		return
 	}
@@ -70,7 +71,7 @@ func planVaultCSS(plan *model.SitePlan, scan vault.ScanResult, index *model.Vaul
 				if source == rootSource && isExternalCSSURL(raw) {
 					return "", fmt.Errorf("custom CSS external URL %q is not allowed", raw)
 				}
-				return rewriteVaultCSSURL(plan, scan, index, source, raw, resolve)
+				return rewriteVaultCSSURL(plan, scan, fullScan, index, source, raw, resolve)
 			})
 			if err != nil {
 				return nil, err
@@ -89,6 +90,12 @@ func planVaultCSS(plan *model.SitePlan, scan vault.ScanResult, index *model.Vaul
 	}
 
 	if rootSource != "" {
+		if publicLookup := scan.LookupResourcePath(rootSource); publicLookup.Path == "" {
+			if hiddenLookup := fullScan.LookupResourcePath(rootSource); hiddenLookup.Path != "" || len(hiddenLookup.Ambiguous) > 0 {
+				recordCustomCSSError(collector, internalconfig.Filename, "", "custom CSS: referenced resource is not available to public sources")
+				return
+			}
+		}
 		root, err := resolve(rootSource)
 		if err != nil {
 			recordCustomCSSError(collector, rootSource, "", "custom CSS: %v", err)
@@ -136,7 +143,7 @@ func isExternalCSSURL(raw string) bool {
 	return err != nil || parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(raw, "//")
 }
 
-func rewriteVaultCSSURL(plan *model.SitePlan, scan vault.ScanResult, index *model.VaultIndex, source, raw string, resolve func(string) (*model.PlannedAsset, error)) (string, error) {
+func rewriteVaultCSSURL(plan *model.SitePlan, scan, fullScan vault.ScanResult, index *model.VaultIndex, source, raw string, resolve func(string) (*model.PlannedAsset, error)) (string, error) {
 	if !resourcepath.IsLocalTarget(raw) {
 		return raw, nil
 	}
@@ -180,6 +187,10 @@ func rewriteVaultCSSURL(plan *model.SitePlan, scan vault.ScanResult, index *mode
 		return "", fmt.Errorf("CSS asset %q matched multiple vault resources after canonical path normalization (%s)", raw, strings.Join(lookup.Ambiguous, ", "))
 	}
 	if lookup.Path == "" {
+		hiddenLookup := fullScan.LookupResourcePath(candidate)
+		if hiddenLookup.Path != "" || len(hiddenLookup.Ambiguous) > 0 {
+			return "", fmt.Errorf("CSS asset is not available to public sources")
+		}
 		return "", fmt.Errorf("CSS asset %q was not found", raw)
 	}
 	plan.CSSInputFiles[lookup.Path] = struct{}{}

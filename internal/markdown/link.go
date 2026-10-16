@@ -136,6 +136,12 @@ func (r *strictLinkRenderer) rewriteDestination(raw string, sourceTarget string,
 	}
 	if lookup.Note == nil {
 		section := lookup.Section
+		if section != nil && lookup.Unpublished {
+			if r.diagnostics != nil {
+				r.diagnostics.Add(diag.Diagnostic{Severity: diag.SeverityError, Kind: diag.KindPermission, Location: diag.Location{Path: r.sourceNote.RelPath, Line: line}, Message: "markdown link target is outside the selected public scope"})
+			}
+			return prefixRootRelativeDestination(r.outputNote, raw)
+		}
 		if section != nil && inLinkVersionScope(r.sourceNote, section) {
 			resolvedFragment := ""
 			if fragment != "" {
@@ -224,7 +230,7 @@ func (r *strictLinkRenderer) rewriteDestination(raw string, sourceTarget string,
 	}
 	if lookup.Unpublished {
 		if r.diagnostics != nil {
-			r.diagnostics.Add(diag.Diagnostic{Severity: diag.SeverityWarning, Kind: diag.KindDeadLink, Location: diag.Location{Path: r.sourceNote.RelPath, Line: line}, Target: sourceTarget, Message: fmt.Sprintf("markdown link %q targets unpublished content", sourceTarget)})
+			r.diagnostics.Add(diag.Diagnostic{Severity: diag.SeverityError, Kind: diag.KindPermission, Location: diag.Location{Path: r.sourceNote.RelPath, Line: line}, Message: "markdown link target is outside the selected public scope"})
 		}
 		return prefixRootRelativeDestination(r.outputNote, raw)
 	}

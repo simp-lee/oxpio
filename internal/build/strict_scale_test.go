@@ -128,7 +128,7 @@ Shared article body.
 	writeStrictFile(t, vault, "images/shared-inline.png", string(acceptanceBannerPNG(t)))
 
 	output := filepath.Join(t.TempDir(), "site")
-	runtimeAssets, err := render.RuntimeAssetData()
+	runtimeAssets, err := render.RuntimeAssetData(false, false)
 	if err != nil {
 		t.Fatalf("render.RuntimeAssetData(): %v", err)
 	}

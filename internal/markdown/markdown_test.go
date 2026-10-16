@@ -1758,11 +1758,11 @@ func TestNewMarkdownResolvesWikilinksAndCollectsOutlinks(t *testing.T) {
 	if len(gotDiagnostics) != 2 {
 		t.Fatalf("len(collector.Diagnostics()) = %d, want 2", len(gotDiagnostics))
 	}
-	if gotDiagnostics[0].Kind != diag.KindDeadLink || gotDiagnostics[0].Message != `wikilink "Missing" could not be resolved` {
-		t.Fatalf("collector.Diagnostics()[0] = %#v, want deadlink warning", gotDiagnostics[0])
+	if gotDiagnostics[0].Severity != diag.SeverityError || gotDiagnostics[0].Kind != diag.KindPermission || gotDiagnostics[0].Message != `wikilink target is outside the selected public scope; rendering as plain text` {
+		t.Fatalf("collector.Diagnostics()[0] = %#v, want unpublished permission error", gotDiagnostics[0])
 	}
-	if gotDiagnostics[1].Message != `wikilink "Draft" points to unpublished note "drafts/draft.md"; rendering as plain text` {
-		t.Fatalf("collector.Diagnostics()[1] = %#v, want unpublished warning", gotDiagnostics[1])
+	if gotDiagnostics[1].Kind != diag.KindDeadLink || gotDiagnostics[1].Message != `wikilink "Missing" could not be resolved` {
+		t.Fatalf("collector.Diagnostics()[1] = %#v, want deadlink warning", gotDiagnostics[1])
 	}
 }
 

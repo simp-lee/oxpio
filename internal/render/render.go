@@ -75,10 +75,17 @@ func StyleCSSData() ([]byte, error) {
 	return compact, nil
 }
 
-// RuntimeAssetData returns all fixed offline runtime files for owner-registry publication.
-func RuntimeAssetData() ([]RuntimeAsset, error) {
+// RuntimeAssetData returns the shared offline runtime files and only the
+// feature runtimes required by the final rendered pages.
+func RuntimeAssetData(hasMath, hasMermaid bool) ([]RuntimeAsset, error) {
 	result := make([]RuntimeAsset, 0, len(runtimeTemplateAssets)+2)
 	for _, asset := range runtimeTemplateAssets {
+		if strings.HasPrefix(asset.name, "runtime-assets/katex/") && !hasMath {
+			continue
+		}
+		if asset.name == "runtime-assets/mermaid/mermaid.min.js" && !hasMermaid {
+			continue
+		}
 		data, err := readEmbeddedAsset(asset.name)
 		if err != nil {
 			return nil, fmt.Errorf("read runtime asset %s: %w", asset.name, err)

@@ -12,6 +12,113 @@ import (
 	xhtml "golang.org/x/net/html"
 )
 
+func TestStrictBuildPartitionsDerivedCollectionsByVersion(t *testing.T) {
+	vault := t.TempDir()
+	writeStrictFile(t, vault, "oxpio.yaml", `title: Partitioned collections
+baseURL: https://example.test/docs/
+navigation: []
+pagination:
+  pageSize: 1
+timeline:
+  enabled: true
+  path: notes
+versions:
+  root: docs
+  default: v1
+  entries:
+    - id: v1
+      label: Version 1
+      source: v1
+    - id: v2
+      label: Version 2
+      source: v2
+`)
+	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeStrictFile(t, vault, "docs/_index.md", "---\ntitle: Docs\npublish: true\n---\nDocs\n")
+	for _, version := range []string{"v1", "v2"} {
+		writeStrictFile(t, vault, "docs/"+version+"/_index.md", "---\ntitle: "+version+"\npublish: true\n---\n"+version+"\n")
+		writeStrictFile(t, vault, "docs/"+version+"/shared.md", fmt.Sprintf("---\ntitle: Shared %s\npublish: true\ntype: post\ndate: 2026-04-0%s\ntags: [shared]\n---\nShared %s #shared\n", version, strings.TrimPrefix(version, "v"), version))
+	}
+	writeStrictFile(t, vault, "docs/v1/second.md", "---\ntitle: Shared v1 second\npublish: true\ntype: post\ndate: 2026-04-03\ntags: [shared]\n---\nSecond v1\n")
+	writeStrictFile(t, vault, "root.md", "---\ntitle: Root post\npublish: true\ntype: post\ndate: 2026-04-01\ntags: [root-only]\n---\nRoot\n")
+
+	output := filepath.Join(t.TempDir(), "site")
+	if _, err := BuildWithOptions(vault, output, Options{Strict: true}); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, want := range []string{
+		"docs/v1/tags/shared/index.html",
+		"docs/v1/tags/shared/page/2/index.html",
+		"docs/v2/tags/shared/index.html",
+		"docs/v1/notes/index.html",
+		"docs/v1/notes/page/2/index.html",
+		"docs/v2/notes/index.html",
+		"notes/index.html",
+	} {
+		if _, err := os.Stat(filepath.Join(output, filepath.FromSlash(want))); err != nil {
+			t.Fatalf("derived page %q is missing: %v", want, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(output, "tags", "shared", "index.html")); !os.IsNotExist(err) {
+		t.Fatalf("unexpected unversioned shared tag page: %v", err)
+	}
+	for _, item := range []struct {
+		path, own, other string
+	}{
+		{"docs/v1/tags/shared/index.html", "Shared v1", "Shared v2"},
+		{"docs/v2/tags/shared/index.html", "Shared v2", "Shared v1"},
+		{"docs/v1/notes/index.html", "Shared v1", "Shared v2"},
+		{"docs/v2/notes/index.html", "Shared v2", "Shared v1"},
+		{"notes/index.html", "Root post", "Shared v1"},
+	} {
+		page := string(readBuildOutputFile(t, output, item.path))
+		if !strings.Contains(page, item.own) || strings.Contains(page, item.other) {
+			t.Fatalf("partition page %q contains wrong collection: %s", item.path, page)
+		}
+		if strings.HasPrefix(item.path, "docs/") {
+			version := strings.Split(item.path, "/")[1]
+			if !strings.Contains(page, `data-oxpio-version=`+version) {
+				t.Fatalf("partition page %q has no version context", item.path)
+			}
+		}
+	}
+	for _, version := range []string{"v1", "v2"} {
+		article := string(readBuildOutputFile(t, output, "docs/"+version+"/shared/index.html"))
+		if !strings.Contains(article, `href=../tags/shared/`) {
+			t.Fatalf("version %s hashtag did not resolve to its partition tag route: %s", version, article)
+		}
+	}
+	for _, pagePath := range []string{"docs/v1/tags/shared/page/2/index.html", "docs/v1/notes/page/2/index.html"} {
+		page := string(readBuildOutputFile(t, output, pagePath))
+		if !strings.Contains(page, "Shared v1") || strings.Contains(page, "Shared v1 second") || strings.Contains(page, "Shared v2") || !strings.Contains(page, "Previous") {
+			t.Fatalf("version pagination page %q has incorrect partition or navigation: %s", pagePath, page)
+		}
+	}
+
+	sitemap := string(readBuildOutputFile(t, output, "sitemap.xml"))
+	for _, route := range []string{"https://example.test/docs/docs/v1/tags/shared/", "https://example.test/docs/docs/v1/tags/shared/page/2/", "https://example.test/docs/docs/v2/tags/shared/", "https://example.test/docs/docs/v1/notes/", "https://example.test/docs/docs/v1/notes/page/2/", "https://example.test/docs/docs/v2/notes/", "https://example.test/docs/notes/"} {
+		if !strings.Contains(sitemap, route) {
+			t.Fatalf("sitemap missing partition route %q: %s", route, sitemap)
+		}
+	}
+	if strings.Contains(sitemap, "https://example.test/docs/tags/shared/") {
+		t.Fatalf("sitemap contains a cross-partition unversioned shared tag: %s", sitemap)
+	}
+	rss := string(readBuildOutputFile(t, output, "index.xml"))
+	for _, title := range []string{"Shared v1", "Shared v2", "Root post"} {
+		if !strings.Contains(rss, "<title>"+title+"</title>") {
+			t.Fatalf("RSS missing %q: %s", title, rss)
+		}
+	}
+	manifest := loadStrictCacheManifest(output)
+	for _, owner := range []string{"tag:v1:shared", "tag:v2:shared", "timeline:unversioned", "timeline:v1", "timeline:v2"} {
+		if cacheOutputByOwner(manifest, owner).OutputHash == "" {
+			t.Fatalf("cache owner %q is missing", owner)
+		}
+	}
+}
+
 func TestStrictBuildPublishesIndependentVersionTreesAndEscapedSources(t *testing.T) {
 	vault := makeStrictVersionedMetadataVault(t, false, false)
 	writeStrictFile(t, vault, "docs/v1/Only V1.md", `---

@@ -118,7 +118,8 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		assets[source] = &plannedAsset
 	}
 	reservedAssetOutputs := strictReservedAssetOutputs(plan)
-	assetCollector, err := internalasset.NewCollectorWithOverrides(boundary.VaultPath, assets, reservedAssetOutputs, planned.Scan.ResourceFiles, overrides)
+	resourceFiles := planned.PublicResourceFiles
+	assetCollector, err := internalasset.NewCollectorWithOverrides(boundary.VaultPath, assets, reservedAssetOutputs, resourceFiles, overrides)
 	if err != nil {
 		return result, fmt.Errorf("plan strict assets: %w", err)
 	}
@@ -127,6 +128,11 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 	lookupDigests, err := strictCacheLookupDigests(planned.Index)
 	if err != nil {
 		return result, err
+	}
+	runtimeHasMath, runtimeHasMermaid := false, false
+	observeRuntimeDependencies := func(data []byte) {
+		runtimeHasMath = runtimeHasMath || bytes.Contains(data, []byte("data-oxpio-math-source"))
+		runtimeHasMermaid = runtimeHasMermaid || bytes.Contains(data, []byte(`class="mermaid"`))
 	}
 	if plan.Config.Sidebar.Enabled {
 		payload := strictSidebarPayload{Default: render.StrictSidebarNodes(plan, ""), Versions: make(map[string][]model.SidebarNode)}
@@ -161,6 +167,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 			if renderErr != nil {
 				return result, fmt.Errorf("render section %q: %w", section.RelPath, renderErr)
 			}
+			observeRuntimeDependencies(data)
 			owner := "section:" + section.SourcePath
 			if page.Number > 1 {
 				owner += ":page:" + strconv.Itoa(page.Number)
@@ -204,6 +211,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		if renderErr != nil {
 			return result, fmt.Errorf("render article %q: %w", article.RelPath, renderErr)
 		}
+		observeRuntimeDependencies(data)
 		owner := "article:" + article.RelPath
 		if dependencyErr := outputs.dependency(owner, article.RelPath, strictCacheArticlePageInputWithRecommendations(plan, article, section, previous, next, position, total, backlinks, related, relatedDetailsByPath[article.RelPath], lookupDigests.forEmbeds(len(article.Embeds) > 0), pageAssets.destinations)); dependencyErr != nil {
 			return result, dependencyErr
@@ -218,58 +226,65 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 			return result, err
 		}
 	}
-	for _, tag := range strictBuildTags(planned.Index.Tags) {
-		notes := make([]*model.Note, 0, len(tag.Notes))
-		for _, relPath := range tag.Notes {
-			if note := planned.Index.Notes[relPath]; note != nil {
-				notes = append(notes, note)
+	for _, partition := range strictBuildPartitions(plan) {
+		if partition == nil {
+			continue
+		}
+		partitionName := strictPartitionName(partition.VersionID)
+		for _, tag := range strictBuildTags(partition.Tags) {
+			notes := make([]*model.Note, 0, len(tag.Notes))
+			for _, relPath := range tag.Notes {
+				if note := planned.Index.Notes[relPath]; note != nil {
+					notes = append(notes, note)
+				}
+			}
+			pages := partition.TagPages[partition.TagRoutes[tag.Name]]
+			if pages == nil {
+				return result, fmt.Errorf("tag page plan for %q in partition %q is missing", tag.Name, partitionName)
+			}
+			for _, page := range pages.Pages {
+				pageNotes := notes[page.Start:page.End]
+				data, renderErr := render.RenderStrictTagPageForVersion(plan, tag, page.Route, partition.VersionID, pageNotes)
+				if renderErr != nil {
+					return result, fmt.Errorf("render tag %q in partition %q: %w", tag.Name, partitionName, renderErr)
+				}
+				observeRuntimeDependencies(data)
+				owner := "tag:" + partitionName + ":" + tag.Name
+				if page.Number > 1 {
+					owner += ":page:" + strconv.Itoa(page.Number)
+				}
+				dependency := strictCacheHTMLBase(plan, page.Route, "Tag: "+tag.Name, "", "", partition.VersionID, true)
+				dependency.Entries = strictCachePageEntries(pageNotes)
+				if dependencyErr := outputs.dependency(owner, tag.Name, dependency); dependencyErr != nil {
+					return result, dependencyErr
+				}
+				if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(page.Route), owner, data); writeErr != nil {
+					return result, writeErr
+				}
+				result.TagPages++
 			}
 		}
-		route := "/" + slug.EncodePath(tag.Slug) + "/"
-		pages := plan.TagPages[route]
-		if pages == nil {
-			pages = model.NewRoutePagePlan(route, plan.Config.Pagination.PageSize, len(notes))
-		}
-		for _, page := range pages.Pages {
-			pageNotes := notes[page.Start:page.End]
-			data, renderErr := render.RenderStrictTagPage(plan, tag, page.Route, pageNotes)
-			if renderErr != nil {
-				return result, fmt.Errorf("render tag %q: %w", tag.Name, renderErr)
-			}
-			owner := "tag:" + tag.Name
-			if page.Number > 1 {
-				owner += ":page:" + strconv.Itoa(page.Number)
-			}
-			dependency := strictCacheHTMLBase(plan, page.Route, "Tag: "+tag.Name, "", "", "", true)
-			dependency.Entries = strictCachePageEntries(pageNotes)
-			if dependencyErr := outputs.dependency(owner, tag.Name, dependency); dependencyErr != nil {
-				return result, dependencyErr
-			}
-			if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(page.Route), owner, data); writeErr != nil {
-				return result, writeErr
-			}
-			result.TagPages++
-		}
-	}
-	if plan.Timeline != nil {
-		for _, page := range plan.Timeline.Pages {
-			owner := "timeline"
-			if page.Number > 1 {
-				owner += ":" + strconv.Itoa(page.Number)
-			}
-			pagePosts := plan.Posts[page.Start:page.End]
-			data, renderErr := render.RenderStrictTimeline(plan, page.Route, pagePosts)
-			if renderErr != nil {
-				return result, fmt.Errorf("render timeline: %w", renderErr)
-			}
-			dependency := strictCacheHTMLBase(plan, page.Route, "Recent articles", "", "", "", true)
-			dependency.Entries = strictCachePageEntries(pagePosts)
-			dependency.TimelinePageCount = len(plan.Timeline.Pages)
-			if dependencyErr := outputs.dependency(owner, "oxpio.yaml", dependency); dependencyErr != nil {
-				return result, dependencyErr
-			}
-			if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(page.Route), owner, data); writeErr != nil {
-				return result, writeErr
+		if partition.Timeline != nil {
+			for _, page := range partition.Timeline.Pages {
+				owner := "timeline:" + partitionName
+				if page.Number > 1 {
+					owner += ":page:" + strconv.Itoa(page.Number)
+				}
+				pagePosts := partition.Posts[page.Start:page.End]
+				data, renderErr := render.RenderStrictTimelineForVersion(plan, page.Route, partition.VersionID, pagePosts)
+				if renderErr != nil {
+					return result, fmt.Errorf("render timeline in partition %q: %w", partitionName, renderErr)
+				}
+				observeRuntimeDependencies(data)
+				dependency := strictCacheHTMLBase(plan, page.Route, "Recent articles", "", "", partition.VersionID, true)
+				dependency.Entries = strictCachePageEntries(pagePosts)
+				dependency.TimelinePageCount = len(partition.Timeline.Pages)
+				if dependencyErr := outputs.dependency(owner, "oxpio.yaml", dependency); dependencyErr != nil {
+					return result, dependencyErr
+				}
+				if writeErr := writeStrictHTML(outputs, staging, render.StrictRouteOutputPath(page.Route), owner, data); writeErr != nil {
+					return result, writeErr
+				}
 			}
 		}
 	}
@@ -335,7 +350,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 	if err := outputs.write(staging, "style.css", "built-in CSS", styleData); err != nil {
 		return result, err
 	}
-	runtimeAssets, err := render.RuntimeAssetData()
+	runtimeAssets, err := render.RuntimeAssetData(runtimeHasMath, runtimeHasMermaid)
 	if err != nil {
 		return result, fmt.Errorf("read runtime assets: %w", err)
 	}
@@ -1223,6 +1238,44 @@ func strictBuildTags(tags map[string]*model.Tag) []*model.Tag {
 	return values
 }
 
+func strictPartitionName(versionID string) string {
+	if versionID == "" {
+		return "unversioned"
+	}
+	return versionID
+}
+
+func strictBuildPartitions(plan *model.SitePlan) []*model.ContentPartition {
+	if plan == nil || len(plan.Partitions) == 0 {
+		return nil
+	}
+	result := make([]*model.ContentPartition, 0, len(plan.Partitions))
+	if partition := plan.Partitions[""]; partition != nil {
+		result = append(result, partition)
+	}
+	for _, version := range plan.Versions {
+		if version == nil {
+			continue
+		}
+		if partition := plan.Partitions[version.ID]; partition != nil {
+			result = append(result, partition)
+		}
+	}
+	return result
+}
+
+func strictBuildRSSPosts(plan *model.SitePlan) []*model.Note {
+	var posts []*model.Note
+	for _, partition := range strictBuildPartitions(plan) {
+		if partition == nil {
+			continue
+		}
+		posts = append(posts, partition.Posts...)
+	}
+	sort.SliceStable(posts, func(i, j int) bool { return model.LessCollectionNote(posts[i], posts[j]) })
+	return posts
+}
+
 // strictCacheDependency describes the canonical inputs owned by a build
 // producer. It is intentionally separate from strictCacheOutput: an output
 // hash proves what was emitted, while this signature records why it was
@@ -1407,25 +1460,29 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 			_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc>%s</url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, article.Route)), strictLastMod(article.LastModified))
 		}
 	}
-	if index != nil {
-		for _, tag := range strictBuildTags(index.Tags) {
-			if tag != nil {
-				route := "/" + slug.EncodePath(tag.Slug) + "/"
-				_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, route)))
-				if pages := plan.TagPages[route]; pages != nil {
-					for _, page := range pages.Pages {
-						if page.Number > 1 {
-							_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, page.Route)))
-						}
+	for _, partition := range strictBuildPartitions(plan) {
+		if partition == nil {
+			continue
+		}
+		for _, tag := range strictBuildTags(partition.Tags) {
+			if tag == nil {
+				continue
+			}
+			route := partition.TagRoutes[tag.Name]
+			_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, route)))
+			if pages := partition.TagPages[route]; pages != nil {
+				for _, page := range pages.Pages {
+					if page.Number > 1 {
+						_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, page.Route)))
 					}
 				}
 			}
 		}
-	}
-	if plan.Timeline != nil {
-		for _, page := range plan.Timeline.Pages {
-			sitemapTimeline = append(sitemapTimeline, page.Route)
-			_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, page.Route)))
+		if partition.Timeline != nil {
+			for _, page := range partition.Timeline.Pages {
+				sitemapTimeline = append(sitemapTimeline, page.Route)
+				_, _ = fmt.Fprintf(&sitemap, `<url><loc>%s</loc></url>`, strictXMLEscape(strictBuildCanonicalURL(plan.Config.BaseURL, page.Route)))
+			}
 		}
 	}
 	sitemap.WriteString(`</urlset>`)
@@ -1446,10 +1503,13 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 		}
 	}
 	sitemapTags := make([]string, 0)
-	if index != nil {
-		for _, tag := range strictBuildTags(index.Tags) {
+	for _, partition := range strictBuildPartitions(plan) {
+		if partition == nil {
+			continue
+		}
+		for _, tag := range strictBuildTags(partition.Tags) {
 			if tag != nil {
-				sitemapTags = append(sitemapTags, tag.Slug)
+				sitemapTags = append(sitemapTags, partition.TagRoutes[tag.Name])
 			}
 		}
 	}
@@ -1483,10 +1543,11 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 		if plan.Config.Language != "" {
 			_, _ = fmt.Fprintf(&rss, `<language>%s</language>`, strictXMLEscape(plan.Config.Language))
 		}
-		if latest := strictLatestPostTime(plan.Posts); !latest.IsZero() {
+		rssPosts := strictBuildRSSPosts(plan)
+		if latest := strictLatestPostTime(rssPosts); !latest.IsZero() {
 			_, _ = fmt.Fprintf(&rss, `<lastBuildDate>%s</lastBuildDate>`, latest.UTC().Format(time.RFC1123Z))
 		}
-		for _, article := range plan.Posts {
+		for _, article := range rssPosts {
 			if article == nil {
 				continue
 			}
@@ -1527,6 +1588,7 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 		rss.WriteString(`</channel></rss>`)
 		type rssPostInput struct {
 			Route          string    `json:"route"`
+			VersionID      string    `json:"versionID,omitempty"`
 			Title          string    `json:"title"`
 			Description    string    `json:"description,omitempty"`
 			Author         string    `json:"author,omitempty"`
@@ -1539,13 +1601,13 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 			Date           time.Time `json:"date,omitempty"`
 			Updated        time.Time `json:"updated,omitempty"`
 		}
-		posts := make([]rssPostInput, 0, len(plan.Posts))
-		for _, article := range plan.Posts {
+		posts := make([]rssPostInput, 0, len(rssPosts))
+		for _, article := range rssPosts {
 			if article == nil {
 				continue
 			}
 			posts = append(posts, rssPostInput{
-				Route: article.Route, Title: article.Frontmatter.Title, Description: article.Frontmatter.Description,
+				Route: article.Route, VersionID: article.VersionID, Title: article.Frontmatter.Title, Description: article.Frontmatter.Description,
 				Author: article.Frontmatter.Author, Tags: append([]string(nil), article.Tags...), Reviewed: article.Frontmatter.Reviewed,
 				Status: article.Frontmatter.Status, Audience: article.Frontmatter.Audience, ProductVersion: article.Frontmatter.ProductVersion,
 				Series: article.Frontmatter.Series, Date: article.Frontmatter.Date, Updated: article.Frontmatter.Updated,
@@ -1793,6 +1855,15 @@ func rebindStrictPlanNotes(plan *model.SitePlan, index *model.VaultIndex) {
 		section.Documents = rebind(section.Documents)
 		section.Posts = rebind(section.Posts)
 		section.Pages = rebind(section.Pages)
+	}
+	for _, partition := range plan.Partitions {
+		if partition == nil {
+			continue
+		}
+		partition.Articles = rebind(partition.Articles)
+		partition.Documents = rebind(partition.Documents)
+		partition.Posts = rebind(partition.Posts)
+		partition.Pages = rebind(partition.Pages)
 	}
 }
 

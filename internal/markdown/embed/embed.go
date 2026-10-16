@@ -25,9 +25,8 @@ import (
 )
 
 const (
-	maxDepth                       = 10
-	kindAmbiguousEmbed   diag.Kind = "ambiguous_embed"
-	kindUnpublishedEmbed diag.Kind = "unpublished_embed"
+	maxDepth                     = 10
+	kindAmbiguousEmbed diag.Kind = "ambiguous_embed"
 )
 
 // AssetSink mirrors markdown.AssetSink without importing the parent package.
@@ -478,14 +477,19 @@ func (r *wikilinkHTMLRenderer) renderEmbed(
 
 	if strings.HasPrefix(fragment, "^") {
 		lookup := internalwikilink.LookupTarget(r.index, r.currentNote, target, "")
-		if len(lookup.Ambiguous) > 1 {
+		if len(lookup.Ambiguous) > 1 && !lookup.Unpublished {
 			r.recordAmbiguous(ref, rawTarget, lookup.Note, lookup.Ambiguous)
 		}
 		fallback := "plain text with a link"
 		targetNote := lookup.Note
 		if lookup.Unpublished {
-			fallback = "plain text"
-			targetNote = nil
+			if lookup.Note != nil {
+				r.recordUnpublished(ref, rawTarget, lookup.Note)
+			} else {
+				r.recordUnpublishedSection(ref, rawTarget)
+			}
+			r.renderBlockReferenceFallback(w, ref, rawTarget, nil)
+			return gast.WalkSkipChildren, nil
 		}
 		r.recordUnsupportedWithFallback(ref, rawTarget, "block reference embeds are not supported", fallback)
 		r.renderBlockReferenceFallback(w, ref, rawTarget, targetNote)
@@ -504,11 +508,14 @@ func (r *wikilinkHTMLRenderer) renderEmbed(
 	}
 
 	lookup := internalwikilink.LookupTarget(r.index, r.currentNote, target, fragment)
-	if len(lookup.Ambiguous) > 1 {
+	if len(lookup.Ambiguous) > 1 && !lookup.Unpublished {
 		r.recordAmbiguous(ref, rawTarget, lookup.Note, lookup.Ambiguous)
 	}
 
 	switch {
+	case lookup.Section != nil && lookup.Unpublished:
+		r.recordUnpublishedSection(ref, rawTarget)
+		return r.renderPlainTextEmbedFallback(w, ref, rawTarget)
 	case lookup.Note == nil:
 		if lookup.CanvasResource {
 			if len(lookup.Ambiguous) > 0 {
@@ -743,7 +750,15 @@ func (r *wikilinkHTMLRenderer) recordUnpublished(ref *model.EmbedRef, rawTarget 
 		return
 	}
 
-	r.addDiagnostic(kindUnpublishedEmbed, ref, rawTarget, "note embed %q points to unpublished note %q; rendering as plain text", rawTarget, note.RelPath)
+	r.addDiagnosticWithSeverity(diag.SeverityError, diag.KindPermission, ref, rawTarget, "note embed target is outside the selected public scope; rendering as plain text")
+}
+
+func (r *wikilinkHTMLRenderer) recordUnpublishedSection(ref *model.EmbedRef, rawTarget string) {
+	if r == nil || r.diag == nil {
+		return
+	}
+
+	r.addDiagnosticWithSeverity(diag.SeverityError, diag.KindPermission, ref, rawTarget, "note embed target is outside the selected public scope; rendering as plain text")
 }
 
 func (r *wikilinkHTMLRenderer) recordMissingFragment(ref *model.EmbedRef, rawTarget string, note *model.Note, fragment string) {
