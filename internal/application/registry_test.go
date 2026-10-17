@@ -21,7 +21,7 @@ func TestCommandRegistryIsCompleteAndHasNoLegacyWebAliases(t *testing.T) {
 }
 
 func TestCommandRegistryDocumentsGlobalAndBoundaryFlags(t *testing.T) {
-	for _, name := range []string{"init", "validate", "publish", "read", "find", "ls", "tags", "editor", "theme preview"} {
+	for _, name := range []string{"help", "init", "validate", "publish", "read", "find", "ls", "tags", "related", "editor", "theme preview"} {
 		spec, ok := FindCommand(name)
 		if !ok {
 			t.Fatalf("FindCommand(%q) = false", name)
@@ -40,14 +40,21 @@ func TestCommandRegistryDocumentsGlobalAndBoundaryFlags(t *testing.T) {
 	}
 }
 
-func TestThemeValidateDoesNotDeclareOutputBoundary(t *testing.T) {
-	spec, ok := FindCommand("theme validate")
-	if !ok {
-		t.Fatal("theme validate is not registered")
-	}
-	for _, flag := range spec.Flags {
-		if flag.Name == "output" {
-			t.Fatalf("theme validate flags = %#v, must not include output", spec.Flags)
+func TestMutationCommandsDeclareOutputBoundary(t *testing.T) {
+	for _, name := range []string{"write", "edit", "move", "delete", "upload", "mkdir", "rename-dir", "config write", "config edit", "theme validate", "theme init", "theme write", "theme edit"} {
+		spec, ok := FindCommand(name)
+		if !ok {
+			t.Fatalf("%s is not registered", name)
+		}
+		found := false
+		for _, flag := range spec.Flags {
+			if flag.Name == "output" && flag.Default == "<vault>/public" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s flags = %#v, want output boundary with default", name, spec.Flags)
 		}
 	}
 }

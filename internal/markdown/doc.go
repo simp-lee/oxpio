@@ -1,2 +1,2 @@
-// Package markdown is a placeholder for OXPIO Markdown processing.
+// Package markdown parses Markdown sources and extracts their semantics.
 package markdown

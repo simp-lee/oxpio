@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	"github.com/simp-lee/oxpio/internal/model"
@@ -53,8 +54,8 @@ func TestEditorPostCommitListenerFailureDoesNotEmitSecondEnvelope(t *testing.T) 
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
 	deps := testCommandDependencies()
-	setTestBuildDependency(&deps, func(string, string, internalbuild.Options) (*internalbuild.BuildResult, error) {
-		return &internalbuild.BuildResult{Catalog: &model.SourceCatalog{}}, nil
+	setTestPublishDependency(&deps, func(_ string, output string, _ internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
+		return &internalapplication.PublishResult{OutputPath: output, Published: true, Build: &internalbuild.BuildResult{Catalog: &model.SourceCatalog{}}}, nil
 	})
 	deps.newEditServer = func(string, string, int, string, *model.SourceCatalog) (previewServer, error) {
 		return &fakePreviewServer{listenErr: errors.New("listener failed")}, nil
@@ -89,8 +90,8 @@ func TestEditorPostCommitReadyFailureIsSuccessfulWarningEnvelope(t *testing.T) {
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
 	deps := testCommandDependencies()
-	setTestBuildDependency(&deps, func(string, string, internalbuild.Options) (*internalbuild.BuildResult, error) {
-		return &internalbuild.BuildResult{Catalog: &model.SourceCatalog{}}, nil
+	setTestPublishDependency(&deps, func(_ string, output string, _ internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
+		return &internalapplication.PublishResult{OutputPath: output, Published: true, Build: &internalbuild.BuildResult{Catalog: &model.SourceCatalog{}}}, nil
 	})
 	deps.newEditServer = func(string, string, int, string, *model.SourceCatalog) (previewServer, error) {
 		return &fakeReadyEditorServer{}, nil
@@ -136,8 +137,8 @@ func TestEditorPostCommitStartFailureIsSuccessfulWarningEnvelope(t *testing.T) {
 	_ = listener.Close()
 
 	deps := testCommandDependencies()
-	setTestBuildDependency(&deps, func(string, string, internalbuild.Options) (*internalbuild.BuildResult, error) {
-		return &internalbuild.BuildResult{Catalog: &model.SourceCatalog{}, OutputCleanupError: errors.New("cleanup warning")}, nil
+	setTestPublishDependency(&deps, func(_ string, output string, _ internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
+		return &internalapplication.PublishResult{OutputPath: output, Published: true, Build: &internalbuild.BuildResult{Catalog: &model.SourceCatalog{}, OutputCleanupError: errors.New("cleanup warning")}}, nil
 	})
 	stdout, _, executeErr := executeForTest(t, deps, []string{"editor", "--vault", vault, "--output", output, "--port", strconv.Itoa(port), "--format", "json"})
 	if executeErr != nil {

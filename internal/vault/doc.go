@@ -1,2 +1,2 @@
-// Package vault is a placeholder for OXPIO vault access.
+// Package vault scans OXPIO Vaults and builds their source index.
 package vault

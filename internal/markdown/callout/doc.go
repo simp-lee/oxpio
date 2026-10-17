@@ -1,2 +1,2 @@
-// Package callout is a placeholder for OXPIO Markdown callouts.
+// Package callout implements the OXPIO Markdown callout extension.
 package callout

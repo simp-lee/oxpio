@@ -16,7 +16,6 @@ import (
 
 	internalagent "github.com/simp-lee/oxpio/internal/agent"
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
-	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internaldiag "github.com/simp-lee/oxpio/internal/diag"
 	internaledit "github.com/simp-lee/oxpio/internal/edit"
@@ -51,11 +50,10 @@ func closeFileWatcher(watcher fileWatcher) error {
 }
 
 type commandDependencies struct {
-	buildSiteWithOptions func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error)
-	publishSite          func(vaultPath string, outputPath string, options internalapplication.PublishOptions) (*internalapplication.PublishResult, error)
-	newPreviewServer     func(outputPath string, port int) (previewServer, error)
-	newEditServer        func(vaultPath string, outputPath string, port int, listenHost string, catalog *model.SourceCatalog) (previewServer, error)
-	newFileWatcher       func() (fileWatcher, error)
+	publishSite      func(vaultPath string, outputPath string, options internalapplication.PublishOptions) (*internalapplication.PublishResult, error)
+	newPreviewServer func(outputPath string, port int) (previewServer, error)
+	newEditServer    func(vaultPath string, outputPath string, port int, listenHost string, catalog *model.SourceCatalog) (previewServer, error)
+	newFileWatcher   func() (fileWatcher, error)
 }
 
 // silentError marks an already-serialized JSON protocol failure. The process
@@ -285,7 +283,6 @@ func executeStreamingServiceJSON(effectiveArgs, originalArgs []string, root *cob
 
 func defaultCommandDependencies() commandDependencies {
 	return commandDependencies{
-		buildSiteWithOptions: internalbuild.BuildWithOptions,
 		publishSite: func(vaultPath string, outputPath string, options internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
 			return internalapplication.Publish(vaultPath, outputPath, options)
 		},
@@ -1260,7 +1257,7 @@ func resolveVaultOutputPaths(vaultValue string, outputValue string) (internalfsu
 	}
 	outputPath := strings.TrimSpace(outputValue)
 	if outputPath == "" {
-		outputPath = filepath.Join(vaultPath, "public")
+		outputPath = internalfsutil.DefaultOutputPath(vaultPath)
 	}
 	return internalfsutil.ResolveVaultOutput(vaultPath, outputPath)
 }

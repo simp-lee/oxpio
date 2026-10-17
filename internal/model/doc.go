@@ -1,2 +1,2 @@
-// Package model is a placeholder for OXPIO domain models.
+// Package model defines OXPIO's domain models.
 package model

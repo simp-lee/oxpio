@@ -91,6 +91,34 @@ func TestCheckRefusesActiveWorkspaceLockWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestFingerprintExcludesCustomOutputInsideVault(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "site")
+	writeWorkspaceTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeWorkspaceTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeWorkspaceTestFile(t, vault, "site/generated.md", "generated\n")
+	before, err := Fingerprint(vault, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeWorkspaceTestFile(t, vault, "site/generated.md", "changed\n")
+	afterOutput, err := Fingerprint(vault, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != afterOutput {
+		t.Fatalf("fingerprint changed for custom output: %s -> %s", before, afterOutput)
+	}
+	writeWorkspaceTestFile(t, vault, "article.md", "source\n")
+	afterSource, err := Fingerprint(vault, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if afterOutput == afterSource {
+		t.Fatal("fingerprint did not change for Vault input")
+	}
+}
+
 func TestFingerprintTracksInputsButExcludesManagedState(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(vault, "public")

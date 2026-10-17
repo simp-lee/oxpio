@@ -1,2 +1,2 @@
-// Package render is a placeholder for OXPIO rendering.
+// Package render renders OXPIO pages and sites.
 package render

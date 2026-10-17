@@ -63,7 +63,7 @@ func LoadContext(vaultPath, outputPath string, includeUnpublished bool) (Context
 		return Context{}, err
 	}
 	if outputPath == "" {
-		outputPath = filepath.Join(resolvedVault, "public")
+		outputPath = internalfsutil.DefaultOutputPath(resolvedVault)
 	}
 	boundary, err := internalfsutil.ResolveVaultOutput(resolvedVault, outputPath)
 	if err != nil {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internaledit "github.com/simp-lee/oxpio/internal/edit"
 	"github.com/simp-lee/oxpio/internal/workspace"
@@ -288,14 +289,14 @@ func TestServeCommandWatchRoutesBuildDiagnosticsAndWatchErrorsToInjectedStderr(t
 	listenStarted := make(chan struct{}, 1)
 	listenBlock := make(chan struct{})
 	server := &fakePreviewServer{listenStarted: listenStarted, listenBlock: listenBlock}
-	setTestBuildDependency(&deps, func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
+	setTestPublishDependency(&deps, func(_ string, outputPath string, options internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
 		if options.DiagnosticsWriter == nil {
-			t.Fatal("build options DiagnosticsWriter = nil, want injected stderr writer")
+			t.Fatal("publish options DiagnosticsWriter = nil, want injected stderr writer")
 		}
 		if _, err := options.DiagnosticsWriter.Write([]byte("Warnings (1):\n- build [structured_data] synthetic build warning\n")); err != nil {
 			t.Fatalf("DiagnosticsWriter.Write() error = %v", err)
 		}
-		return &internalbuild.BuildResult{}, nil
+		return &internalapplication.PublishResult{OutputPath: outputPath, Published: true, Build: &internalbuild.BuildResult{}}, nil
 	})
 	deps.newPreviewServer = func(outputPath string, port int) (previewServer, error) {
 		return server, nil
@@ -439,12 +440,12 @@ func TestServeCommandWatchDefaultsToCurrentVaultAndPublicOutput(t *testing.T) {
 	writeCLIConfig(t, vaultPath)
 	deps := testCommandDependencies()
 	var builtVault, builtOutput, servedOutput string
-	setTestBuildDependency(&deps, func(vault string, output string, _ internalbuild.Options) (*internalbuild.BuildResult, error) {
+	setTestPublishDependency(&deps, func(vault string, output string, _ internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
 		builtVault, builtOutput = vault, output
 		if err := os.MkdirAll(output, 0o755); err != nil {
 			return nil, err
 		}
-		return &internalbuild.BuildResult{}, nil
+		return &internalapplication.PublishResult{OutputPath: output, Published: true, Build: &internalbuild.BuildResult{}}, nil
 	})
 	server := &fakePreviewServer{}
 	deps.newPreviewServer = func(output string, _ int) (previewServer, error) {
@@ -474,19 +475,19 @@ func TestServeCommandWatchBuildsBeforeServing(t *testing.T) {
 	watcher := newFakeFileWatcher()
 	var gotVaultPath string
 	var gotOutputPath string
-	setTestBuildDependency(&deps, func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
+	setTestPublishDependency(&deps, func(vaultPath string, outputPath string, options internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
 		gotVaultPath = vaultPath
 		gotOutputPath = outputPath
 		if options.DiagnosticsWriter == nil {
-			t.Fatal("build options DiagnosticsWriter = nil, want injected stderr writer")
+			t.Fatal("publish options DiagnosticsWriter = nil, want injected stderr writer")
 		}
 		if options.TrackOutputTransactionPath == nil {
-			t.Fatal("build options TrackOutputTransactionPath = nil in watch mode")
+			t.Fatal("publish options TrackOutputTransactionPath = nil in watch mode")
 		}
 		if err := os.MkdirAll(outputPath, 0o755); err != nil {
 			return nil, err
 		}
-		return &internalbuild.BuildResult{}, nil
+		return &internalapplication.PublishResult{OutputPath: outputPath, Published: true, Build: &internalbuild.BuildResult{}}, nil
 	})
 	deps.newPreviewServer = func(outputPath string, port int) (previewServer, error) {
 		return server, nil
@@ -533,12 +534,12 @@ func TestServeCommandWatchReloadsFixedVaultConfig(t *testing.T) {
 	listenBlock := make(chan struct{})
 	server := &fakePreviewServer{listenStarted: listenStarted, listenBlock: listenBlock}
 	buildSignal := make(chan struct{}, 4)
-	setTestBuildDependency(&deps, func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
+	setTestPublishDependency(&deps, func(_ string, outputPath string, _ internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
 		if err := os.MkdirAll(outputPath, 0o755); err != nil {
 			return nil, err
 		}
 		buildSignal <- struct{}{}
-		return &internalbuild.BuildResult{}, nil
+		return &internalapplication.PublishResult{OutputPath: outputPath, Published: true, Build: &internalbuild.BuildResult{}}, nil
 	})
 	deps.newPreviewServer = func(outputPath string, port int) (previewServer, error) {
 		return server, nil

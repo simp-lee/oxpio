@@ -19,6 +19,19 @@ func TestNormalizeAttachmentUploadNameLowercasesImageExtensions(t *testing.T) {
 	}
 }
 
+func TestMutateDirectoryAllowsPublicOutsideCustomOutput(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "site")
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	if _, err := MutateDirectory(vault, output, DirectoryMutationRequest{Operation: MutationMkdir, Path: "public", ExpectedHash: AbsentHash}); err != nil {
+		t.Fatalf("mkdir public outside custom output: %v", err)
+	}
+	if info, err := os.Stat(filepath.Join(vault, "public")); err != nil || !info.IsDir() {
+		t.Fatalf("created public directory = %v, info=%v", err, info)
+	}
+}
+
 func TestMutateUploadRejectsNestedReservedManagementPaths(t *testing.T) {
 	vault := t.TempDir()
 	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nattachments:\n  directory: attachments\n")

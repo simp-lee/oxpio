@@ -1,2 +1,2 @@
-// Package highlight is a placeholder for OXPIO syntax highlighting.
+// Package highlight implements the OXPIO Markdown code-highlighting extension.
 package highlight

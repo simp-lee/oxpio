@@ -26,13 +26,14 @@ import (
 )
 
 func newThemeInitCommand() *cobra.Command {
-	var vaultPath string
+	var vaultPath, outputPath string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "init [NAME]", Short: "Create an editable local theme baseline", Args: cobra.MaximumNArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		vault, err := resolveVaultPath(vaultPath)
+		boundary, err := resolveVaultOutputPaths(vaultPath, outputPath)
 		if err != nil {
 			return err
 		}
+		vault := boundary.VaultPath
 		name := "minimal"
 		if len(args) == 1 {
 			name = args[0]
@@ -66,17 +67,17 @@ func newThemeInitCommand() *cobra.Command {
 			return err
 		}
 		changes := themeInitChanges(name, files)
-		impactedPages, artifacts := themeMutationSummary(vault, filepath.ToSlash(filepath.Join(".oxpio", "themes", name, "theme.yaml")))
+		impactedPages, artifacts := themeMutationSummary(boundary.VaultPath, boundary.OutputPath, filepath.ToSlash(filepath.Join(".oxpio", "themes", name, "theme.yaml")))
 		artifacts["themeFiles"] = len(files)
 		if dryRun {
 			if err := workspace.CheckDryRun(vault); err != nil {
 				return err
 			}
-			start, fingerprintErr := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+			start, fingerprintErr := workspace.Fingerprint(boundary.VaultPath, boundary.OutputPath)
 			if fingerprintErr != nil {
 				return fingerprintErr
 			}
-			end, fingerprintErr := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+			end, fingerprintErr := workspace.Fingerprint(boundary.VaultPath, boundary.OutputPath)
 			if fingerprintErr != nil {
 				return fingerprintErr
 			}
@@ -96,6 +97,7 @@ func newThemeInitCommand() *cobra.Command {
 		return writeThemeData(cmd, map[string]any{"theme": name, "created": true, "files": sortedThemeNames(files), "changes": changes, "impactedPages": impactedPages, "artifacts": artifacts, "published": nil, "next": "theme validate then explicitly publish"})
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
 	return cmd
 }
@@ -103,48 +105,15 @@ func newThemeInitCommand() *cobra.Command {
 func newThemeValidateCommand() *cobra.Command {
 	var vaultPath, outputPath, themeID string
 	cmd := &cobra.Command{Use: "validate", Short: "Validate a selected theme", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
-		_, err := resolveVaultPath(vaultPath)
-		if err != nil {
-			return err
-		}
-		if themeID != "" {
-			boundary, boundaryErr := resolveVaultOutputPaths(vaultPath, outputPath)
-			if boundaryErr != nil {
-				return boundaryErr
-			}
-			cfg, cfgErr := internalconfig.LoadForThemePreview(boundary.VaultPath, boundary.OutputPath)
-			if cfgErr != nil {
-				return cfgErr
-			}
-			cfg.Theme, cfg.ThemeDir = themeID, ""
-			planned, planErr := internalsiteplan.BuildForOutputWithConfig(boundary.VaultPath, boundary.OutputPath, cfg)
-			if planned == nil {
-				return planErr
-			}
-			if planErr != nil {
-				return diagnosticError{err: planErr, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned)}
-			}
-			if failure := internalanalyze.Failure(planned.Diagnostics); failure != nil {
-				return diagnosticError{err: failure, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned)}
-			}
-			var source internaltheme.Source
-			if themeID == internaltheme.BaseID {
-				source, err = internaltheme.BaseSource()
-			} else {
-				source, err = internaltheme.LoadLocal(boundary.VaultPath, themeID)
-			}
-			if err != nil {
-				return err
-			}
-			warnings, errors := themeDiagnosticCounts(planned.Diagnostics)
-			manifest := internaltheme.ManifestOf(source)
-			return writeThemeData(cmd, map[string]any{"theme": themeID, "apiVersion": internaltheme.APIVersion, "manifest": manifest, "errors": errors, "warnings": warnings, "valid": true})
-		}
 		boundary, err := resolveVaultOutputPaths(vaultPath, outputPath)
 		if err != nil {
 			return err
 		}
-		cfg, err := internalconfig.LoadForBuildWithOutput(boundary.VaultPath, boundary.OutputPath)
+		loadConfig := internalconfig.LoadForBuildWithOutput
+		if themeID != "" {
+			loadConfig = internalconfig.LoadForThemePreview
+		}
+		cfg, err := loadConfig(boundary.VaultPath, boundary.OutputPath)
 		if err != nil {
 			return err
 		}
@@ -152,8 +121,7 @@ func newThemeValidateCommand() *cobra.Command {
 		if themeID != "" {
 			selectedTheme = themeID
 		}
-		cfg.Theme = selectedTheme
-		cfg.ThemeDir = ""
+		cfg.Theme, cfg.ThemeDir = selectedTheme, ""
 		planned, analyzeErr := internalsiteplan.BuildForOutputWithConfig(boundary.VaultPath, boundary.OutputPath, cfg)
 		if planned == nil {
 			return analyzeErr
@@ -177,6 +145,7 @@ func newThemeValidateCommand() *cobra.Command {
 		return writeThemeData(cmd, map[string]any{"theme": selectedTheme, "apiVersion": internaltheme.APIVersion, "manifest": internaltheme.ManifestOf(source), "errors": errors, "warnings": warnings, "valid": true})
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&themeID, "theme", "", "Temporarily select a theme")
 	return cmd
 }
@@ -318,13 +287,14 @@ func newThemeReadCommand() *cobra.Command {
 }
 
 func newThemeWriteCommand() *cobra.Command {
-	var vaultPath, contentFile, expected string
+	var vaultPath, outputPath, contentFile, expected string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "write PATH", Short: "Replace a local theme file", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		vault, err := resolveVaultPath(vaultPath)
+		boundary, err := resolveVaultOutputPaths(vaultPath, outputPath)
 		if err != nil {
 			return err
 		}
+		vault := boundary.VaultPath
 		candidate, _, err := resolveThemeFile(vault, args[0])
 		if err != nil {
 			return err
@@ -343,9 +313,10 @@ func newThemeWriteCommand() *cobra.Command {
 		if err := internaltheme.ValidateFileData(args[0], data); err != nil {
 			return err
 		}
-		return mutateThemeFile(cmd, vault, candidate, args[0], data, expected, dryRun)
+		return mutateThemeFile(cmd, vault, boundary.OutputPath, candidate, args[0], data, expected, dryRun)
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&contentFile, "content-file", "", "Complete file content or -")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash or absent")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
@@ -355,13 +326,14 @@ func newThemeWriteCommand() *cobra.Command {
 }
 
 func newThemeEditCommand() *cobra.Command {
-	var vaultPath, editsFile, expected string
+	var vaultPath, outputPath, editsFile, expected string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "edit PATH", Short: "Apply exact edits to a local theme text file", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		vault, err := resolveVaultPath(vaultPath)
+		boundary, err := resolveVaultOutputPaths(vaultPath, outputPath)
 		if err != nil {
 			return err
 		}
+		vault := boundary.VaultPath
 		candidate, _, err := resolveThemeFile(vault, args[0])
 		if err != nil {
 			return err
@@ -386,7 +358,7 @@ func newThemeEditCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return mutateThemeFile(cmd, vault, candidate, args[0], next, expected, true)
+			return mutateThemeFile(cmd, vault, boundary.OutputPath, candidate, args[0], next, expected, true)
 		}
 		return workspace.WithLock(vault, func() error {
 			old, err := readThemeFile(vault, candidate)
@@ -397,10 +369,11 @@ func newThemeEditCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return mutateThemeFileLocked(cmd, vault, candidate, args[0], next, expected, false)
+			return mutateThemeFileLocked(cmd, vault, boundary.OutputPath, candidate, args[0], next, expected, false)
 		})
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&editsFile, "edits-file", "", "JSON patch file or -")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
@@ -766,23 +739,23 @@ func readThemeCLIContent(cmd *cobra.Command, vault, name string) ([]byte, error)
 	return readThemeFile(vault, filepath.Join(vault, filepath.FromSlash(name)))
 }
 
-func mutateThemeFile(cmd *cobra.Command, vault, candidate, rel string, data []byte, expected string, dryRun bool) error {
+func mutateThemeFile(cmd *cobra.Command, vault, output, candidate, rel string, data []byte, expected string, dryRun bool) error {
 	if !dryRun {
 		return workspace.WithLock(vault, func() error {
-			return mutateThemeFileLocked(cmd, vault, candidate, rel, data, expected, false)
+			return mutateThemeFileLocked(cmd, vault, output, candidate, rel, data, expected, false)
 		})
 	}
 	if err := workspace.CheckDryRun(vault); err != nil {
 		return err
 	}
-	return mutateThemeFileLocked(cmd, vault, candidate, rel, data, expected, true)
+	return mutateThemeFileLocked(cmd, vault, output, candidate, rel, data, expected, true)
 }
 
-func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, data []byte, expected string, dryRun bool) error {
+func mutateThemeFileLocked(cmd *cobra.Command, vault, output, candidate, rel string, data []byte, expected string, dryRun bool) error {
 	var startFingerprint string
 	if dryRun {
 		var err error
-		startFingerprint, err = workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+		startFingerprint, err = workspace.Fingerprint(vault, output)
 		if err != nil {
 			return err
 		}
@@ -831,14 +804,14 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 		change["beforeHash"] = before
 	}
 	if dryRun {
-		end, fingerprintErr := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+		end, fingerprintErr := workspace.Fingerprint(vault, output)
 		if fingerprintErr != nil {
 			return fingerprintErr
 		}
 		if end != startFingerprint {
 			return errors.New("CONCURRENT_INPUT: Vault inputs changed during dry-run")
 		}
-		impactedPages, artifacts := themeMutationSummary(vault, rel)
+		impactedPages, artifacts := themeMutationSummary(vault, output, rel)
 		return writeThemeData(cmd, map[string]any{"dryRun": true, "changes": []any{change}, "impactedPages": impactedPages, "artifacts": artifacts, "published": nil, "next": "theme validate then explicitly publish"})
 	}
 	if err := os.MkdirAll(filepath.Dir(candidate), 0o755); err != nil {
@@ -846,23 +819,25 @@ func mutateThemeFileLocked(cmd *cobra.Command, vault, candidate, rel string, dat
 	}
 	var writeErr error
 	if exists {
-		writeErr = workspace.AtomicWriteFile(candidate, data, 0o644)
+		writeErr = workspace.AtomicWriteFileCAS(candidate, before, data, 0o644)
 	} else {
 		writeErr = workspace.AtomicCreateFile(candidate, data, 0o644)
 	}
 	if writeErr != nil {
+		if exists && errors.Is(writeErr, workspace.ErrCASConflict) {
+			return fmt.Errorf("CONFLICT: theme file changed during mutation")
+		}
 		if !exists && errors.Is(writeErr, os.ErrExist) {
 			return fmt.Errorf("CONFLICT: theme file appeared during mutation")
 		}
 		return writeErr
 	}
-	impactedPages, artifacts := themeMutationSummary(vault, rel)
+	impactedPages, artifacts := themeMutationSummary(vault, output, rel)
 	return writeThemeData(cmd, map[string]any{"changes": []any{change}, "path": rel, "impactedPages": impactedPages, "artifacts": artifacts, "published": nil, "next": "theme validate then explicitly publish"})
 }
 
-func themeMutationSummary(vault, rel string) (int, map[string]int) {
+func themeMutationSummary(vault, output, rel string) (int, map[string]int) {
 	artifacts := map[string]int{"themeFiles": 1}
-	output := filepath.Join(vault, "public")
 	cfg, err := internalconfig.LoadForThemePreview(vault, output)
 	if err != nil || !themePathSelected(cfg.Theme, rel) {
 		return 0, artifacts

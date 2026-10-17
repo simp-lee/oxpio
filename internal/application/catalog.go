@@ -182,7 +182,7 @@ func OpenSnapshot(vaultPath, outputPath string) (Snapshot, error) {
 		vaultPath = "."
 	}
 	if strings.TrimSpace(outputPath) == "" {
-		outputPath = filepath.Join(vaultPath, "public")
+		outputPath = internalfsutil.DefaultOutputPath(vaultPath)
 	}
 	boundary, err := internalfsutil.ResolveVaultOutput(vaultPath, outputPath)
 	if err != nil {

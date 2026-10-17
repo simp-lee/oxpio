@@ -19,9 +19,13 @@ import (
 )
 
 func newWriteCommand() *cobra.Command {
-	var vault, contentFile, expected string
+	var vault, output, contentFile, expected string
 	var includeUnpublished, publish, unpublish, dryRun bool
 	cmd := &cobra.Command{Use: "write PATH", Short: "Replace one Markdown source with CAS", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
 		if publish && unpublish {
 			return errors.New("--publish and --unpublish are mutually exclusive")
 		}
@@ -38,10 +42,11 @@ func newWriteCommand() *cobra.Command {
 			value := false
 			state = &value
 		}
-		result, err := internalapplication.MutateSource(vault, "", internalapplication.SourceMutationRequest{Operation: internalapplication.MutationWrite, Path: args[0], ExpectedHash: expected, Content: data, DryRun: dryRun, IncludeUnpublished: includeUnpublished, Publish: state})
+		result, err := internalapplication.MutateSource(boundary.VaultPath, boundary.OutputPath, internalapplication.SourceMutationRequest{Operation: internalapplication.MutationWrite, Path: args[0], ExpectedHash: expected, Content: data, DryRun: dryRun, IncludeUnpublished: includeUnpublished, Publish: state})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&contentFile, "content-file", "", "Complete UTF-8 source or -")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash or absent")
 	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Allow unpublished source")
@@ -54,9 +59,13 @@ func newWriteCommand() *cobra.Command {
 }
 
 func newEditCommand() *cobra.Command {
-	var vault, editsFile, expected string
+	var vault, output, editsFile, expected string
 	var includeUnpublished, publish, unpublish, dryRun bool
 	cmd := &cobra.Command{Use: "edit PATH", Short: "Apply exact source text patches with CAS", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
 		if publish && unpublish {
 			return errors.New("--publish and --unpublish are mutually exclusive")
 		}
@@ -73,10 +82,11 @@ func newEditCommand() *cobra.Command {
 			value := false
 			state = &value
 		}
-		result, err := internalapplication.MutateSource(vault, "", internalapplication.SourceMutationRequest{Operation: internalapplication.MutationEdit, Path: args[0], ExpectedHash: expected, Content: data, DryRun: dryRun, IncludeUnpublished: includeUnpublished, Publish: state})
+		result, err := internalapplication.MutateSource(boundary.VaultPath, boundary.OutputPath, internalapplication.SourceMutationRequest{Operation: internalapplication.MutationEdit, Path: args[0], ExpectedHash: expected, Content: data, DryRun: dryRun, IncludeUnpublished: includeUnpublished, Publish: state})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&editsFile, "edits-file", "", "Strict PatchRequest JSON or -")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash")
 	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Allow unpublished source")
@@ -89,13 +99,18 @@ func newEditCommand() *cobra.Command {
 }
 
 func newMoveCommand() *cobra.Command {
-	var vault, expected, destinationExpected string
+	var vault, output, expected, destinationExpected string
 	var includeUnpublished, dryRun bool
 	cmd := &cobra.Command{Use: "move SOURCE DEST", Short: "Move one Markdown article with CAS", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := internalapplication.MutateSource(vault, "", internalapplication.SourceMutationRequest{Operation: internalapplication.MutationMove, Path: args[0], Destination: args[1], ExpectedHash: expected, DestinationExpectedHash: destinationExpected, DryRun: dryRun, IncludeUnpublished: includeUnpublished})
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
+		result, err := internalapplication.MutateSource(boundary.VaultPath, boundary.OutputPath, internalapplication.SourceMutationRequest{Operation: internalapplication.MutationMove, Path: args[0], Destination: args[1], ExpectedHash: expected, DestinationExpectedHash: destinationExpected, DryRun: dryRun, IncludeUnpublished: includeUnpublished})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash")
 	cmd.Flags().StringVar(&destinationExpected, "dest-if-hash", "", "Destination hash; must be absent")
 	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Allow unpublished source")
@@ -106,13 +121,18 @@ func newMoveCommand() *cobra.Command {
 }
 
 func newDeleteCommand() *cobra.Command {
-	var vault, expected string
+	var vault, output, expected string
 	var includeUnpublished, dryRun bool
 	cmd := &cobra.Command{Use: "delete PATH", Short: "Delete one Markdown article with CAS", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := internalapplication.MutateSource(vault, "", internalapplication.SourceMutationRequest{Operation: internalapplication.MutationDelete, Path: args[0], ExpectedHash: expected, DryRun: dryRun, IncludeUnpublished: includeUnpublished})
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
+		result, err := internalapplication.MutateSource(boundary.VaultPath, boundary.OutputPath, internalapplication.SourceMutationRequest{Operation: internalapplication.MutationDelete, Path: args[0], ExpectedHash: expected, DryRun: dryRun, IncludeUnpublished: includeUnpublished})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash")
 	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Allow unpublished source")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
@@ -121,9 +141,13 @@ func newDeleteCommand() *cobra.Command {
 }
 
 func newUploadCommand() *cobra.Command {
-	var vault, file, name, kind, expected string
+	var vault, output, file, name, kind, expected string
 	var includeUnpublished, dryRun bool
 	cmd := &cobra.Command{Use: "upload DIR", Short: "Create one Markdown or attachment file", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
 		if kind != internalapplication.UploadArticle && kind != internalapplication.UploadSectionIndex && kind != internalapplication.UploadAttachment {
 			return errors.New("--kind must be article, section-index, or attachment")
 		}
@@ -131,7 +155,6 @@ func newUploadCommand() *cobra.Command {
 			return errors.New("--file is required")
 		}
 		var data []byte
-		var err error
 		if file == "-" {
 			if name == "" {
 				return errors.New("--name is required when --file is -")
@@ -150,13 +173,14 @@ func newUploadCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		result, mutationErr := internalapplication.MutateUpload(vault, "", internalapplication.UploadMutationRequest{
+		result, mutationErr := internalapplication.MutateUpload(boundary.VaultPath, boundary.OutputPath, internalapplication.UploadMutationRequest{
 			Directory: args[0], Name: name, Kind: kind, ExpectedHash: expected,
 			Content: data, IncludeUnpublished: includeUnpublished, DryRun: dryRun,
 		})
 		return writeMutationCommandResult(cmd, result, mutationErr)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&file, "file", "", "Input file or -")
 	cmd.Flags().StringVar(&name, "name", "", "Safe destination basename for stdin")
 	cmd.Flags().StringVar(&kind, "kind", "", "Upload kind: article, section-index, or attachment")
@@ -196,25 +220,35 @@ func readUploadInput(vaultPath, value string) ([]byte, error) {
 }
 
 func newMkdirCommand() *cobra.Command {
-	var vault string
+	var vault, output string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "mkdir PATH", Short: "Create one Vault directory", Args: cobra.ExactArgs(1), RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := internalapplication.MutateDirectory(vault, "", internalapplication.DirectoryMutationRequest{Operation: internalapplication.MutationMkdir, Path: args[0], ExpectedHash: internalapplication.AbsentHash, DryRun: dryRun})
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
+		result, err := internalapplication.MutateDirectory(boundary.VaultPath, boundary.OutputPath, internalapplication.DirectoryMutationRequest{Operation: internalapplication.MutationMkdir, Path: args[0], ExpectedHash: internalapplication.AbsentHash, DryRun: dryRun})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
 	return cmd
 }
 
 func newRenameDirCommand() *cobra.Command {
-	var vault, expected string
+	var vault, output, expected string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "rename-dir SOURCE DEST", Short: "Rename one empty Vault directory", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		result, err := internalapplication.MutateDirectory(vault, "", internalapplication.DirectoryMutationRequest{Operation: internalapplication.MutationRenameDir, Path: args[0], Destination: args[1], ExpectedHash: expected, DryRun: dryRun})
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
+		result, err := internalapplication.MutateDirectory(boundary.VaultPath, boundary.OutputPath, internalapplication.DirectoryMutationRequest{Operation: internalapplication.MutationRenameDir, Path: args[0], Destination: args[1], ExpectedHash: expected, DryRun: dryRun})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "Directory SHA-256 hash")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
 	_ = cmd.MarkFlagRequired("if-hash")
@@ -268,17 +302,22 @@ func newConfigReadCommand() *cobra.Command {
 }
 
 func newConfigWriteCommand() *cobra.Command {
-	var vault, contentFile, expected string
+	var vault, output, contentFile, expected string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "write", Short: "Replace configuration bytes with CAS", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
 		data, err := readAgentInput(cmd, vault, contentFile, false)
 		if err != nil {
 			return err
 		}
-		result, err := internalapplication.MutateConfig(vault, internalapplication.ConfigMutationRequest{Operation: internalapplication.MutationConfigWrite, ExpectedHash: expected, Content: data, DryRun: dryRun})
+		result, err := internalapplication.MutateConfig(boundary.VaultPath, boundary.OutputPath, internalapplication.ConfigMutationRequest{Operation: internalapplication.MutationConfigWrite, ExpectedHash: expected, Content: data, DryRun: dryRun})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&contentFile, "content-file", "", "Complete YAML or -")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash or absent")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
@@ -288,17 +327,22 @@ func newConfigWriteCommand() *cobra.Command {
 }
 
 func newConfigEditCommand() *cobra.Command {
-	var vault, editsFile, expected string
+	var vault, output, editsFile, expected string
 	var dryRun bool
 	cmd := &cobra.Command{Use: "edit", Short: "Patch configuration bytes with CAS", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
 		data, err := readAgentInput(cmd, vault, editsFile, true)
 		if err != nil {
 			return err
 		}
-		result, err := internalapplication.MutateConfig(vault, internalapplication.ConfigMutationRequest{Operation: internalapplication.MutationConfigEdit, ExpectedHash: expected, Content: data, DryRun: dryRun})
+		result, err := internalapplication.MutateConfig(boundary.VaultPath, boundary.OutputPath, internalapplication.ConfigMutationRequest{Operation: internalapplication.MutationConfigEdit, ExpectedHash: expected, Content: data, DryRun: dryRun})
 		return writeMutationCommandResult(cmd, result, err)
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&editsFile, "edits-file", "", "Strict PatchRequest JSON or -")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")

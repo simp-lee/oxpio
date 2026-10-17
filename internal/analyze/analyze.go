@@ -10,6 +10,7 @@ import (
 	"strconv"
 
 	diagnostic "github.com/simp-lee/oxpio/internal/diag"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/siteplan"
 )
 
@@ -57,7 +58,7 @@ func AnalyzeWithOutputAndConcurrencyAndOverlayPreview(vaultPath, outputPath stri
 	} else if outputPath == "" {
 		// Overlay builds always use an explicit output boundary so the
 		// candidate cannot accidentally scan generated output.
-		planned, err = siteplan.BuildForOutputWithOverlayPreview(vaultPath, filepath.Join(vaultPath, "public"), overlay, deleted, previewPath, concurrency)
+		planned, err = siteplan.BuildForOutputWithOverlayPreview(vaultPath, internalfsutil.DefaultOutputPath(vaultPath), overlay, deleted, previewPath, concurrency)
 	} else {
 		planned, err = siteplan.BuildForOutputWithOverlayPreview(vaultPath, outputPath, overlay, deleted, previewPath, concurrency)
 	}

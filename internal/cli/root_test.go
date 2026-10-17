@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -10,7 +11,6 @@ import (
 	"testing"
 
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
-	internalbuild "github.com/simp-lee/oxpio/internal/build"
 )
 
 func TestExecuteShowsRootHelp(t *testing.T) {
@@ -160,6 +160,76 @@ func TestReadRejectsExplicitZeroLimit(t *testing.T) {
 	}
 }
 
+func TestSourceMutationUsesCustomOutputBoundary(t *testing.T) {
+	vault := t.TempDir()
+	writeCLIConfig(t, vault)
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	original := "---\ntitle: Article\npublish: true\ntype: doc\n---\nBefore\n"
+	writeValidateFile(t, vault, "article.md", original)
+	writeValidateFile(t, vault, "replacement.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\nAfter\n")
+	output := filepath.Join(vault, "site")
+	writeValidateFile(t, vault, "site/broken.md", "not strict frontmatter\n")
+	digest := sha256.Sum256([]byte(original))
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"write", "article.md", "--vault", vault, "--output", output, "--content-file", "replacement.md", "--if-hash", fmt.Sprintf("%x", digest), "--dry-run", "--format", "json"})
+	if err != nil || stderr != "" || !strings.Contains(stdout, `"operation":"write"`) {
+		t.Fatalf("custom-output source mutation = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+}
+
+func TestHelpUsesCustomOutputBoundary(t *testing.T) {
+	vault := t.TempDir()
+	writeCLIConfig(t, vault)
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeValidateFile(t, vault, "site/broken.md", "not strict frontmatter\n")
+	output := filepath.Join(vault, "site")
+
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"help", "--vault", vault, "--output", output, "--format", "json"})
+	if err != nil || stderr != "" || !strings.Contains(stdout, `"command":"help"`) {
+		t.Fatalf("help custom output = stdout %q, stderr %q, err %v", stdout, stderr, err)
+	}
+}
+
+func TestCommandRegistryOutputFieldsMatchRepresentativeJSON(t *testing.T) {
+	vault := t.TempDir()
+	writeValidateFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nlanguage: en\ntheme: base\nnavigation: []\nattachments:\n  directory: assets\n")
+	writeValidateFile(t, vault, "assets/.keep", "")
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeValidateFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\nArticle\n")
+	writeValidateFile(t, vault, "custom.css", "body {}\n")
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "config read", args: []string{"config", "read", "--vault", vault}},
+		{name: "read", args: []string{"read", "article.md", "--vault", vault}},
+		{name: "theme context", args: []string{"theme", "context", "--vault", vault}},
+		{name: "theme validate", args: []string{"theme", "validate", "--vault", vault}},
+		{name: "theme read", args: []string{"theme", "read", "custom.css", "--vault", vault}},
+	}
+	for _, item := range cases {
+		stdout, stderr, err := executeForTest(t, testCommandDependencies(), append(item.args, "--format", "json"))
+		if err != nil || stderr != "" {
+			t.Fatalf("%s = stdout %q, stderr %q, err %v", item.name, stdout, stderr, err)
+		}
+		var envelope struct {
+			Data map[string]json.RawMessage `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(stdout), &envelope); err != nil {
+			t.Fatalf("%s envelope: %v (%q)", item.name, err, stdout)
+		}
+		spec, ok := internalapplication.FindCommand(item.name)
+		if !ok {
+			t.Fatalf("missing registry command %q", item.name)
+		}
+		for _, field := range spec.OutputFields {
+			if _, ok := envelope.Data[field]; !ok {
+				t.Fatalf("%s registry field %q missing from data %s", item.name, field, stdout)
+			}
+		}
+	}
+}
+
 func TestJSONFailureContainsSanitizedDiagnosticsOnly(t *testing.T) {
 	vault := t.TempDir()
 	if err := os.WriteFile(filepath.Join(vault, defaultConfigFilename), []byte("title: Site\nbaseURL: https://example.test/\nnavigation: []\nunknown: true\n"), 0o644); err != nil {
@@ -225,9 +295,14 @@ func TestThemeValidateRedactsHiddenSourceDiagnostics(t *testing.T) {
 	}
 }
 
-func TestThemeValidateRejectsOutputFlag(t *testing.T) {
-	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"theme", "validate", "--output", filepath.Join(t.TempDir(), "public")})
-	if err == nil || stdout != "" || stderr != "" || !strings.Contains(err.Error(), "unknown flag") {
+func TestThemeValidateAcceptsOutputFlag(t *testing.T) {
+	vault := t.TempDir()
+	writeCLIConfig(t, vault)
+	writeValidateFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	output := filepath.Join(vault, "site")
+	writeValidateFile(t, vault, "site/broken.md", "not strict frontmatter\n")
+	stdout, stderr, err := executeForTest(t, testCommandDependencies(), []string{"theme", "validate", "--vault", vault, "--output", output})
+	if err != nil || stdout == "" || stderr != "" || !strings.Contains(stdout, "\"valid\": true") {
 		t.Fatalf("theme validate --output = stdout %q, stderr %q, err %v", stdout, stderr, err)
 	}
 }
@@ -316,19 +391,12 @@ func executeForTest(t *testing.T, deps commandDependencies, args []string) (stdo
 	return stdoutBuf.String(), stderrBuf.String(), err
 }
 
-func setTestBuildDependency(deps *commandDependencies, build func(string, string, internalbuild.Options) (*internalbuild.BuildResult, error)) {
-	deps.buildSiteWithOptions = build
-	deps.publishSite = func(vaultPath string, outputPath string, options internalapplication.PublishOptions) (*internalapplication.PublishResult, error) {
-		result, err := deps.buildSiteWithOptions(vaultPath, outputPath, internalbuild.Options{Strict: true, DiagnosticsWriter: options.DiagnosticsWriter, TrackOutputTransactionPath: options.TrackOutputTransactionPath})
-		return &internalapplication.PublishResult{OutputPath: outputPath, Published: err == nil, Build: result}, err
-	}
+func setTestPublishDependency(deps *commandDependencies, publish func(string, string, internalapplication.PublishOptions) (*internalapplication.PublishResult, error)) {
+	deps.publishSite = publish
 }
 
 func testCommandDependencies() commandDependencies {
 	deps := commandDependencies{
-		buildSiteWithOptions: func(vaultPath string, outputPath string, options internalbuild.Options) (*internalbuild.BuildResult, error) {
-			return nil, fmt.Errorf("unexpected buildSiteWithOptions call")
-		},
 		newPreviewServer: func(outputPath string, port int) (previewServer, error) {
 			return nil, fmt.Errorf("unexpected newPreviewServer call")
 		},

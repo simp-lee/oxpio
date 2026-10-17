@@ -156,7 +156,7 @@ func mutationBoundary(vaultPath, outputPath string) (internalfsutil.VaultOutputB
 		return internalfsutil.VaultOutputBoundary{}, err
 	}
 	if strings.TrimSpace(outputPath) == "" {
-		outputPath = filepath.Join(vault, "public")
+		outputPath = internalfsutil.DefaultOutputPath(vault)
 	}
 	return internalfsutil.ResolveVaultOutput(vault, outputPath)
 }
@@ -741,7 +741,7 @@ func openEditorMutationSnapshot(vaultPath, outputPath string) (Snapshot, error) 
 		vaultPath = "."
 	}
 	if strings.TrimSpace(outputPath) == "" {
-		outputPath = filepath.Join(vaultPath, "public")
+		outputPath = internalfsutil.DefaultOutputPath(vaultPath)
 	}
 	boundary, err := internalfsutil.ResolveVaultOutput(vaultPath, outputPath)
 	if err != nil {
@@ -1268,8 +1268,8 @@ func ReadConfig(vaultPath string) (ConfigSummary, error) {
 	return configSummary(cfg, hashBytes(data)), nil
 }
 
-func MutateConfig(vaultPath string, request ConfigMutationRequest) (MutationResult, error) {
-	vault, err := internalfsutil.ResolveVaultPath(vaultPath)
+func MutateConfig(vaultPath, outputPath string, request ConfigMutationRequest) (MutationResult, error) {
+	boundary, err := mutationBoundary(vaultPath, outputPath)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -1283,24 +1283,26 @@ func MutateConfig(vaultPath string, request ConfigMutationRequest) (MutationResu
 		return MutationResult{}, err
 	}
 	if request.DryRun {
-		if err := workspace.CheckDryRun(vault); err != nil {
+		if err := workspace.CheckDryRun(boundary.VaultPath); err != nil {
 			return MutationResult{}, err
 		}
-		return mutateConfigLocked(vault, request, false)
+		return mutateConfigLocked(boundary, request, false)
 	}
-	if err := recoverPendingApplicationJournal(vault); err != nil {
+	if err := recoverPendingApplicationJournal(boundary.VaultPath); err != nil {
 		return MutationResult{}, err
 	}
-	lease, err := workspace.Acquire(vault)
+	lease, err := workspace.Acquire(boundary.VaultPath)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	defer func() { _ = lease.Release() }()
-	return mutateConfigLocked(vault, request, true)
+	return mutateConfigLocked(boundary, request, true)
 }
 
-func mutateConfigLocked(vault string, request ConfigMutationRequest, persistent bool) (MutationResult, error) {
-	startFingerprint, err := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+func mutateConfigLocked(boundary internalfsutil.VaultOutputBoundary, request ConfigMutationRequest, persistent bool) (MutationResult, error) {
+	vault := boundary.VaultPath
+	output := boundary.OutputPath
+	startFingerprint, err := workspace.Fingerprint(vault, output)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -1342,19 +1344,19 @@ func mutateConfigLocked(vault string, request ConfigMutationRequest, persistent 
 	if !exists {
 		result.Changes[0].Kind = "create"
 	}
-	currentFingerprint, err := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+	currentFingerprint, err := workspace.Fingerprint(vault, output)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	if currentFingerprint != startFingerprint {
 		return MutationResult{}, fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during mutation")
 	}
-	candidateFingerprint, err := workspace.FingerprintWithOverlay(vault, filepath.Join(vault, "public"), map[string][]byte{internalconfig.Filename: candidate}, nil)
+	candidateFingerprint, err := workspace.FingerprintWithOverlay(vault, output, map[string][]byte{internalconfig.Filename: candidate}, nil)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	if request.DryRun {
-		endFingerprint, fingerprintErr := workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+		endFingerprint, fingerprintErr := workspace.Fingerprint(vault, output)
 		if fingerprintErr != nil {
 			return MutationResult{}, fingerprintErr
 		}
@@ -1374,7 +1376,7 @@ func mutateConfigLocked(vault string, request ConfigMutationRequest, persistent 
 	if currentHash != beforeHash {
 		return MutationResult{}, &ConflictError{Path: internalconfig.Filename, Expected: beforeHash, Actual: currentHash}
 	}
-	currentFingerprint, err = workspace.Fingerprint(vault, filepath.Join(vault, "public"))
+	currentFingerprint, err = workspace.Fingerprint(vault, output)
 	if err != nil {
 		return MutationResult{}, err
 	}
@@ -1382,7 +1384,7 @@ func mutateConfigLocked(vault string, request ConfigMutationRequest, persistent 
 		return MutationResult{}, fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during mutation")
 	}
 	fingerprint := startFingerprint
-	journal := workspace.Journal{Version: workspace.JournalVersion, CommitKind: "source-only", Phase: "prepared", InputFingerprint: fingerprint, TargetPath: filepath.Join(vault, "public"), SourcePath: filepath.Join(vault, internalconfig.Filename), SourceBeforePath: filepath.Join(vault, internalconfig.Filename), OutputPath: filepath.Join(vault, "public"), TemporaryPath: filepath.Join(vault, ".oxpio", ".oxpio-config-only-"+fingerprint[:minInt(16, len(fingerprint))]), SourceBeforeHash: beforeHash, SourceAfterHash: hashBytes(candidate), AfterHash: hashBytes(candidate), OutputBeforeHash: internalpublish.DirectoryHash(filepath.Join(vault, "public")), OutputIdentity: internalpublish.OutputIdentity(filepath.Join(vault, "public"))}
+	journal := workspace.Journal{Version: workspace.JournalVersion, CommitKind: "source-only", Phase: "prepared", InputFingerprint: fingerprint, TargetPath: output, SourcePath: filepath.Join(vault, internalconfig.Filename), SourceBeforePath: filepath.Join(vault, internalconfig.Filename), OutputPath: output, TemporaryPath: filepath.Join(vault, ".oxpio", ".oxpio-config-only-"+fingerprint[:minInt(16, len(fingerprint))]), SourceBeforeHash: beforeHash, SourceAfterHash: hashBytes(candidate), AfterHash: hashBytes(candidate), OutputBeforeHash: internalpublish.DirectoryHash(output), OutputIdentity: internalpublish.OutputIdentity(output)}
 	if err := workspace.WriteJournal(vault, journal); err != nil {
 		return MutationResult{}, err
 	}
@@ -1424,7 +1426,7 @@ func mutateConfigLocked(vault string, request ConfigMutationRequest, persistent 
 	if err := workspace.ClearJournal(vault); err != nil {
 		result.Diagnostics = append(result.Diagnostics, internaldiag.Diagnostic{Severity: internaldiag.SeverityWarning, Kind: internaldiag.KindOutputCleanup, Message: "config committed; transaction journal cleanup requires recovery"})
 	}
-	if after, afterErr := workspace.Fingerprint(vault, filepath.Join(vault, "public")); afterErr != nil {
+	if after, afterErr := workspace.Fingerprint(vault, output); afterErr != nil {
 		result.Diagnostics = append(result.Diagnostics, internaldiag.Diagnostic{Severity: internaldiag.SeverityWarning, Kind: internaldiag.KindOutputCleanup, Message: "config committed; final input fingerprint could not be checked"})
 	} else if after != candidateFingerprint {
 		result.Diagnostics = append(result.Diagnostics, internaldiag.Diagnostic{Severity: internaldiag.SeverityWarning, Kind: internaldiag.KindOutputCleanup, Message: "config committed while another input changed"})

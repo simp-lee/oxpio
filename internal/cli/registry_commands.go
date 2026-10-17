@@ -13,7 +13,7 @@ import (
 func newHelpCommand() *cobra.Command {
 	var agentWorkflow bool
 	var includeUnpublished bool
-	var vaultPath string
+	var vaultPath, outputPath string
 	var requestedCommand string
 	cmd := &cobra.Command{
 		Use:   "help [COMMAND]",
@@ -39,7 +39,7 @@ func newHelpCommand() *cobra.Command {
 			var dynamic internalapplication.Context
 			var dynamicSet bool
 			if strings.TrimSpace(vaultPath) != "" {
-				loaded, err := internalapplication.LoadContext(vaultPath, "", includeUnpublished)
+				loaded, err := internalapplication.LoadContext(vaultPath, outputPath, includeUnpublished)
 				if err != nil {
 					return err
 				}
@@ -93,6 +93,7 @@ func newHelpCommand() *cobra.Command {
 	cmd.Flags().BoolVar(&agentWorkflow, "agent", false, "Show the concise Agent workflow")
 	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Include unpublished capability details")
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	return cmd
 }
 

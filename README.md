@@ -33,20 +33,28 @@ The editor keeps the vault as the source of truth and publishes only after valid
 ## Commands
 
 ```text
+oxpio help [COMMAND] [--vault PATH] [--output PATH]
 oxpio init [--vault PATH]
 oxpio validate [--vault PATH] [--output PATH]
 oxpio publish [--vault PATH] [--output PATH] [--dry-run]
 oxpio serve [--vault PATH] [--output PATH] [--port NUM] [--watch]
-oxpio editor [--vault PATH] [--output PATH] [--port NUM] [--setup|--reset-password]
-oxpio context
-oxpio read|write|edit|move|delete PATH ...
-oxpio find|ls|grep|tags|related ...
-oxpio theme validate|init|read|write|edit|context|preview ...
+oxpio editor [--vault PATH] [--output PATH] [--port NUM] [--listen ADDRESS] [--setup|--reset-password]
+oxpio context [--vault PATH] [--output PATH] [--include-unpublished]
+oxpio read|write|edit|move|delete PATH ... [--output PATH]
+oxpio find|ls|grep|tags|related ... [--vault PATH] [--output PATH]
+oxpio upload|mkdir|rename-dir ... [--vault PATH] [--output PATH]
+oxpio config read [--vault PATH]
+oxpio config write|edit ... [--vault PATH] [--output PATH]
+oxpio recover [--vault PATH] [--dry-run]
+oxpio theme validate|init|write|edit|preview ... [--output PATH]
+oxpio theme read|context ...
 oxpio version
 oxpio --version
 ```
 
-`init` accepts only a nonexistent or completely empty directory. It creates a strict `oxpio.yaml` and a root `_index.md`, and never overwrites existing files. `validate` is read-only and returns a failure for either errors or warnings. It resolves `--output` exactly like `publish` (default `<vault>/public`); pass the same value when validating a custom-output publish. Only that resolved path is excluded as the formal output boundary. OXPIO does not infer additional output boundaries from directory names or existing `.oxpio-output` markers; the normal fixed vault-input exclusions still apply. `publish` always uses the strict quality policy and is the only public command that replaces formal output. `publish --dry-run` performs generation and validation in ephemeral storage without changing output. `serve --watch` uses the same shared publish service and reloads only after a successful publish. `serve` never registers editor or login routes.
+All query and mutation commands that analyze Vault inputs accept the same optional `--output` boundary; when omitted, it defaults to `<vault>/public`.
+
+`init` accepts only a nonexistent or completely empty directory. It creates a strict `oxpio.yaml` and a root `_index.md`, and never overwrites existing files. `validate` is read-only and returns a failure for either errors or warnings. It resolves `--output` exactly like `publish` (default `<vault>/public`); pass the same value when validating a custom-output publish. Only that resolved path is excluded as the formal output boundary. OXPIO does not infer additional output boundaries from directory names or existing `.oxpio-output` markers; the normal fixed vault-input exclusions still apply. `publish` always uses the strict quality policy. Non-dry-run `publish`, `serve --watch`, and ordinary `editor` can replace the formal output; `publish --dry-run` performs generation and validation in ephemeral storage without changing output. Ordinary `serve` only serves the existing output. `editor --setup` and `editor --reset-password` only configure the account and do not start a publishing server. `serve --watch` uses the same shared publish service and reloads only after a successful publish. `serve` never registers editor or login routes.
 
 ### Optional editor mode
 
@@ -208,7 +216,7 @@ Release archives contain one `CGO_ENABLED=0` executable, the project license, an
 go install github.com/simp-lee/oxpio/cmd/oxpio@vX.Y.Z
 ```
 
-Development checks use pinned Go, Node.js, Playwright, GoReleaser, actionlint, golangci-lint, gofumpt, and goimports versions:
+Go 1.25 is the minimum declared Go version; this does not mean every Go 1.25 patch release is covered by CI. CI and release validation use Go 1.26.2, and the dedicated related-performance host check also requires Go 1.26.2. Development checks use pinned Go, Node.js, Playwright, GoReleaser, actionlint, golangci-lint, gofumpt, and goimports versions:
 
 ```bash
 make tools

@@ -11,13 +11,13 @@ import (
 )
 
 func newRelatedCommand() *cobra.Command {
-	var vaultPath string
+	var vaultPath, outputPath string
 	cmd := &cobra.Command{
 		Use:   "related PATH",
 		Short: "Return production related-article recommendations",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			snapshot, err := internalapplication.OpenSnapshot(vaultPath, "")
+			snapshot, err := internalapplication.OpenSnapshot(vaultPath, outputPath)
 			if err != nil {
 				return err
 			}
@@ -45,5 +45,6 @@ func newRelatedCommand() *cobra.Command {
 		},
 	}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	return cmd
 }

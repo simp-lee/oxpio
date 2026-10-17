@@ -21,6 +21,13 @@ type VaultOutputBoundary struct {
 	OutputPath string
 }
 
+// DefaultOutputPath returns the formal output path used when a command omits
+// --output. Callers still resolve and validate the returned path through
+// ResolveVaultOutput before using it.
+func DefaultOutputPath(vaultPath string) string {
+	return filepath.Join(vaultPath, "public")
+}
+
 // ResolveVaultPath resolves the filesystem identity of an existing vault directory.
 func ResolveVaultPath(vaultPath string) (string, error) {
 	trimmed := strings.TrimSpace(vaultPath)
