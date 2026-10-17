@@ -16,11 +16,11 @@ OXPIO is also a focused online writing workspace. Run `oxpio editor`, open a Mar
 oxpio editor --vault ./vault --port 8080
 ```
 
-The editor keeps the vault as the source of truth and publishes only after validation and a successful build. It includes a local CodeMirror Markdown editor, metadata form, toolbar, file manager, content-only draft preview, media library, responsive layout, Live preview/Source/Read/Diff views, and safe save/rollback behavior. Live preview stays in one editor surface: the line under the pointer or cursor exposes Markdown while surrounding lines keep their rendered treatment. Use Read for a complete server-rendered view. The English showcase article below intentionally exercises inline and block math, a Go code block, a Markdown table, a callout, and a local image.
+The editor keeps the vault as the source of truth and publishes only after validation and a successful build. It includes a local CodeMirror Markdown editor, metadata form, toolbar, file manager, server-rendered draft preview, media library, responsive layout, Write/Source/Preview/Diff views, and safe save/rollback behavior. Live preview stays in one editor surface: the line under the pointer or cursor exposes Markdown while surrounding lines keep their rendered treatment. Use Preview for a complete server-rendered view. The English showcase article below intentionally exercises inline and block math, a Go code block, a Markdown table, a callout, and a local image.
 
 <div align="center">
   <a href="docs/images/editor-live.png"><img src="docs/images/editor-live.png" alt="OXPIO editor single-surface Live preview with the active Markdown line exposed" width="49%"></a>
-  <a href="docs/images/editor-preview.png"><img src="docs/images/editor-preview.png" alt="OXPIO editor full-width reading mode with rendered Markdown, formula, code block, and table" width="49%"></a>
+  <a href="docs/images/editor-preview.png"><img src="docs/images/editor-preview.png" alt="OXPIO editor full-width Preview mode with rendered Markdown, formula, code block, and table" width="49%"></a>
 </div>
 
 <div align="center">
@@ -28,7 +28,7 @@ The editor keeps the vault as the source of truth and publishes only after valid
   <a href="docs/images/editor-diff.png"><img src="docs/images/editor-diff.png" alt="OXPIO editor full-width Diff mode with source comparison and visible deletions" width="49%"></a>
 </div>
 
-<p align="center"><em>The captures show single-surface Live preview, the complete Read view, full Markdown source, and source Diff for an unsaved candidate.</em></p>
+<p align="center"><em>The captures show single-surface Live preview, the complete Preview view, full Markdown source, and source Diff for an unsaved candidate.</em></p>
 
 ## Commands
 
@@ -52,7 +52,7 @@ oxpio version
 oxpio --version
 ```
 
-Vault-analyzing query and mutation commands accept the same optional `--output` boundary; when omitted, it defaults to `<vault>/public`. This includes dynamic `help`, `context`, `find`, `ls`, `read`, `tags`, `grep`, `related`, source/config mutations, uploads and directory mutations, plus theme initialization/validation/writes. `config read`, `theme read` and `theme context` only read their own files and do not need an output boundary. `theme preview --output` validates and excludes a custom formal output but never writes it.
+Vault-analyzing query and mutation commands accept the same optional `--output` boundary; when omitted, it defaults to `<vault>/public`. This includes dynamic `help`, `context`, `find`, `ls`, `read`, `tags`, `grep`, `related`, source/config mutations, uploads and directory mutations, plus theme initialization/validation/writes. `config read`, `theme read`, and `theme context` are read-only and do not need an output boundary; `theme context` also inspects the selected configuration and local theme inventory. `theme preview --output` validates and excludes a custom formal output but never writes it.
 
 `init` accepts only a nonexistent or completely empty directory. It creates a strict `oxpio.yaml` and a root `_index.md`, and never overwrites existing files. `validate` is read-only and returns a failure for either errors or warnings. It resolves `--output` exactly like `publish` (default `<vault>/public`); pass the same value when validating a custom-output publish. Only that resolved path is excluded as the formal output boundary. OXPIO does not infer additional output boundaries from directory names or existing `.oxpio-output` markers; the normal fixed vault-input exclusions still apply. `publish` always uses the strict quality policy. Non-dry-run `publish`, `serve --watch`, and ordinary `editor` can replace the formal output; `publish --dry-run` performs generation and validation in ephemeral storage without changing output. Ordinary `serve` only serves the existing output. `editor --setup` and `editor --reset-password` only configure the account and do not start a publishing server. `serve --watch` uses the same shared publish service and reloads only after a successful publish. `serve` never registers editor or login routes.
 
@@ -78,7 +78,7 @@ After login, mapped article and section pages show an in-memory edit link. The e
 
 OXPIO has no visitor-facing site search. `oxpio grep QUERY` is a local, native Agent source search over the normalized Markdown catalog: it performs Unicode-folded literal matching by default, supports RE2 with zero-width rejection, `source|body|title|path|metadata|all` scopes, explicit path/section/tag/type/status/publish filters, merged `--context` windows, stable JSON results and fixed resource limits. It never invokes external `grep`/`rg`, reads generated HTML, or changes the production related-recommendation algorithm. Use `oxpio related PATH` separately for production article recommendations; it accepts only a published ordinary article and returns the same pipeline results used by pages. Hidden source queries require explicit `--include-unpublished`.
 
-Machine mode uses the versioned JSON envelope `{schema, ok, command, data, diagnostics, changes}`. Diagnostics and changes use stable codes, severities, domains and SHA-256 hashes; exit codes distinguish success, quality/transaction failure, invalid arguments, CAS conflict, permission denial and I/O/service failure. `--content-file -` and `--edits-file -` are raw source bytes and strict PatchRequest JSON respectively; `upload --file -` is raw single-file bytes with `--name`. These stdin modes are not interchangeable. Agent operations are offline, do not parse human logs, and source-only mutations never publish. OXPIO does not provide MCP, a remote Agent API, GitHub Pages, S3, OSS or other deployment adapters; publish produces a local static output for a user-managed HTTP server or deployment tool.
+Machine mode uses `--format json` and the versioned JSON envelope `{schema, ok, command, data, diagnostics, changes}`. Diagnostics and changes use stable codes, severities, domains and SHA-256 hashes; exit codes distinguish success, quality/transaction failure, invalid arguments, CAS conflict, permission denial and I/O/service failure. `--content-file -` and `--edits-file -` are raw source bytes and strict PatchRequest JSON respectively; `upload --file -` is raw single-file bytes with `--name`. These stdin modes are not interchangeable. Agent operations are offline, do not parse human logs, and source-only mutations never publish. OXPIO does not provide MCP, a remote Agent API, GitHub Pages, S3, OSS or other deployment adapters; publish produces a local static output for a user-managed HTTP server or deployment tool.
 
 A complete offline workflow is:
 
@@ -171,7 +171,7 @@ timeline:
 defaultImg: ""
 ```
 
-Navigation entries use exactly one site-relative `url` or section reference. Site-relative links honor `baseURL`; external HTTP(S) links are rendered as supplied and are never requested. Source `editURL` and `viewURL` are independent absolute templates with exactly one `:path`; each source path segment is RFC 3986 percent-encoded.
+The optional top-level keys `theme`, `pagination.pageSize`, and `attachments.directory` select a built-in or local theme, set the list page size (`1..1000`), and identify an existing Vault-relative attachment directory. Navigation entries use exactly one site-relative `url` or section reference. Site-relative links honor `baseURL`; external HTTP(S) links are rendered as supplied and are never requested. Source `editURL` and `viewURL` are independent absolute templates with exactly one `:path`; each source path segment is RFC 3986 percent-encoded.
 
 Explicit `versions` create independent section trees, sidebars, routes, canonical URLs, sitemaps, breadcrumbs, reading flows, source paths, and static version selectors. Cross-version identity is source-based: a section uses its directory path relative to the entry's `source` (the version root is the empty relative path), and an article uses its Markdown source path relative to that directory, including its filename and `.md` extension. After separators are represented as `/`, the complete relative path is Unicode NFKC-normalized and case-folded. Slugs, titles, generated routes, and numeric-prefix removal do not participate. Therefore matching `intro.md` sources stay linked when their slugs differ; if no published page of the same kind has the same identity key, the selector links to the target version root and never falls back to another version's content.
 
