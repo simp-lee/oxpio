@@ -23,7 +23,10 @@ import (
 	"github.com/simp-lee/oxpio/internal/testutil/relatedfixture"
 )
 
-const relatedEndToEndRSSHelperEnv = "OXPIO_RELATED_END_TO_END_RSS_HELPER"
+const (
+	relatedEndToEndRSSHelperEnv = "OXPIO_RELATED_END_TO_END_RSS_HELPER"
+	relatedFixtureTagPageSize   = 20
+)
 
 func TestRelatedPerformanceBudgets(t *testing.T) {
 	if os.Getenv("OXPIO_RELATED_PERF") != "1" {
@@ -250,6 +253,8 @@ popover:
 related:
   enabled: true
   count: 5
+pagination:
+  pageSize: 20
 rss:
   enabled: false
 timeline:
@@ -301,8 +306,19 @@ func validateRelatedBuildResult(tb testing.TB, result *BuildResult, output strin
 	if result.NotePages != count || result.Index == nil || len(result.Index.Notes) != count {
 		tb.Fatalf("built notes = %d pages/%d indexed, want %d/%d", result.NotePages, indexedNoteCount(result), count, count)
 	}
-	if result.TagPages != 9 {
-		tb.Fatalf("tag pages = %d, want 9", result.TagPages)
+	if len(result.Index.Tags) != 9 {
+		tb.Fatalf("unique tags = %d, want 9", len(result.Index.Tags))
+	}
+	expectedTagPages := 0
+	for _, tag := range result.Index.Tags {
+		pageCount := (len(tag.Notes) + relatedFixtureTagPageSize - 1) / relatedFixtureTagPageSize
+		if pageCount == 0 {
+			pageCount = 1
+		}
+		expectedTagPages += pageCount
+	}
+	if result.TagPages != expectedTagPages {
+		tb.Fatalf("tag pages = %d, want %d", result.TagPages, expectedTagPages)
 	}
 	for _, tag := range []string{"topic-0", "language-0"} {
 		if result.Index.Tags[tag] == nil {
