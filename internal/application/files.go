@@ -343,10 +343,16 @@ func validateReservedDirectoryPath(boundary internalfsutil.VaultOutputBoundary, 
 		return err
 	}
 	attachment := filepath.ToSlash(config.AttachmentDirectory)
-	if attachment != "" && (rel == attachment || strings.HasPrefix(rel, attachment+"/")) {
+	if attachment != "" && portablePathWithin(rel, attachment) {
 		return fmt.Errorf("directory path %q is inside attachments.directory", rel)
 	}
 	return nil
+}
+
+func portablePathWithin(candidate, root string) bool {
+	candidate = path.Clean(filepath.ToSlash(candidate))
+	root = path.Clean(filepath.ToSlash(root))
+	return strings.EqualFold(candidate, root) || strings.HasPrefix(strings.ToLower(candidate), strings.ToLower(root)+"/")
 }
 
 func requireDirectoryParent(vault, rel string) error {

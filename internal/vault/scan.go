@@ -43,6 +43,24 @@ type ScanOptions struct {
 	OverlayDeleted      map[string]bool
 }
 
+// PathIdentityError reports a source/resource path that cannot be represented
+// safely or uniquely on the supported filesystems.
+type PathIdentityError struct {
+	First  string
+	Second string
+	Reason string
+}
+
+func (e *PathIdentityError) Error() string {
+	if e == nil {
+		return "vault path identity is invalid"
+	}
+	if e.Second == "" {
+		return fmt.Sprintf("vault path %q has %s", e.First, e.Reason)
+	}
+	return fmt.Sprintf("vault paths %q and %q collide on portable filesystems", e.First, e.Second)
+}
+
 // Scan walks a vault once without an output exclusion.
 func Scan(vaultPath string) (ScanResult, error) {
 	return ScanWithOptions(vaultPath, ScanOptions{})
@@ -108,7 +126,13 @@ func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) 
 			return fmt.Errorf("inspect %q: %w", currentPath, err)
 		}
 		if isSymlink {
-			return nil
+			// Reserved management trees and the resolved output are intentionally
+			// opaque. A symlink anywhere else is an input-boundary violation, not
+			// an entry that may be silently skipped.
+			if shouldSkipPath(relPath) {
+				return nil
+			}
+			return fmt.Errorf("path %q must not contain symbolic links", relPath)
 		}
 
 		name := entry.Name()
@@ -128,7 +152,7 @@ func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) 
 			return fmt.Errorf("inspect %q: %w", currentPath, err)
 		}
 		if !isRegular {
-			return nil
+			return fmt.Errorf("path %q must be a regular file", relPath)
 		}
 
 		if isMarkdownFile(name) {
@@ -168,6 +192,9 @@ func ScanWithOptions(vaultPath string, options ScanOptions) (ScanResult, error) 
 	}
 	sort.Strings(result.MarkdownFiles)
 	sort.Strings(result.ResourceFiles)
+	if err := ValidatePortableVaultPaths(result.MarkdownFiles, result.ResourceFiles); err != nil {
+		return ScanResult{}, err
+	}
 	result.resourceSet = model.BuildExactLookupPaths(result.ResourceFiles)
 	result.resourceLookup, result.resourceConflicts = model.BuildCanonicalLookupPaths(result.ResourceFiles)
 
@@ -329,12 +356,11 @@ func normalizeOverlayDeleted(vaultPath, outputPath string, input map[string]bool
 }
 
 func normalizeOverlayPath(rawPath string) (string, error) {
-	trimmed := strings.TrimSpace(rawPath)
-	if trimmed == "" {
+	if strings.TrimSpace(rawPath) == "" {
 		return "", errors.New("path must be non-empty")
 	}
 
-	normalized := strings.ReplaceAll(trimmed, `\`, "/")
+	normalized := strings.ReplaceAll(rawPath, `\`, "/")
 	if strings.ContainsRune(normalized, '\x00') {
 		return "", errors.New("path must not contain NUL bytes")
 	}
@@ -435,13 +461,31 @@ func isMarkdownFile(name string) bool {
 	return strings.EqualFold(filepath.Ext(name), ".md")
 }
 
+func ValidatePortableVaultPaths(markdownFiles, resourceFiles []string) error {
+	paths := make([]string, 0, len(markdownFiles)+len(resourceFiles))
+	paths = append(paths, markdownFiles...)
+	paths = append(paths, resourceFiles...)
+	sort.Strings(paths)
+	identities := make(map[string]string, len(paths))
+	for _, relPath := range paths {
+		if !internalfsutil.IsPortableSitePath(relPath) {
+			return &PathIdentityError{First: relPath, Reason: "a non-portable path segment"}
+		}
+		identity := model.CanonicalResourceLookupPath(relPath)
+		if previous := identities[identity]; previous != "" && previous != relPath {
+			return &PathIdentityError{First: previous, Second: relPath, Reason: "portable path identity collision"}
+		}
+		identities[identity] = relPath
+	}
+	return nil
+}
+
 func normalizeLookupPath(relPath string) string {
-	trimmed := strings.TrimSpace(relPath)
-	if trimmed == "" {
+	if relPath == "" {
 		return ""
 	}
 
-	normalized := strings.ReplaceAll(trimmed, `\`, "/")
+	normalized := strings.ReplaceAll(relPath, "\\", "/")
 	normalized = strings.TrimPrefix(normalized, "/")
 	if normalized == "" {
 		return ""

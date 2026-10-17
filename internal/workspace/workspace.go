@@ -765,7 +765,12 @@ func FingerprintWithOverlay(vault, output string, overlay map[string][]byte, del
 			}
 			rel = filepath.ToSlash(rel)
 		}
-		if path != root && strings.HasPrefix(filepath.Base(path), ".oxpio-") {
+		if path == root {
+			return nil
+		}
+		baseLower := strings.ToLower(filepath.Base(path))
+		relLower := strings.ToLower(rel)
+		if strings.HasPrefix(baseLower, ".oxpio-") {
 			if entry.IsDir() {
 				return fs.SkipDir
 			}
@@ -775,26 +780,32 @@ func FingerprintWithOverlay(vault, output string, overlay map[string][]byte, del
 			switch {
 			case internalfsutil.PathWithinRoot(outputResolved, path):
 				return fs.SkipDir
-			case strings.HasPrefix(filepath.Base(path), ".oxpio-publish-stage-") || strings.HasPrefix(filepath.Base(path), ".oxpio-edit-stage-") || strings.HasPrefix(filepath.Base(path), ".oxpio-file-stage-") || strings.HasPrefix(filepath.Base(path), ".oxpio-source-txn-"):
+			case strings.HasPrefix(baseLower, ".oxpio-publish-stage-") || strings.HasPrefix(baseLower, ".oxpio-edit-stage-") || strings.HasPrefix(baseLower, ".oxpio-file-stage-") || strings.HasPrefix(baseLower, ".oxpio-source-txn-"):
 				return fs.SkipDir
-			case rel == ".obsidian" || rel == ".oxpio/cache" || rel == ".oxpio/staging" || rel == ".oxpio/transactions":
+			case relLower == ".obsidian" || relLower == ".oxpio/cache" || relLower == ".oxpio/staging" || relLower == ".oxpio/transactions":
 				return fs.SkipDir
-			case rel == ".oxpio/themes" && selectedTheme == internalconfig.ThemeBaseID:
+			case relLower == ".oxpio/themes" && strings.EqualFold(selectedTheme, internalconfig.ThemeBaseID):
 				return fs.SkipDir
-			case strings.HasPrefix(rel, ".oxpio/themes/") && selectedTheme != "" && selectedTheme != internalconfig.ThemeBaseID && rel != ".oxpio/themes/"+selectedTheme && !strings.HasPrefix(rel, ".oxpio/themes/"+selectedTheme+"/"):
+			case strings.HasPrefix(relLower, ".oxpio/themes/") && selectedTheme != "" && !strings.EqualFold(selectedTheme, internalconfig.ThemeBaseID) && relLower != strings.ToLower(".oxpio/themes/"+selectedTheme) && !strings.HasPrefix(relLower, strings.ToLower(".oxpio/themes/"+selectedTheme+"/")):
 				return fs.SkipDir
-			case strings.HasPrefix(rel, ".oxpio/") && rel != ".oxpio/themes" && !strings.HasPrefix(rel, ".oxpio/themes/"):
+			case strings.HasPrefix(relLower, ".oxpio/") && relLower != ".oxpio/themes" && !strings.HasPrefix(relLower, ".oxpio/themes/"):
 				return fs.SkipDir
 			}
 		}
+		if entry.IsDir() {
+			return nil
+		}
+		if strings.HasPrefix(relLower, ".oxpio/themes/") && selectedTheme != "" && (strings.EqualFold(selectedTheme, internalconfig.ThemeBaseID) || !strings.HasPrefix(relLower, strings.ToLower(".oxpio/themes/"+selectedTheme+"/"))) {
+			return nil
+		}
+		if strings.HasPrefix(relLower, ".oxpio/") && !strings.HasPrefix(relLower, ".oxpio/themes/") {
+			return nil
+		}
 		if !entry.Type().IsRegular() {
-			return nil
-		}
-		if strings.HasPrefix(rel, ".oxpio/themes/") && selectedTheme != "" && (selectedTheme == internalconfig.ThemeBaseID || !strings.HasPrefix(rel, ".oxpio/themes/"+selectedTheme+"/")) {
-			return nil
-		}
-		if strings.HasPrefix(rel, ".oxpio/") && !strings.HasPrefix(rel, ".oxpio/themes/") {
-			return nil
+			if entry.Type()&fs.ModeSymlink != 0 {
+				return fmt.Errorf("fingerprint path %q must not be a symbolic link", rel)
+			}
+			return fmt.Errorf("fingerprint path %q must be a regular file", rel)
 		}
 		if deleted[rel] {
 			return nil

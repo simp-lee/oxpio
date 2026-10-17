@@ -15,6 +15,7 @@ import (
 	internaldiag "github.com/simp-lee/oxpio/internal/diag"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	internalmodel "github.com/simp-lee/oxpio/internal/model"
+	internalvault "github.com/simp-lee/oxpio/internal/vault"
 	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
@@ -121,12 +122,22 @@ func mutateUploadLocked(boundary internalfsutil.VaultOutputBoundary, request Upl
 			return MutationResult{}, configErr
 		}
 		root := cfg.AttachmentDirectory
-		if root == "" || (directory != root && !strings.HasPrefix(directory, root+"/")) {
+		if root == "" || !portablePathWithin(directory, root) {
 			return MutationResult{}, errors.New("attachment upload must stay inside attachments.directory")
 		}
 	}
 	if err := validateUploadTarget(boundary, directory, target); err != nil {
 		return MutationResult{}, err
+	}
+	if request.Kind == UploadAttachment {
+		scan, scanErr := internalvault.ScanWithOptions(boundary.VaultPath, internalvault.ScanOptions{OutputPath: boundary.OutputPath})
+		if scanErr != nil {
+			return MutationResult{}, uploadValidationError(boundary.VaultPath, scanErr)
+		}
+		resources := append(append([]string(nil), scan.ResourceFiles...), target)
+		if identityErr := internalvault.ValidatePortableVaultPaths(scan.MarkdownFiles, resources); identityErr != nil {
+			return MutationResult{}, uploadValidationError(boundary.VaultPath, identityErr)
+		}
 	}
 	targetAbsolute := filepathJoin(boundary.VaultPath, target)
 	if _, statErr := os.Lstat(targetAbsolute); statErr == nil {
@@ -153,9 +164,11 @@ func mutateUploadLocked(boundary internalfsutil.VaultOutputBoundary, request Upl
 		}
 		overlay := map[string][]byte{target: append([]byte(nil), request.Content...)}
 		analysis, analyzeErr := internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlay(boundary.VaultPath, boundary.OutputPath, 0, overlay, nil)
-		if analyzeErr != nil || len(analysis.Diagnostics) != 0 || analysis.Plan == nil {
+		if analyzeErr != nil || len(analysis.Diagnostics) != 0 || analysis.Plan == nil || analysis.Plan.Plan == nil {
 			diagnostics := analysis.Diagnostics
-			if !request.IncludeUnpublished && analysis.Plan != nil {
+			if !request.IncludeUnpublished && (analysis.Plan == nil || analysis.Plan.Plan == nil) {
+				diagnostics = redactUnavailableMutationDiagnostics(boundary.VaultPath, diagnostics)
+			} else if !request.IncludeUnpublished && analysis.Plan != nil && analysis.Plan.Plan != nil {
 				catalog := sourceCatalogFromAnalysis(analysis.Plan)
 				if hasHiddenMutationDiagnostics(diagnostics, catalog) {
 					return MutationResult{}, &MutationError{Err: ErrHiddenSource, Diagnostics: redactMutationDiagnostics(diagnostics, catalog)}
@@ -267,6 +280,16 @@ func mutateUploadLocked(boundary internalfsutil.VaultOutputBoundary, request Upl
 		result.Diagnostics = append(result.Diagnostics, directoryWarning("source committed; final input fingerprint could not be checked"))
 	}
 	return result, nil
+}
+
+func uploadValidationError(vaultPath string, cause error) *MutationError {
+	message := "upload rejected because the Vault input set is invalid"
+	for _, prefix := range unpublishedMutationPrefixes(vaultPath) {
+		if mutationMessageMentionsPath(cause.Error(), prefix) {
+			return &MutationError{Err: errors.New(message), Diagnostics: []internaldiag.Diagnostic{{Severity: internaldiag.SeverityError, Kind: internaldiag.KindSchema, Message: message}}}
+		}
+	}
+	return &MutationError{Err: cause, Diagnostics: []internaldiag.Diagnostic{{Severity: internaldiag.SeverityError, Kind: internaldiag.KindSchema, Message: cause.Error()}}}
 }
 
 func normalizeUploadDirectory(value string) (string, error) {

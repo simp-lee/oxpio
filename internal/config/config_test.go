@@ -258,6 +258,15 @@ func TestNormalizeSiteConfigPreservesEncodedBasePathTrailingSlash(t *testing.T) 
 	}
 }
 
+func TestNormalizeVersionsRejectsQueryAndFragmentPaths(t *testing.T) {
+	for _, value := range []string{"docs#draft", "docs?draft"} {
+		versions := &model.VersionsConfig{Root: value, Default: "v1", Entries: []model.VersionEntry{{ID: "v1", Label: "one", Source: "v1"}}}
+		if _, err := NormalizeSiteConfig(structuredConfig(model.SourceConfig{}, versions)); err == nil || !strings.Contains(err.Error(), "versions.root") {
+			t.Fatalf("NormalizeSiteConfig(%q) error = %v, want metadata path rejection", value, err)
+		}
+	}
+}
+
 func TestNormalizeSiteConfigRejectsEmptyBaseURLQueryOrFragment(t *testing.T) {
 	t.Parallel()
 

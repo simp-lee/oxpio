@@ -3,7 +3,6 @@ package vault
 import (
 	"path"
 	"sort"
-	"strings"
 
 	"github.com/simp-lee/oxpio/internal/model"
 )
@@ -26,16 +25,15 @@ func buildTagIndex(notes []*model.Note) map[string]*model.Tag {
 
 		seen := make(map[string]struct{}, len(note.Tags))
 		for _, tagName := range note.Tags {
-			for _, aggregate := range tagAggregates(tagName) {
-				if aggregate == "" {
-					continue
-				}
-				if _, ok := seen[aggregate]; ok {
-					continue
-				}
-				seen[aggregate] = struct{}{}
-				addTagMembership(tags, aggregate, note.RelPath)
+			normalized := normalizeTag(tagName)
+			if normalized == "" {
+				continue
 			}
+			if _, ok := seen[normalized]; ok {
+				continue
+			}
+			seen[normalized] = struct{}{}
+			addTagMembership(tags, normalized, note.RelPath)
 		}
 	}
 
@@ -61,26 +59,12 @@ func mergeNoteTags(existing []string, inline []string) []string {
 		}
 	}
 
+	sort.Strings(merged)
 	return merged
 }
 
 func normalizeTag(value string) string {
 	return model.NormalizeTagName(value)
-}
-
-func tagAggregates(tagName string) []string {
-	normalized := normalizeTag(tagName)
-	if normalized == "" {
-		return nil
-	}
-
-	segments := strings.Split(normalized, "/")
-	aggregates := make([]string, 0, len(segments))
-	for index := range segments {
-		aggregates = append(aggregates, strings.Join(segments[:index+1], "/"))
-	}
-
-	return aggregates
 }
 
 func addTagMembership(tags map[string]*model.Tag, tagName string, relPath string) {

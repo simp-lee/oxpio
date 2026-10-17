@@ -10,8 +10,91 @@ import (
 	"strings"
 	"testing"
 
+	internalagent "github.com/simp-lee/oxpio/internal/agent"
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
+	"github.com/simp-lee/oxpio/internal/model"
 )
+
+func TestValidateAgentInputPathUsesCaseInsensitiveReservedDirectories(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	for _, value := range []string{".OXPIO/input.md", ".ObSiDiAn/input.md"} {
+		if err := validateAgentInputPath(vault, output, value); err == nil {
+			t.Fatalf("validateAgentInputPath(%q) error = nil, want reserved-directory rejection", value)
+		}
+	}
+	if err := validateAgentInputPath(vault, output, ".draft.md"); err != nil {
+		t.Fatalf("validateAgentInputPath(.draft.md) error = %v, want allowed dot file", err)
+	}
+}
+
+func TestRedactHiddenCatalogDiagnosticsDoesNotHideVisibleSibling(t *testing.T) {
+	hiddenPath := "draft.md"
+	visiblePath := "article.md"
+	diagnostics := []internalagent.Diagnostic{
+		{Path: &hiddenPath, Category: "schema", Message: "hidden"},
+		{Path: &visiblePath, Category: "schema", Message: "visible"},
+	}
+	catalog := &model.SourceCatalog{Entries: []model.SourceCatalogEntry{
+		{RelPath: "_index.md", SectionPath: ".", Kind: "section", EffectivePublish: true},
+		{RelPath: hiddenPath, SectionPath: ".", Kind: "article", EffectivePublish: false},
+		{RelPath: visiblePath, SectionPath: ".", Kind: "article", EffectivePublish: true},
+	}}
+	redacted := redactHiddenCatalogDiagnostics(diagnostics, catalog, "")
+	if redacted[0].Path != nil || redacted[0].Message != "target is not available in the selected read scope" {
+		t.Fatalf("hidden diagnostic = %#v, want redacted", redacted[0])
+	}
+	if redacted[1].Path == nil || *redacted[1].Path != visiblePath || redacted[1].Message != "visible" {
+		t.Fatalf("visible diagnostic = %#v, want unchanged", redacted[1])
+	}
+}
+
+func TestRedactUnavailableDiagnosticsProtectsHiddenRootContentOnly(t *testing.T) {
+	vault := t.TempDir()
+	writeRootTestFile(t, vault, "oxpio.yaml", "title: Site\n")
+	writeRootTestFile(t, vault, "_index.md", "---\ntitle: Hidden\npublish: false\n---\n")
+	writeRootTestFile(t, vault, "secret.md", "---\ntitle: Secret\npublish: false\ntype: doc\n---\n")
+	configPath := "oxpio.yaml"
+	secretPath := "secret.md"
+	diagnostics := []internalagent.Diagnostic{{Path: &configPath, Message: "config"}, {Path: &secretPath, Message: "secret"}}
+	redacted := redactUnavailableDiagnostics(diagnostics, vault)
+	if redacted[0].Path == nil || *redacted[0].Path != configPath || redacted[0].Message != "config" {
+		t.Fatalf("config diagnostic = %#v, want unchanged", redacted[0])
+	}
+	if redacted[1].Path != nil || redacted[1].Message != "target is not available in the selected read scope" {
+		t.Fatalf("hidden diagnostic = %#v, want redacted", redacted[1])
+	}
+}
+
+func writeRootTestFile(t *testing.T, root, relPath, content string) {
+	t.Helper()
+	filename := filepath.Join(root, filepath.FromSlash(relPath))
+	if err := os.MkdirAll(filepath.Dir(filename), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filename, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRedactUnavailableDiagnosticsHidesMalformedHiddenSource(t *testing.T) {
+	vault := t.TempDir()
+	writeRootTestFile(t, vault, "oxpio.yaml", "title: Site\n")
+	writeRootTestFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\nunknown: true\n---\n")
+	writeRootTestFile(t, vault, "#secret.md", "---\ntitle: Secret\npublish: false\nunknown: true\n---\n")
+	pathValue := "private/_index.md"
+	diagnostics := []internalagent.Diagnostic{{Path: &pathValue, Message: "parse article private/_index.md"}}
+	redacted := redactUnavailableDiagnostics(diagnostics, vault)
+	if redacted[0].Path != nil || redacted[0].Message != "target is not available in the selected read scope" {
+		t.Fatalf("diagnostic = %#v, want generic hidden-source redaction", redacted[0])
+	}
+	hashPath := "#secret.md"
+	hashDiagnostics := []internalagent.Diagnostic{{Path: &hashPath, Message: "parse #secret.md"}}
+	hashRedacted := redactUnavailableDiagnostics(hashDiagnostics, vault)
+	if hashRedacted[0].Path != nil || hashRedacted[0].Message != "target is not available in the selected read scope" {
+		t.Fatalf("hash diagnostic = %#v, want generic hidden-source redaction", hashRedacted[0])
+	}
+}
 
 func TestExecuteShowsRootHelp(t *testing.T) {
 	stdout, stderr, err := executeForTest(t, testCommandDependencies(), nil)

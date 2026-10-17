@@ -1254,7 +1254,7 @@ func TestServeWatchRecoversWhenAmbiguousResourceCandidateIsDeleted(t *testing.T)
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for ambiguous resource rebuild")
 	}
-	waitForServeWatchErrorContains(t, watchErrors, "site plan has")
+	waitForServeWatchErrorContains(t, watchErrors, "collide on portable filesystems")
 	published, err := os.ReadFile(filepath.Join(outputPath, "index.html"))
 	if err != nil {
 		t.Fatal(err)
@@ -1298,11 +1298,21 @@ func TestPlannedWatchFilesKeepsExactResourceLookupNarrow(t *testing.T) {
 	}
 
 	files := plannedWatchFiles(vaultPath, filepath.Join(vaultPath, "public"))
-	if _, ok := files[filepath.Join(vaultPath, "Logo.svg")]; !ok {
-		t.Fatal("planned watch files omit the exact resource dependency")
+	for _, name := range []string{"Logo.svg", "LOGO.svg"} {
+		if _, ok := files[filepath.Join(vaultPath, name)]; !ok {
+			t.Fatalf("planned watch files omit collision candidate %q", name)
+		}
 	}
-	if _, ok := files[filepath.Join(vaultPath, "LOGO.svg")]; ok {
-		t.Fatal("planned watch files include an unreferenced canonical collision despite exact lookup")
+	loop := serveWatchLoop{vaultPath: vaultPath, outputPath: filepath.Join(vaultPath, "public"), configPath: filepath.Join(vaultPath, defaultConfigFilename), relevantWatchFiles: files, strictWatchInputs: true}
+	if !loop.shouldTrigger(filepath.Join(vaultPath, "new-resource.bin"), fsnotify.Create, false) {
+		t.Fatal("strict watch did not trigger for a new resource that can change path validation")
+	}
+	newDir := filepath.Join(vaultPath, "imported")
+	if err := os.Mkdir(newDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if !loop.shouldTrigger(newDir, fsnotify.Create, false) {
+		t.Fatal("strict watch did not trigger for an imported directory tree")
 	}
 }
 

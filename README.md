@@ -52,7 +52,7 @@ oxpio version
 oxpio --version
 ```
 
-All query and mutation commands that analyze Vault inputs accept the same optional `--output` boundary; when omitted, it defaults to `<vault>/public`.
+Vault-analyzing query and mutation commands accept the same optional `--output` boundary; when omitted, it defaults to `<vault>/public`. This includes dynamic `help`, `context`, `find`, `ls`, `read`, `tags`, `grep`, `related`, source/config mutations, uploads and directory mutations, plus theme initialization/validation/writes. `config read`, `theme read` and `theme context` only read their own files and do not need an output boundary. `theme preview --output` validates and excludes a custom formal output but never writes it.
 
 `init` accepts only a nonexistent or completely empty directory. It creates a strict `oxpio.yaml` and a root `_index.md`, and never overwrites existing files. `validate` is read-only and returns a failure for either errors or warnings. It resolves `--output` exactly like `publish` (default `<vault>/public`); pass the same value when validating a custom-output publish. Only that resolved path is excluded as the formal output boundary. OXPIO does not infer additional output boundaries from directory names or existing `.oxpio-output` markers; the normal fixed vault-input exclusions still apply. `publish` always uses the strict quality policy. Non-dry-run `publish`, `serve --watch`, and ordinary `editor` can replace the formal output; `publish --dry-run` performs generation and validation in ephemeral storage without changing output. Ordinary `serve` only serves the existing output. `editor --setup` and `editor --reset-password` only configure the account and do not start a publishing server. `serve --watch` uses the same shared publish service and reloads only after a successful publish. `serve` never registers editor or login routes.
 
@@ -64,7 +64,7 @@ Enable the single-account editor explicitly with:
 oxpio editor --vault ./vault --port 8080
 ```
 
-The command runs a strict publish before listening and serves the generated site anonymously. Configure an account interactively once with `oxpio editor --setup --vault ./vault`; setup requires a terminal, refuses an existing or invalid account, writes only an Argon2id PHC hash atomically, and never prints the password. The strict `editor` section contains only `username` and `passwordHash`:
+The command runs a strict publish before listening and serves the generated site anonymously. The default listener is loopback (`oxpio editor --listen 127.0.0.1 --port 8080`); binding all interfaces requires the explicit `--listen 0.0.0.0` option. Configure an account interactively once with `oxpio editor --setup --vault ./vault`; setup requires a terminal, refuses an existing or invalid account, writes only an Argon2id PHC hash atomically, and never prints the password. Use `oxpio editor --reset-password --vault ./vault` to replace the password while preserving the username; setup/reset do not publish or start a listener. The strict `editor` section contains only `username` and `passwordHash`:
 
 ```yaml
 editor:
@@ -73,6 +73,26 @@ editor:
 ```
 
 After login, mapped article and section pages show an in-memory edit link. The embedded editor uses a locally bundled CodeMirror 6 Markdown editor with Markdown shortcuts, a toolbar, a frontmatter form that hides YAML by default, and a source mode for advanced edits. It supports server-rendered draft previews, an authenticated single-file Markdown/image upload to the Vault root or a selected existing folder, and local assets without CDN requests. Uploads never overwrite files or create parent folders implicitly. Preview/Diff uses the bundled CodeMirror Merge extension while rich preview continues through OXPIO's Go renderer; uncommitted candidates use same-origin IndexedDB and browser preferences use local browser storage only, never triggering a build. Draft recovery offers restore or discard when the server version changes; discard and successful save clean the path's drafts, and storage-quota failures remain visible. It preserves submitted source bytes, validates and rebuilds before an atomic source/output transaction, and reports warnings or build failures. New articles are drafts by default (`title`, `publish: false`, `type: doc`); posts require an explicit date. The File Manager supports creating folders and Markdown files, renaming managed article sources, and confirmed deletion with section/resource protection, path validation, and SHA-256 CAS checks. Failures do not reload the public site. `serve` is anonymous and read-only; `serve --watch` may replace formal output through the shared publish service but never writes source or configuration.
+
+## Agent queries and the golden workflow
+
+OXPIO has no visitor-facing site search. `oxpio grep QUERY` is a local, native Agent source search over the normalized Markdown catalog: it performs Unicode-folded literal matching by default, supports RE2 with zero-width rejection, `source|body|title|path|metadata|all` scopes, explicit path/section/tag/type/status/publish filters, merged `--context` windows, stable JSON results and fixed resource limits. It never invokes external `grep`/`rg`, reads generated HTML, or changes the production related-recommendation algorithm. Use `oxpio related PATH` separately for production article recommendations; it accepts only a published ordinary article and returns the same pipeline results used by pages. Hidden source queries require explicit `--include-unpublished`.
+
+Machine mode uses the versioned JSON envelope `{schema, ok, command, data, diagnostics, changes}`. Diagnostics and changes use stable codes, severities, domains and SHA-256 hashes; exit codes distinguish success, quality/transaction failure, invalid arguments, CAS conflict, permission denial and I/O/service failure. `--content-file -` and `--edits-file -` are raw source bytes and strict PatchRequest JSON respectively; `upload --file -` is raw single-file bytes with `--name`. These stdin modes are not interchangeable. Agent operations are offline, do not parse human logs, and source-only mutations never publish. OXPIO does not provide MCP, a remote Agent API, GitHub Pages, S3, OSS or other deployment adapters; publish produces a local static output for a user-managed HTTP server or deployment tool.
+
+A complete offline workflow is:
+
+```bash
+oxpio init --vault ./vault
+# edit oxpio.yaml, root/section _index.md and Markdown articles
+oxpio theme init --vault ./vault                 # optional editable minimal theme
+# optionally select theme: minimal through config edit/write
+oxpio validate --vault ./vault --output ./site
+oxpio publish --vault ./vault --output ./site
+oxpio serve --vault ./vault --output ./site
+```
+
+Agents can use `help --agent`/`context`, then `find`/`ls`/`read`, `write` or exact `edit` with CAS, `validate`, optional `publish --dry-run`, and explicit `publish`. `theme context`/`theme read` → `theme write`/`theme edit` → `theme validate`/`theme preview` is the isolated theme feedback loop. Source-only Agent mutations never publish or reload; editor saves/uploads/deletes run strict analysis and publish before reload; failed editor builds keep the previous page and can be retried. `serve --watch` performs the initial strict publish, retries failed rebuilds on later valid events, and reloads only after success. Published output includes the configured RSS, Sitemap, robots, Sidebar and popover artifacts when enabled and can be served by any ordinary static HTTP server.
 
 ## Vault and section model
 
@@ -192,7 +212,7 @@ aliases?, slug?, type?, order?, author?, reviewed?, status?, audience?,
 productVersion?, series?, coverHash?, generator
 ```
 
-`context` is the normalized section title followed by ` / ` and the version label when a version is present. The `?` fields are omitted when absent after trimming; `publish` controls card eligibility rather than identity. `coverHash` is the SHA-256 of the cover bytes, while the cover path and banner metadata are not card inputs. Dates are UTC RFC3339 values, lists retain their normalized order, and `order` is numeric. All strings are normalized before rendering, and the JSON is UTF-8, compact, and emitted in the order above. Changes to any included field, including non-visible metadata such as `description`, `reviewed`, or `type`, change the content-addressed URL; changes to visible values also change PNG bytes.
+`context` is the normalized section title followed by ` / ` and the version label when a version is present. The `?` fields are omitted when absent after trimming; `publish` controls card eligibility rather than identity. `coverHash` is the SHA-256 of the cover bytes, while the cover path and banner metadata are not card inputs. Dates are UTC RFC3339 values. Tags are canonicalized, deduplicated and sorted by UTF-8 bytes; aliases retain the first text and YAML order after NFKC/case-fold deduplication; other lists retain their normalized order. `order` is numeric. All strings are normalized before rendering, and the JSON is UTF-8, compact, and emitted in the order above. Changes to any included field, including non-visible metadata such as `description`, `reviewed`, or `type`, change the content-addressed URL; changes to visible values also change PNG bytes.
 
 ## Assets, themes, and offline runtime
 

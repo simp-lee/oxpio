@@ -29,7 +29,7 @@ func newWriteCommand() *cobra.Command {
 		if publish && unpublish {
 			return errors.New("--publish and --unpublish are mutually exclusive")
 		}
-		data, err := readAgentInput(cmd, vault, contentFile, false)
+		data, err := readAgentInput(cmd, boundary.VaultPath, boundary.OutputPath, contentFile, false)
 		if err != nil {
 			return err
 		}
@@ -69,7 +69,7 @@ func newEditCommand() *cobra.Command {
 		if publish && unpublish {
 			return errors.New("--publish and --unpublish are mutually exclusive")
 		}
-		data, err := readAgentInput(cmd, vault, editsFile, true)
+		data, err := readAgentInput(cmd, boundary.VaultPath, boundary.OutputPath, editsFile, true)
 		if err != nil {
 			return err
 		}
@@ -168,7 +168,7 @@ func newUploadCommand() *cobra.Command {
 				return errors.New("--name is only valid with --file -")
 			}
 			name = path.Base(file)
-			data, err = readUploadInput(vault, file)
+			data, err = readUploadInput(boundary.VaultPath, boundary.OutputPath, file)
 		}
 		if err != nil {
 			return err
@@ -193,13 +193,13 @@ func newUploadCommand() *cobra.Command {
 	return cmd
 }
 
-func readUploadInput(vaultPath, value string) ([]byte, error) {
+func readUploadInput(vaultPath, outputPath, value string) ([]byte, error) {
 	vault, err := resolveVaultPath(vaultPath)
 	if err != nil {
 		return nil, err
 	}
-	if filepath.IsAbs(value) || strings.Contains(value, `\`) || path.Clean(value) != value || strings.HasPrefix(value, ".") || strings.ContainsAny(value, "?#\x00") {
-		return nil, errors.New("upload input must be a Vault-relative POSIX path")
+	if err := validateAgentInputPath(vault, outputPath, value); err != nil {
+		return nil, fmt.Errorf("upload input: %w", err)
 	}
 	_, file, info, err := internalfsutil.OpenContainedRegularFile(vault, value)
 	if err != nil {
@@ -309,7 +309,7 @@ func newConfigWriteCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		data, err := readAgentInput(cmd, vault, contentFile, false)
+		data, err := readAgentInput(cmd, boundary.VaultPath, boundary.OutputPath, contentFile, false)
 		if err != nil {
 			return err
 		}
@@ -334,7 +334,7 @@ func newConfigEditCommand() *cobra.Command {
 		if err != nil {
 			return err
 		}
-		data, err := readAgentInput(cmd, vault, editsFile, true)
+		data, err := readAgentInput(cmd, boundary.VaultPath, boundary.OutputPath, editsFile, true)
 		if err != nil {
 			return err
 		}
@@ -351,7 +351,7 @@ func newConfigEditCommand() *cobra.Command {
 	return cmd
 }
 
-func readAgentInput(cmd *cobra.Command, vaultPath, value string, jsonInput bool) ([]byte, error) {
+func readAgentInput(cmd *cobra.Command, vaultPath, outputPath, value string, jsonInput bool) ([]byte, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, errors.New("input file is required")
 	}
@@ -366,21 +366,38 @@ func readAgentInput(cmd *cobra.Command, vaultPath, value string, jsonInput bool)
 	if err != nil {
 		return nil, err
 	}
-	if filepath.IsAbs(value) || strings.Contains(value, `\`) || path.Clean(value) != value || strings.HasPrefix(value, ".") || strings.ContainsAny(value, "?#\x00") {
-		return nil, errors.New("input file must be a Vault-relative POSIX path or -")
+	if err := validateAgentInputPath(vault, outputPath, value); err != nil {
+		return nil, fmt.Errorf("input file: %w", err)
 	}
 	if jsonInput && strings.HasSuffix(strings.ToLower(value), ".md") {
 		return nil, errors.New("edits-file must be JSON")
 	}
 	absolute := filepath.Join(vault, filepath.FromSlash(value))
-	if internalfsutil.PathWithinRoot(filepath.Join(vault, ".oxpio"), absolute) || internalfsutil.PathWithinRoot(filepath.Join(vault, ".obsidian"), absolute) {
-		return nil, errors.New("input file is outside the Agent input boundary")
-	}
 	_, data, _, err := internalfsutil.ReadContainedRegularFile(vault, absolute)
 	if err != nil {
 		return nil, err
 	}
 	return data, nil
+}
+
+func validateAgentInputPath(vaultPath, outputPath, value string) error {
+	if value == "" || filepath.IsAbs(value) || isWindowsAbsolutePath(value) || strings.Contains(value, `\`) || path.Clean(value) != value || strings.ContainsAny(value, "?\x00") || !internalfsutil.IsPortableSitePath(value) {
+		return errors.New("must be a Vault-relative POSIX path or -")
+	}
+	if value == "." || value == ".." || strings.HasPrefix(value, "../") {
+		return errors.New("must be a Vault-relative POSIX file path")
+	}
+	for _, segment := range strings.Split(value, "/") {
+		switch strings.ToLower(segment) {
+		case ".oxpio", ".obsidian":
+			return errors.New("is outside the Agent input boundary")
+		}
+	}
+	candidate := filepath.Join(vaultPath, filepath.FromSlash(value))
+	if strings.TrimSpace(outputPath) != "" && internalfsutil.PathWithinRootAfterSymlinks(outputPath, candidate) {
+		return errors.New("must not read the formal output boundary")
+	}
+	return nil
 }
 
 func writeMutationCommandResult(cmd *cobra.Command, result internalapplication.MutationResult, operationErr error) error {

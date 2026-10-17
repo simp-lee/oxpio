@@ -91,6 +91,19 @@ func TestCheckRefusesActiveWorkspaceLockWithoutWriting(t *testing.T) {
 	}
 }
 
+func TestFingerprintRejectsNewInvalidFilesystemInputs(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeWorkspaceTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeWorkspaceTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	if err := os.Symlink(filepath.Join(vault, "_index.md"), filepath.Join(vault, "alias.md")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if _, err := Fingerprint(vault, output); err == nil || !strings.Contains(err.Error(), "symbolic link") {
+		t.Fatalf("Fingerprint() error = %v, want symlink rejection", err)
+	}
+}
+
 func TestFingerprintExcludesCustomOutputInsideVault(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(vault, "site")
@@ -128,6 +141,7 @@ func TestFingerprintTracksInputsButExcludesManagedState(t *testing.T) {
 	writeWorkspaceTestFile(t, vault, ".oxpio/themes/alpha/theme.yaml", "apiVersion: 1\nname: alpha\n")
 	writeWorkspaceTestFile(t, vault, ".oxpio/themes/beta/theme.yaml", "apiVersion: 1\nname: beta\n")
 	writeWorkspaceTestFile(t, vault, ".obsidian/app.json", "ignored")
+	writeWorkspaceTestFile(t, vault, ".OXPIO/unknown", "ignored")
 	writeWorkspaceTestFile(t, vault, "public/index.html", "generated")
 	before, err := Fingerprint(vault, output)
 	if err != nil {

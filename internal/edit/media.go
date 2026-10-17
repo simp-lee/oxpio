@@ -35,7 +35,8 @@ func (s *Server) serveMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-		if mediaPath := strings.TrimSpace(r.URL.Query().Get("path")); mediaPath != "" {
+		mediaPath := r.URL.Query().Get("path")
+		if strings.TrimSpace(mediaPath) != "" {
 			s.serveMediaFile(w, r, mediaPath)
 			return
 		}
@@ -64,7 +65,7 @@ func (s *Server) serveMediaList(w http.ResponseWriter) {
 			}
 			return nil
 		}
-		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() || !internalasset.HasImageExtension(entry.Name()) {
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() || !isManagedImagePath(entry.Name()) {
 			return nil
 		}
 		absolute, absoluteErr := filepath.Abs(current)
@@ -144,8 +145,8 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "upload exceeds 10 MiB", http.StatusRequestEntityTooLarge)
 		return
 	}
-	folder := strings.TrimSpace(r.FormValue("folder"))
-	if folder != "" {
+	folder := r.FormValue("folder")
+	if strings.TrimSpace(folder) != "" {
 		if err := validateManagedRelPath(folder); err != nil {
 			http.Error(w, "target folder is invalid", http.StatusBadRequest)
 			return
@@ -156,7 +157,7 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	relPath := name
-	if folder != "" {
+	if strings.TrimSpace(folder) != "" {
 		relPath = path.Join(folder, name)
 	}
 	if strings.EqualFold(path.Ext(name), ".md") {
@@ -195,14 +196,22 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 func validateMediaPath(relPath string) error {
-	relPath = strings.TrimSpace(relPath)
 	if err := validateManagedRelPath(relPath); err != nil {
 		return fmt.Errorf("media path %q is not a contained portable path", relPath)
 	}
-	if !internalasset.HasImageExtension(relPath) {
+	if !isManagedImagePath(relPath) {
 		return fmt.Errorf("media path %q is not a supported image", relPath)
 	}
 	return nil
+}
+
+func isManagedImagePath(relPath string) bool {
+	switch strings.ToLower(path.Ext(relPath)) {
+	case ".apng", ".avif", ".bmp", ".gif", ".heic", ".jpeg", ".jpg", ".jfif", ".pjp", ".pjpeg", ".png", ".svg", ".webp":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateUploadImage(name string, data []byte) error {

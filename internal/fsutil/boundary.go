@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 )
 
 // ErrPathOutsideRoot indicates that a configured input does not belong to its vault.
@@ -112,7 +113,7 @@ func ResolveVaultOutput(vaultPath string, outputPath string) (VaultOutputBoundar
 			return VaultOutputBoundary{}, fmt.Errorf("resolve output path %q: %w", absoluteOutput, relErr)
 		}
 		for _, segment := range strings.Split(relative, string(filepath.Separator)) {
-			if segment == ".oxpio" || segment == ".obsidian" {
+			if strings.EqualFold(segment, ".oxpio") || strings.EqualFold(segment, ".obsidian") {
 				return VaultOutputBoundary{}, fmt.Errorf("output path %q must not overlap reserved Vault directory %q", absoluteOutput, segment)
 			}
 		}
@@ -382,12 +383,13 @@ func inspectContainedPath(vaultRoot string, candidate string, wantDirectory bool
 		return "", nil, fmt.Errorf("vault path %q must be a resolved directory", root)
 	}
 
-	trimmed := strings.TrimSpace(candidate)
-	if trimmed == "" {
+	if strings.TrimSpace(candidate) == "" {
 		return "", nil, os.ErrNotExist
 	}
 
-	absolute := trimmed
+	// Path components are identities. Only use TrimSpace to detect an empty
+	// request; leading spaces are valid portable names and must not be removed.
+	absolute := candidate
 	if !filepath.IsAbs(absolute) {
 		absolute = filepath.Join(root, absolute)
 	}
@@ -479,10 +481,14 @@ func ReadContainedRegularFile(vaultRoot string, candidate string) (resolvedPath 
 // IsPortableSitePath reports whether every slash-separated output component is
 // usable as both a relative URL path and a regular filesystem name on supported platforms.
 func IsPortableSitePath(value string) bool {
-	// Raw fragment markers and percent escapes do not identify the same static
-	// resource in a browser as they do on disk, so they are not portable here.
+	if !utf8.ValidString(value) {
+		return false
+	}
+	// Fragment markers and percent escapes are valid source identities; route
+	// planning percent-encodes them exactly once when producing URLs. Windows
+	// reserved filename characters remain rejected here.
 	for component := range strings.SplitSeq(value, "/") {
-		if component == "" || strings.ContainsAny(component, `<>:"\|?*#%`) || strings.TrimRight(component, " .") != component {
+		if component == "" || strings.ContainsAny(component, `<>:"\|?*`) || strings.TrimRight(component, " .") != component {
 			return false
 		}
 		for _, character := range component {

@@ -14,6 +14,12 @@ import (
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 )
 
+func TestValidateSourceRelPathAllowsPortableFragmentIdentity(t *testing.T) {
+	if err := validateSourceRelPath("#draft.md"); err != nil {
+		t.Fatalf("validateSourceRelPath(#draft.md) error = %v, want accepted source identity", err)
+	}
+}
+
 func TestCoordinatorPreservesCASAndPublishesSourceAndOutputTogether(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")

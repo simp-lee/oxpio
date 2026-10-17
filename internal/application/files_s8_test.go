@@ -53,6 +53,23 @@ func TestMutateUploadRejectsNestedReservedManagementPaths(t *testing.T) {
 	}
 }
 
+func TestMutateUploadRejectsPortableIdentityCollisionBeforeCommit(t *testing.T) {
+	vault := t.TempDir()
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nattachments:\n  directory: attachments\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writePublishTestFile(t, vault, "attachments/Photo.bin", "existing")
+	if err := os.MkdirAll(filepath.Join(vault, "attachments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := MutateUpload(vault, "", UploadMutationRequest{Directory: "attachments", Name: "photo.bin", Kind: UploadAttachment, ExpectedHash: AbsentHash, Content: []byte("new")})
+	if err == nil || !strings.Contains(err.Error(), "collide on portable filesystems") {
+		t.Fatalf("MutateUpload() error = %v, want actionable portable collision", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(vault, "attachments", "photo.bin")); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("colliding upload target exists: %v", statErr)
+	}
+}
+
 func TestMutateDirectoryRenameRejectsChangedDestinationPostcondition(t *testing.T) {
 	vault := t.TempDir()
 	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")

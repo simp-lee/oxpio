@@ -19,7 +19,7 @@ import (
 
 const kindAmbiguousWikilink diag.Kind = "ambiguous_wikilink"
 
-// VaultResolver resolves Obsidian wikilinks against the immutable pass-1 index.
+// VaultResolver resolves note-style wikilinks against the immutable pass-1 index.
 type VaultResolver struct {
 	Index           *model.VaultIndex
 	CurrentNote     *model.Note
@@ -77,7 +77,7 @@ func (r *VaultResolver) ResolveWikilink(node *gmwikilink.Node) ([]byte, error) {
 	rawTarget := composeRawTarget(string(node.Target), string(node.Fragment))
 	sourceRef := r.consumeOutLink(node.Embed, rawTarget, false)
 
-	target := strings.TrimSpace(string(node.Target))
+	target := string(node.Target)
 	fragment := strings.TrimSpace(string(node.Fragment))
 	lookup := LookupTarget(r.Index, r.CurrentNote, target, fragment)
 	if len(lookup.Ambiguous) > 1 && !lookup.Unpublished {
@@ -124,7 +124,10 @@ func (r *VaultResolver) ResolveWikilink(node *gmwikilink.Node) ([]byte, error) {
 // best-match rules as the render-time resolver.
 func LookupTarget(idx *model.VaultIndex, current *model.Note, target string, fragment string) LookupResult {
 	resolver := &VaultResolver{Index: idx, CurrentNote: current}
-	return resolver.lookup(strings.TrimSpace(target), strings.TrimSpace(fragment))
+	if strings.TrimSpace(target) == "" {
+		target = ""
+	}
+	return resolver.lookup(target, strings.TrimSpace(fragment))
 }
 
 // LookupRouteTarget resolves a generated section or article route without
@@ -212,7 +215,9 @@ func sortedUnpublishedSections(sections map[string]*model.Section) []*model.Sect
 // relative Markdown links.
 func LookupPathTarget(idx *model.VaultIndex, current *model.Note, target string, fragment string) LookupResult {
 	resolver := &VaultResolver{Index: idx, CurrentNote: current}
-	target = strings.TrimSpace(target)
+	if strings.TrimSpace(target) == "" {
+		target = ""
+	}
 	fragment = strings.TrimSpace(fragment)
 	if note := resolver.exactPublicPathMatch(target); note != nil && inVersionScope(current, note) {
 		return finalizeLookup(resolutionResult{note: note}, fragment)
@@ -783,7 +788,7 @@ func noteLookupKey(target string) string {
 }
 
 func aliasLookupKey(target string) string {
-	return slug.Canonicalize(strings.TrimSpace(target))
+	return model.CanonicalAliasName(target)
 }
 
 func buildNoteHref(output *model.Note, source *model.Note, target *model.Note, fragment string, headingIDPrefix string) string {
@@ -892,7 +897,7 @@ func noteSiteOutputPath(note *model.Note) string {
 }
 
 func normalizeVaultPath(value string) string {
-	cleaned := strings.TrimSpace(strings.ReplaceAll(value, `\`, "/"))
+	cleaned := strings.ReplaceAll(value, `\`, "/")
 	cleaned = strings.TrimPrefix(cleaned, "/")
 	if cleaned == "" {
 		return ""
@@ -992,8 +997,8 @@ func composeRawTarget(target string, fragment string) string {
 	return target + "#" + fragment
 }
 
-// IsCanvasTarget reports whether a wikilink target refers to an Obsidian canvas file.
-func IsCanvasTarget(target string) bool {
+// IsCanvasResourceTarget reports whether a wikilink target refers to a canvas resource.
+func IsCanvasResourceTarget(target string) bool {
 	normalized := strings.TrimSpace(strings.ReplaceAll(target, `\`, "/"))
 	return strings.EqualFold(path.Ext(normalized), ".canvas")
 }
@@ -1008,7 +1013,7 @@ func canvasLookupResult(idx *model.VaultIndex, current *model.Note, target strin
 }
 
 func lookupCanvasResource(idx *model.VaultIndex, current *model.Note, target string) model.PathLookupResult {
-	if idx == nil || !IsCanvasTarget(target) {
+	if idx == nil || !IsCanvasResourceTarget(target) {
 		return model.PathLookupResult{}
 	}
 

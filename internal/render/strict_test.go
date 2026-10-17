@@ -9,6 +9,15 @@ import (
 	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 )
 
+func TestStrictNavigationDoesNotActivateQueryVariant(t *testing.T) {
+	if strictNavigationIsCurrent("/article/?x=1", "/article/", "https://example.test/article/") {
+		t.Fatal("query navigation variant was marked as current page")
+	}
+	if !strictNavigationIsCurrent("/article/", "/article/", "https://example.test/article/") {
+		t.Fatal("exact navigation route was not marked as current page")
+	}
+}
+
 func TestStrictArticleThemeReceivesRecommendationEvidence(t *testing.T) {
 	files, err := internaltheme.BaseFiles()
 	if err != nil {

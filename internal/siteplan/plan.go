@@ -9,7 +9,9 @@ import (
 	"image"
 	_ "image/jpeg"
 	_ "image/png"
+	"io/fs"
 	"net/url"
+	"os"
 	"path"
 	"path/filepath"
 	"regexp"
@@ -308,18 +310,25 @@ func rejectOutputSourceOverlap(vaultRoot, outputPath string) error {
 	if err != nil {
 		return fmt.Errorf("inspect output boundary inputs: %w", err)
 	}
-	allScan, err := vault.Scan(vaultRoot)
-	if err != nil {
-		return fmt.Errorf("inspect source boundary inputs: %w", err)
+	if !internalfsutil.PathWithinRoot(vaultRoot, resolvedOutput) {
+		return nil
 	}
-	for _, relPath := range allScan.MarkdownFiles {
-		if filepath.Base(relPath) != "_index.md" {
-			continue
-		}
-		sourcePath := filepath.Join(vaultRoot, filepath.FromSlash(relPath))
-		resolvedSource, resolveErr := internalfsutil.ResolvePathAfterSymlinks(sourcePath)
-		if resolveErr == nil && internalfsutil.PathWithinRoot(resolvedOutput, resolvedSource) {
-			return fmt.Errorf("output path %q overlaps section source %q", outputPath, relPath)
+	if info, statErr := os.Stat(resolvedOutput); statErr == nil && info.IsDir() {
+		walkErr := filepath.WalkDir(resolvedOutput, func(currentPath string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if entry.IsDir() || entry.Name() != "_index.md" || !entry.Type().IsRegular() {
+				return nil
+			}
+			relPath, relErr := filepath.Rel(vaultRoot, currentPath)
+			if relErr != nil {
+				return relErr
+			}
+			return fmt.Errorf("output path %q overlaps section source %q", outputPath, filepath.ToSlash(relPath))
+		})
+		if walkErr != nil {
+			return walkErr
 		}
 	}
 	for _, relPath := range scan.MarkdownFiles {
@@ -337,7 +346,19 @@ func rejectOutputSourceOverlap(vaultRoot, outputPath string) error {
 
 func diagnosticsWithError(collector *diag.Collector, location diag.Location, kind diag.Kind, err error) []diag.Diagnostic {
 	if err != nil {
-		collector.Errorf(kind, location, "%v", err)
+		var pathIdentity *vault.PathIdentityError
+		if errors.As(err, &pathIdentity) {
+			collector.Add(diag.Diagnostic{
+				Severity: diag.SeverityError,
+				Kind:     diag.KindSchema,
+				Location: diag.Location{Path: pathIdentity.First},
+				Field:    "path",
+				Target:   pathIdentity.Second,
+				Message:  err.Error(),
+			})
+		} else {
+			collector.Errorf(kind, location, "%v", err)
+		}
 	}
 	return collector.Diagnostics()
 }
@@ -544,7 +565,7 @@ func planVersions(config *model.VersionsConfig, vaultRoot string, sections map[s
 
 func normalizeVersionDirectory(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
-	if raw == "" || raw == "." || strings.Contains(raw, `\`) || strings.Contains(raw, "//") || strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "../") || strings.Contains(raw, "/../") || strings.Contains(raw, "/./") {
+	if raw == "" || raw == "." || strings.Contains(raw, `\`) || strings.Contains(raw, "//") || strings.ContainsAny(raw, "?#") || strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "../") || strings.Contains(raw, "/../") || strings.Contains(raw, "/./") {
 		return "", fmt.Errorf("must be a normalized vault-relative directory path")
 	}
 	cleaned := path.Clean(raw)
@@ -1734,7 +1755,7 @@ func breadcrumbs(section *model.Section) []model.Breadcrumb {
 }
 
 func reservedRoutes() map[string]struct{} {
-	values := []string{"/assets/", "/style.css", "/sitemap.xml", "/robots.txt", "/index.xml", "/404.html", "/.oxpio-output", "/.oxpio-cache/", "/_popover/", "/_oxpio/"}
+	values := []string{"/assets/", "/tags/", "/style.css", "/sitemap.xml", "/robots.txt", "/index.xml", "/404.html", "/.oxpio-output", "/.oxpio-cache/", "/_popover/", "/_oxpio/"}
 	result := make(map[string]struct{}, len(values))
 	for _, v := range values {
 		result[v] = struct{}{}
@@ -1842,6 +1863,12 @@ func claimRoute(plan *model.SitePlan, route, owner string, collector *diag.Colle
 		return
 	}
 	for reserved := range plan.ReservedRoutes {
+		// /tags/ is a reserved user namespace, but the planner itself owns
+		// generated tag pages in that namespace. Those generated pages still
+		// pass the normal route/output collision index below.
+		if reserved == "/tags/" && strings.HasPrefix(owner, "tag:") {
+			continue
+		}
 		if outputPathsConflict(destination, reservedDestination(reserved)) {
 			record(collector, diag.KindRoute, owner, "route %q conflicts with reserved output", route)
 			return

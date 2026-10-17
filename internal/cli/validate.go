@@ -39,7 +39,7 @@ func newValidateCommand() *cobra.Command {
 				return err
 			}
 			result, analyzeErr := internalanalyze.AnalyzeWithOutput(boundary.VaultPath, boundary.OutputPath)
-			diagnostics := redactHiddenDiagnostics(diagnosticsFromBuild(result.Diagnostics), result.Plan)
+			diagnostics := redactHiddenDiagnostics(diagnosticsFromBuild(result.Diagnostics), result.Plan, boundary.VaultPath)
 			if formatOf(cmd) != "json" {
 				if writeErr := writeValidationDiagnostics(cmd.ErrOrStderr(), diagnostics, analyzeErr); writeErr != nil {
 					return writeErr
@@ -72,7 +72,7 @@ func newValidateCommand() *cobra.Command {
 
 func writeValidationDiagnostics(writer io.Writer, diagnostics []internalagent.Diagnostic, analyzeErr error) error {
 	for _, diagnostic := range diagnostics {
-		if _, err := fmt.Fprintf(writer, "%s: %s\n", diagnostic.Severity, diagnostic.Message); err != nil {
+		if _, err := fmt.Fprintf(writer, "%s\n", formatCLIDiagnostic(diagnostic)); err != nil {
 			return err
 		}
 	}
@@ -81,6 +81,30 @@ func writeValidationDiagnostics(writer io.Writer, diagnostics []internalagent.Di
 		return err
 	}
 	return nil
+}
+
+func formatCLIDiagnostic(diagnostic internalagent.Diagnostic) string {
+	location := ""
+	if diagnostic.Path != nil && *diagnostic.Path != "" {
+		location = *diagnostic.Path
+		if diagnostic.Line != nil && *diagnostic.Line > 0 {
+			location += fmt.Sprintf(":%d", *diagnostic.Line)
+		}
+	}
+	if diagnostic.Field != nil && *diagnostic.Field != "" {
+		location += " [field=" + *diagnostic.Field + "]"
+	}
+	if diagnostic.Target != nil && *diagnostic.Target != "" {
+		location += " [target=" + *diagnostic.Target + "]"
+	}
+	prefix := diagnostic.Severity
+	if diagnostic.Category != "" {
+		prefix += " " + diagnostic.Category
+	}
+	if location != "" {
+		prefix += " " + location
+	}
+	return prefix + ": " + diagnostic.Message
 }
 
 type validationResult struct {

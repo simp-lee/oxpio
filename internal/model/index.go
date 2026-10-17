@@ -6,7 +6,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/simp-lee/oxpio/internal/slug"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 // VaultIndex is the immutable handoff between pass 1 indexing and pass 2 rendering.
@@ -223,7 +224,7 @@ func CanonicalResourceLookupPath(value string) string {
 		return ""
 	}
 
-	return slug.Canonicalize(normalized)
+	return cases.Fold().String(norm.NFC.String(normalized))
 }
 
 // CanonicalResourceLookupName returns the shared canonical form used for
@@ -234,11 +235,11 @@ func CanonicalResourceLookupName(value string) string {
 		return ""
 	}
 
-	return slug.Canonicalize(path.Base(normalized))
+	return cases.Fold().String(norm.NFC.String(path.Base(normalized)))
 }
 
 func normalizeLookupPathExact(value string) string {
-	normalized := strings.TrimSpace(strings.ReplaceAll(value, `\`, "/"))
+	normalized := strings.ReplaceAll(value, "\\", "/")
 	normalized = strings.TrimPrefix(normalized, "/")
 	if normalized == "" {
 		return ""

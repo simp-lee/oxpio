@@ -4,7 +4,15 @@ import (
 	"strings"
 
 	"github.com/simp-lee/oxpio/internal/slug"
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
+
+// CanonicalAliasName returns the identity used to deduplicate and resolve
+// aliases. The displayed alias text remains the first trimmed source value.
+func CanonicalAliasName(value string) string {
+	return cases.Fold().String(norm.NFKC.String(strings.TrimSpace(value)))
+}
 
 // NormalizeTagName applies the shared canonical tag contract used by indexing and rendering.
 func NormalizeTagName(value string) string {

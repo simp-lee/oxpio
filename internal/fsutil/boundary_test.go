@@ -27,13 +27,40 @@ func TestPortableSitePathComponents(t *testing.T) {
 		{path: "notes/CON .txt/index.html"},
 		{path: "notes/trailing./index.html"},
 		{path: "notes/archive*/index.html"},
-		{path: "notes/topic#draft/index.html"},
-		{path: "notes/topic%2Fd/index.html"},
+		{path: "notes/topic#draft/index.html", want: true},
+		{path: "notes/topic%2Fd/index.html", want: true},
+		{path: "notes/\xff.md", want: false},
 	}
 	for _, tt := range tests {
 		if got := IsPortableSitePath(tt.path); got != tt.want {
 			t.Errorf("IsPortableSitePath(%q) = %v, want %v", tt.path, got, tt.want)
 		}
+	}
+}
+
+func TestInspectContainedPathPreservesLeadingSpaceIdentity(t *testing.T) {
+	vault := t.TempDir()
+	section := filepath.Join(vault, " guide")
+	if err := os.Mkdir(section, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(section, "_index.md")
+	if err := os.WriteFile(file, []byte("source"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resolved, _, err := InspectContainedRegularFile(vault, filepath.Join(" guide", "_index.md"))
+	if err != nil || resolved != file {
+		t.Fatalf("InspectContainedRegularFile() = %q, %v; want %q", resolved, err, file)
+	}
+}
+
+func TestResolveVaultOutputRejectsCaseVariantManagementDirectory(t *testing.T) {
+	vault := t.TempDir()
+	if err := os.Mkdir(filepath.Join(vault, ".OXPIO"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ResolveVaultOutput(vault, filepath.Join(vault, ".OXPIO", "site")); err == nil {
+		t.Fatal("ResolveVaultOutput() accepted output below case-variant management directory")
 	}
 }
 

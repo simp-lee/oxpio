@@ -791,17 +791,14 @@ func strictNavigationIsCurrent(raw, currentRoute, canonical string) bool {
 		return false
 	}
 	if !parsed.IsAbs() && parsed.Host == "" {
-		return currentRoute == strictNavigationMatch(raw)
+		return strictNavigationMatch(raw) == strictNavigationMatch(currentRoute)
 	}
 
 	current, err := url.Parse(canonical)
 	if err != nil || !current.IsAbs() || !strings.EqualFold(parsed.Scheme, current.Scheme) || !strings.EqualFold(parsed.Host, current.Host) {
 		return false
 	}
-	if parsed.Path == "" {
-		parsed.Path = "/"
-	}
-	return strictNavigationMatch(parsed.EscapedPath()) == strictNavigationMatch(current.EscapedPath())
+	return strictNavigationMatch(navigationRelativeURI(parsed)) == strictNavigationMatch(navigationRelativeURI(current))
 }
 
 func strictNavigationMatch(raw string) string {
@@ -826,7 +823,30 @@ func strictNavigationMatch(raw string) string {
 	if strings.HasSuffix(escapedPath, "/") || path.Ext(match) == "" {
 		match += "/"
 	}
+	if parsed.RawQuery != "" {
+		match += "?" + parsed.RawQuery
+	}
+	if parsed.Fragment != "" {
+		match += "#" + parsed.Fragment
+	}
 	return match
+}
+
+func navigationRelativeURI(value *url.URL) string {
+	if value == nil {
+		return "/"
+	}
+	pathValue := value.EscapedPath()
+	if pathValue == "" {
+		pathValue = "/"
+	}
+	if value.RawQuery != "" {
+		pathValue += "?" + value.RawQuery
+	}
+	if value.Fragment != "" {
+		pathValue += "#" + value.Fragment
+	}
+	return pathValue
 }
 
 func strictSitePath(plan *model.SitePlan, route string) string {

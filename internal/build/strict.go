@@ -1783,7 +1783,7 @@ func validateStrictAsset(vaultRoot, raw, kind string) ([]byte, error) {
 	if raw == "" {
 		return nil, nil
 	}
-	if !internalasset.IsPublishableAssetPath(raw) || strings.Contains(raw, `\`) || strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || path.Clean(raw) != raw || strings.HasPrefix(path.Clean(raw), "../") || !internalfsutil.IsPortableSitePath(strings.ReplaceAll(raw, "%", "x")) {
+	if !internalasset.IsPublishableAssetPath(raw) || strings.ContainsAny(raw, "?#") || strings.Contains(raw, `\`) || strings.HasPrefix(raw, "/") || strings.HasPrefix(raw, "//") || path.Clean(raw) != raw || strings.HasPrefix(path.Clean(raw), "../") || !internalfsutil.IsPortableSitePath(strings.ReplaceAll(raw, "%", "x")) {
 		return nil, fmt.Errorf("%s %q must be a normalized vault-relative local asset", kind, raw)
 	}
 	lower := strings.ToLower(raw)

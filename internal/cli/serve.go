@@ -118,11 +118,17 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 	}
 
 	build := func() error {
-		if _, err := publishWithDependencies(deps, normalizedVaultPath, resolvedOutputPath, internalapplication.PublishOptions{
+		published, err := publishWithDependencies(deps, normalizedVaultPath, resolvedOutputPath, internalapplication.PublishOptions{
 			DiagnosticsWriter:          cmd.ErrOrStderr(),
 			TrackOutputTransactionPath: trackOutputTransactionPath,
-		}); err != nil {
-			return fmt.Errorf("build site: %w", err)
+		})
+		if err != nil {
+			if published != nil && published.Build != nil {
+				if diagnosticsErr := writePublishDiagnostics(cmd.ErrOrStderr(), published, normalizedVaultPath); diagnosticsErr != nil {
+					return diagnosticsErr
+				}
+			}
+			return fmt.Errorf("build site: %w", redactPublishError(err, published, normalizedVaultPath))
 		}
 		return nil
 	}
@@ -783,7 +789,7 @@ func (loop *serveWatchLoop) shouldTrigger(path string, op fsnotify.Op, wasWatche
 		return false
 	}
 	if isWatchableDirectoryEvent(cleanPath, op, wasWatchedDir) {
-		return !loop.strictWatchInputs
+		return true
 	}
 
 	if filepath.Clean(relPath) == filepath.Clean(filepath.Base(loop.configPath)) {
@@ -796,6 +802,13 @@ func (loop *serveWatchLoop) shouldTrigger(path string, op fsnotify.Op, wasWatche
 		return true
 	}
 	if strings.HasSuffix(strings.ToLower(relPath), ".md") {
+		return true
+	}
+	// A newly created or removed regular resource can introduce or repair a
+	// vault-wide portable-path collision, even when no published page references
+	// it yet. Rebuild those lifecycle events under strict watch mode so the
+	// analyzer's full-input validation remains observable.
+	if loop.strictWatchInputs && op&(fsnotify.Create|fsnotify.Remove|fsnotify.Rename) != 0 && isWatchableVaultFile(relPath) {
 		return true
 	}
 	_, relevant := loop.relevantWatchFiles[filepath.Clean(cleanPath)]
@@ -1123,7 +1136,8 @@ func plannedWatchFiles(vaultPath, outputPath string) map[string]struct{} {
 	// Failed analyses can still carry a partial plan whose asset references
 	// must remain watchable so repairing those assets can trigger a retry.
 	result, _ := internalanalyze.AnalyzeWithOutput(vaultPath, outputPath)
-	if result.Plan == nil {
+	if result.Plan == nil || result.Plan.Plan == nil {
+		addFailedAnalysisWatchInputs(files, vaultPath, outputPath)
 		return files
 	}
 	for _, relPath := range result.Plan.Scan.MarkdownFiles {
@@ -1170,6 +1184,32 @@ func plannedWatchFiles(vaultPath, outputPath string) map[string]struct{} {
 		add(source)
 	}
 	return files
+}
+
+func addFailedAnalysisWatchInputs(files map[string]struct{}, vaultPath, outputPath string) {
+	resolvedOutput := filepath.Clean(outputPath)
+	_ = filepath.WalkDir(vaultPath, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		clean := filepath.Clean(current)
+		if clean == resolvedOutput || pathWithinRoot(resolvedOutput, clean) {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			if clean != vaultPath && (filepath.Base(clean) == ".oxpio" || filepath.Base(clean) == ".obsidian") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.Type().IsRegular() {
+			files[clean] = struct{}{}
+		}
+		return nil
+	})
 }
 
 func (loop *serveWatchLoop) recursiveWatchDirs(root string) (map[string]struct{}, error) {

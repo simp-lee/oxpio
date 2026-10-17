@@ -10,6 +10,21 @@ import (
 	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
 )
 
+func TestStrictPreviewAllowsWarningsButNotErrors(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "site")
+	writeStrictFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeStrictFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeStrictFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\n---\n```dataview\nTABLE file.name\n```\n")
+	if result, err := BuildWithOptions(vault, output, Options{Strict: true}); err == nil || result == nil || result.WarningCount == 0 {
+		t.Fatalf("strict build = (%#v, %v), want warning failure", result, err)
+	}
+	result, err := BuildWithOptions(vault, output, Options{Strict: true, AllowWarnings: true, Ephemeral: true})
+	if err != nil || result == nil || result.WarningCount == 0 {
+		t.Fatalf("preview build = (%#v, %v), want warning-tolerant preview", result, err)
+	}
+}
+
 func TestNormalBuildRejectsMissingMarkdownAssetsAndPreservesPreviousOutput(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "site")

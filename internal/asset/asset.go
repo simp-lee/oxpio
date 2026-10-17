@@ -334,7 +334,7 @@ func isVaultRelativeAssetInput(value string) bool {
 	if cleaned == "" {
 		return false
 	}
-	if shouldKeepDestination(cleaned) {
+	if parsed, err := url.Parse(cleaned); err == nil && parsed.Scheme != "" {
 		return false
 	}
 	if strings.HasPrefix(cleaned, "//") {

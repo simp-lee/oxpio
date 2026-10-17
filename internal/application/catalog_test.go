@@ -41,6 +41,40 @@ func TestCatalogResolvesExactSourceAndPublicRouteIdentities(t *testing.T) {
 	}
 }
 
+func TestListDirectoryHidesCaseVariantManagementPaths(t *testing.T) {
+	vault := t.TempDir()
+	writeApplicationFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeApplicationFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeApplicationFile(t, vault, ".OXPIO/secret.txt", "secret")
+	snapshot, err := OpenSnapshot(vault, filepath.Join(vault, "public"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := snapshot.ListDirectory(".", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Path, ".OXPIO/secret.txt") {
+			t.Fatalf("case-variant management entry exposed: %#v", entries)
+		}
+	}
+}
+
+func TestListDirectoryPreservesLeadingSpacePathIdentity(t *testing.T) {
+	vault := t.TempDir()
+	writeApplicationFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeApplicationFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeApplicationFile(t, vault, " guide/_index.md", "---\ntitle: Guide\npublish: true\n---\n")
+	snapshot, err := OpenSnapshot(vault, filepath.Join(vault, "public"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshot.ListDirectory(" guide", false); err != nil {
+		t.Fatalf("ListDirectory() error = %v, want leading-space directory identity", err)
+	}
+}
+
 func TestSnapshotSharesNormalizedCatalogAndHiddenReadBoundary(t *testing.T) {
 	vault := t.TempDir()
 	writeApplicationFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")

@@ -54,7 +54,7 @@ func TestCandidatePathsIncludeAttachmentFolderFallback(t *testing.T) {
 	idx := &model.VaultIndex{AttachmentFolderPath: "assets/uploads"}
 
 	got := CandidatePathsWithAttachmentFolder(note, idx.AttachmentFolderPath, "diagram.png")
-	want := []string{"notes/diagram.png", "diagram.png", "assets/uploads/diagram.png"}
+	want := []string{"notes/diagram.png", "assets/uploads/diagram.png", "diagram.png"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("CandidatePathsWithAttachmentFolder() = %#v, want %#v", got, want)
 	}

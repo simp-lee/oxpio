@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
@@ -88,6 +89,9 @@ func IsFrontmatterAbsent(content []byte) (bool, error) {
 // ParseStrictFrontmatter. Callers must not maintain a second frontmatter
 // decoder for editor or preview behavior.
 func ParseStrictSource(relPath string, content []byte) (StrictSourceDocument, error) {
+	if err := validateSourceBytes(relPath, content); err != nil {
+		return StrictSourceDocument{}, err
+	}
 	parts, err := parseFrontmatterDocument(content)
 	if err != nil {
 		return StrictSourceDocument{}, err
@@ -139,6 +143,9 @@ func ParseStrictFrontmatter(scanResult ScanResult) (StrictFrontmatterResult, err
 		if err != nil {
 			return StrictFrontmatterResult{}, fmt.Errorf("read %q: %w", relPath, err)
 		}
+		if err := validateSourceBytes(relPath, content); err != nil {
+			return StrictFrontmatterResult{}, err
+		}
 		result.RawSources[relPath] = append([]byte(nil), content...)
 		frontmatterData, body, bodyStartLine, present, err := splitFrontmatter(content)
 		if err != nil {
@@ -175,6 +182,16 @@ func ParseStrictFrontmatter(scanResult ScanResult) (StrictFrontmatterResult, err
 		}
 	}
 	return result, nil
+}
+
+func validateSourceBytes(relPath string, content []byte) error {
+	if !utf8.Valid(content) {
+		return fmt.Errorf("source %q must be valid UTF-8", relPath)
+	}
+	if bytes.IndexByte(content, 0) >= 0 {
+		return fmt.Errorf("source %q must not contain NUL bytes", relPath)
+	}
+	return nil
 }
 
 type overlayFileInfo struct{}
@@ -326,7 +343,7 @@ func noteLookupName(relPath string) string {
 	return slug.Canonicalize(strings.TrimSpace(base))
 }
 
-func aliasLookupName(alias string) string { return slug.Canonicalize(strings.TrimSpace(alias)) }
+func aliasLookupName(alias string) string { return model.CanonicalAliasName(alias) }
 
 func strictMapping(data []byte, present bool) (map[string]*yaml.Node, error) {
 	if !present {
@@ -495,17 +512,23 @@ func decodeStrictArticle(relPath string, body []byte, bodyStartLine int, info in
 		}
 	}
 	if value, ok := fields["tags"]; ok {
-		note.Frontmatter.Tags, err = strictStringList(value, "tags")
+		var rawTags []string
+		rawTags, err = strictStringList(value, "tags")
 		if err != nil {
 			return nil, err
 		}
-		note.Tags = append([]string(nil), note.Frontmatter.Tags...)
+		note.Frontmatter.Tags = normalizeStrictTags(rawTags)
+		// The source-facing note keeps YAML order until the shared index pass
+		// merges inline hashtags and applies the canonical sorted tag list.
+		note.Tags = append([]string(nil), rawTags...)
 	}
 	if value, ok := fields["aliases"]; ok {
-		note.Frontmatter.Aliases, err = strictStringList(value, "aliases")
+		var rawAliases []string
+		rawAliases, err = strictStringList(value, "aliases")
 		if err != nil {
 			return nil, err
 		}
+		note.Frontmatter.Aliases = normalizeStrictAliases(rawAliases)
 		note.Aliases = append([]string(nil), note.Frontmatter.Aliases...)
 	}
 	if value, ok := fields["slug"]; ok {
@@ -612,19 +635,46 @@ func strictStringList(node *yaml.Node, name string) ([]string, error) {
 		return nil, fmt.Errorf("%s at line %d must be a sequence of strings", name, node.Line)
 	}
 	values := make([]string, 0, len(node.Content))
-	seen := make(map[string]struct{}, len(node.Content))
 	for _, item := range node.Content {
 		value, err := strictString(item, name, true)
 		if err != nil {
 			return nil, err
 		}
-		if _, exists := seen[value]; exists {
-			return nil, fmt.Errorf("%s contains duplicate value %q", name, value)
-		}
-		seen[value] = struct{}{}
 		values = append(values, value)
 	}
 	return values, nil
+}
+
+func normalizeStrictTags(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		normalized := model.NormalizeTagName(value)
+		if normalized == "" {
+			continue
+		}
+		if _, exists := seen[normalized]; exists {
+			continue
+		}
+		seen[normalized] = struct{}{}
+		result = append(result, normalized)
+	}
+	sort.Strings(result)
+	return result
+}
+
+func normalizeStrictAliases(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		identity := model.CanonicalAliasName(value)
+		if _, exists := seen[identity]; exists {
+			continue
+		}
+		seen[identity] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func strictTime(node *yaml.Node, name string) (time.Time, error) {

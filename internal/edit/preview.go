@@ -16,7 +16,6 @@ import (
 	"time"
 
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
-	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
 )
 
@@ -206,9 +205,8 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stageOutput := filepath.Join(root, "public")
-	built, buildErr := internalbuild.BuildWithOptions(s.vault, stageOutput, internalbuild.Options{
-		Strict:            true,
-		Ephemeral:         true,
+	built, buildErr := internalapplication.BuildCandidate(s.vault, stageOutput, internalapplication.CandidateBuildOptions{
+		AllowWarnings:     true,
 		SourceOverlay:     overlay,
 		SourceOutputPath:  s.output,
 		PreviewSourcePath: previewPath,

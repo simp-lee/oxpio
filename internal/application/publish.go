@@ -76,7 +76,7 @@ func Publish(vaultPath, outputPath string, options PublishOptions) (*PublishResu
 		}
 		defer func() { _ = os.RemoveAll(temporary) }()
 		result.Build, err = internalbuild.BuildWithOptions(boundary.VaultPath, temporary, internalbuild.Options{
-			Strict: true, Ephemeral: true, DiagnosticsWriter: options.DiagnosticsWriter,
+			Strict: true, Ephemeral: true,
 			SourceOutputPath: boundary.OutputPath, TrackOutputTransactionPath: options.TrackOutputTransactionPath,
 		})
 		if err != nil {
@@ -125,7 +125,7 @@ func Publish(vaultPath, outputPath string, options PublishOptions) (*PublishResu
 		}
 		var buildErr error
 		result.Build, buildErr = internalbuild.BuildWithOptions(boundary.VaultPath, boundary.OutputPath, internalbuild.Options{
-			Strict: true, DiagnosticsWriter: options.DiagnosticsWriter,
+			Strict:                     true,
 			TrackOutputTransactionPath: options.TrackOutputTransactionPath,
 			InputFingerprint:           fingerprint, ValidateInput: validateInput,
 		})

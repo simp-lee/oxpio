@@ -15,7 +15,7 @@ const (
 // publishable site content. Control directories and OXPIO transaction names
 // are reserved at any depth; oxpio.yaml is reserved only at the vault root.
 func IsReservedPath(relPath string) bool {
-	normalized := strings.TrimSpace(strings.ReplaceAll(relPath, `\`, "/"))
+	normalized := strings.ReplaceAll(relPath, `\`, "/")
 	normalized = strings.TrimPrefix(normalized, "/")
 	if normalized == "" {
 		return false

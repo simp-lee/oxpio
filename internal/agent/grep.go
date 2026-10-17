@@ -171,6 +171,19 @@ func Grep(snapshot internalapplication.Snapshot, options GrepOptions) (GrepResul
 		return GrepResult{}, grepError("INVALID_PATH", "parameter", "--section is not a normalized Vault-relative directory", 2)
 	}
 	if !options.IncludeUnpublished {
+		// --path is a directory-prefix filter, but callers commonly pass an
+		// exact source path. Check that identity before directory visibility so
+		// a hidden article cannot be turned into a successful empty search.
+		for _, prefix := range pathPrefixes {
+			if prefix == "" {
+				continue
+			}
+			for _, entry := range snapshot.Entries(true) {
+				if entry.RelPath == prefix && !entry.EffectivePublish {
+					return GrepResult{}, GrepError{Code: "PERMISSION_DENIED", Category: "permission", Message: "source is not available in the selected read scope", Exit: 4, Cause: internalapplication.ErrHiddenSource}
+				}
+			}
+		}
 		if (options.PathSet || options.Path != "" || len(options.Paths) > 0) && !snapshot.DirectoryVisibleForQuery(grepRootOrPrefix(pathPrefixes)) {
 			return GrepResult{}, GrepError{Code: "PERMISSION_DENIED", Category: "permission", Message: "source is not available in the selected read scope", Exit: 4, Cause: internalapplication.ErrHiddenSource}
 		}

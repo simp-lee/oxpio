@@ -12,6 +12,7 @@ import (
 	"sync"
 	"unicode/utf8"
 
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
@@ -196,9 +197,7 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 		}
 	}()
 	stageOutput := filepath.Join(stageRoot, "public")
-	built, err := internalbuild.BuildWithOptions(coordinator.vault, stageOutput, internalbuild.Options{
-		Strict:           true,
-		Ephemeral:        true,
+	built, err := internalapplication.BuildCandidate(coordinator.vault, stageOutput, internalapplication.CandidateBuildOptions{
 		SourceOverlay:    overlay,
 		SourceDeleted:    deleted,
 		SourceOutputPath: coordinator.output,
@@ -251,7 +250,7 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	if err != nil {
 		return TransactionResult{}, err
 	}
-	transaction, err := internalpublish.AdoptStaging(coordinator.vault, coordinator.output, stageOutput, internalpublish.Options{
+	transaction, err := internalapplication.AdoptCandidateStaging(coordinator.vault, coordinator.output, stageOutput, internalapplication.CandidatePublishOptions{
 		Durable:          true,
 		InputFingerprint: inputFingerprint,
 		RemoveAll:        editOutputRemoveAll,
@@ -369,7 +368,7 @@ func (coordinator *Coordinator) validateCreateParent(relPath string) error {
 }
 
 func validateSourceRelPath(relPath string) error {
-	if strings.TrimSpace(relPath) == "" || strings.Contains(relPath, `\`) || strings.HasPrefix(relPath, "/") || path.Clean(relPath) != relPath || strings.HasPrefix(relPath, "../") || strings.Contains(relPath, "?") || strings.Contains(relPath, "#") {
+	if strings.TrimSpace(relPath) == "" || strings.Contains(relPath, `\`) || strings.HasPrefix(relPath, "/") || path.Clean(relPath) != relPath || strings.HasPrefix(relPath, "../") || strings.Contains(relPath, "?") {
 		return fmt.Errorf("source path %q must be a contained normalized Markdown path", relPath)
 	}
 	for _, segment := range strings.Split(relPath, "/") {

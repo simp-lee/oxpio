@@ -21,10 +21,13 @@ import (
 	internaledit "github.com/simp-lee/oxpio/internal/edit"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	internalpublishpath "github.com/simp-lee/oxpio/internal/publishpath"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
 	internalsiteplan "github.com/simp-lee/oxpio/internal/siteplan"
+	internalvault "github.com/simp-lee/oxpio/internal/vault"
 	"github.com/simp-lee/oxpio/internal/workspace"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 )
 
 const defaultConfigFilename = internalconfig.Filename
@@ -82,7 +85,14 @@ type diagnosticError struct {
 	diagnostics []internalagent.Diagnostic
 }
 
-func (e diagnosticError) Error() string { return e.err.Error() }
+func (e diagnosticError) Error() string {
+	for _, diagnostic := range e.diagnostics {
+		if diagnostic.Message == "target is not available in the selected read scope" {
+			return diagnostic.Message
+		}
+	}
+	return e.err.Error()
+}
 func (e diagnosticError) Unwrap() error { return e.err }
 func (e diagnosticError) Diagnostics() []internalagent.Diagnostic {
 	return append([]internalagent.Diagnostic(nil), e.diagnostics...)
@@ -967,17 +977,27 @@ func sanitizeDiagnostics(diagnostics []internalagent.Diagnostic, args []string) 
 	for _, diagnostic := range diagnostics {
 		diagnostic.Message = sanitizeCLIText(diagnostic.Message, args)
 		diagnostic.Path = sanitizeDiagnosticPath(diagnostic.Path, args)
-		diagnostic.Target = sanitizeDiagnosticPath(diagnostic.Target, args)
+		diagnostic.Target = sanitizeDiagnosticTarget(diagnostic.Target, args)
 		result = append(result, diagnostic)
 	}
 	return result
+}
+
+func sanitizeDiagnosticTarget(value *string, args []string) *string {
+	if value != nil {
+		candidate := *value
+		if strings.HasPrefix(candidate, "/") || strings.HasPrefix(candidate, "//") || strings.Contains(candidate, "://") {
+			return &candidate
+		}
+	}
+	return sanitizeDiagnosticPath(value, args)
 }
 
 func sanitizeDiagnosticPath(value *string, args []string) *string {
 	if value == nil || strings.TrimSpace(*value) == "" {
 		return nil
 	}
-	candidate := filepath.ToSlash(strings.TrimSpace(*value))
+	candidate := filepath.ToSlash(*value)
 	if filepath.IsAbs(candidate) || isWindowsAbsolutePath(candidate) {
 		if relative, ok := relativeVaultPath(candidate, args); ok {
 			return &relative
@@ -1020,9 +1040,9 @@ func relativeVaultPath(candidate string, args []string) (string, bool) {
 	return relative, true
 }
 
-func redactHiddenDiagnostics(diagnostics []internalagent.Diagnostic, planned *internalsiteplan.Result) []internalagent.Diagnostic {
+func redactHiddenDiagnostics(diagnostics []internalagent.Diagnostic, planned *internalsiteplan.Result, vaultPath string) []internalagent.Diagnostic {
 	if planned == nil || planned.Plan == nil {
-		return redactUnavailableDiagnostics(diagnostics)
+		return redactUnavailableDiagnostics(diagnostics, vaultPath)
 	}
 	prefixes := make([]string, 0)
 	sectionPublish := make(map[string]bool)
@@ -1056,44 +1076,65 @@ func redactHiddenDiagnostics(diagnostics []internalagent.Diagnostic, planned *in
 	}
 	for _, source := range planned.Sources.Sections {
 		if source != nil && isSectionHidden(source.SectionPath) {
-			prefixes = append(prefixes, filepath.ToSlash(source.SectionPath), filepath.ToSlash(source.RelPath))
-		}
-	}
-	publicArticles := make(map[string]struct{}, len(planned.Plan.Articles))
-	for _, article := range planned.Plan.Articles {
-		if article != nil {
-			publicArticles[article.RelPath] = struct{}{}
+			prefixes = append(prefixes, filepath.ToSlash(source.RelPath))
+			if source.SectionPath != "." {
+				prefixes = append(prefixes, filepath.ToSlash(source.SectionPath))
+			}
 		}
 	}
 	for _, source := range planned.Sources.Sources {
 		if source.Article == nil {
 			continue
 		}
-		if _, ok := publicArticles[source.Article.RelPath]; !ok || isSectionHidden(source.Article.SectionPath) {
+		if !source.Publish || isSectionHidden(source.Article.SectionPath) {
 			prefixes = append(prefixes, filepath.ToSlash(source.RelPath))
 		}
 	}
 	return redactHiddenByPrefixes(diagnostics, prefixes)
 }
 
-func redactHiddenCatalogDiagnostics(diagnostics []internalagent.Diagnostic, catalog *model.SourceCatalog) []internalagent.Diagnostic {
+func redactHiddenCatalogDiagnostics(diagnostics []internalagent.Diagnostic, catalog *model.SourceCatalog, vaultPath string) []internalagent.Diagnostic {
 	if catalog == nil {
-		return redactUnavailableDiagnostics(diagnostics)
+		return redactUnavailableDiagnostics(diagnostics, vaultPath)
 	}
-	prefixes := make([]string, 0)
+	hiddenSections := make([]string, 0)
 	for _, entry := range catalog.Entries {
-		if entry.EffectivePublish {
-			continue
+		if entry.Kind == "section" && !entry.EffectivePublish {
+			hiddenSections = append(hiddenSections, entry.RelPath)
+			if entry.SectionPath != "." {
+				hiddenSections = append(hiddenSections, entry.SectionPath)
+			}
 		}
-		prefixes = append(prefixes, entry.RelPath, entry.SectionPath)
+	}
+	prefixes := append([]string(nil), hiddenSections...)
+	for _, entry := range catalog.Entries {
+		if entry.Kind == "article" && !entry.EffectivePublish {
+			prefixes = append(prefixes, entry.RelPath)
+		}
 	}
 	return redactHiddenByPrefixes(diagnostics, prefixes)
 }
 
-func redactUnavailableDiagnostics(diagnostics []internalagent.Diagnostic) []internalagent.Diagnostic {
-	result := make([]internalagent.Diagnostic, len(diagnostics))
-	copy(result, diagnostics)
+func redactUnavailableDiagnostics(diagnostics []internalagent.Diagnostic, vaultPath string) []internalagent.Diagnostic {
+	result := append([]internalagent.Diagnostic(nil), diagnostics...)
+	prefixes := unavailableHiddenPrefixes(vaultPath)
+	if len(prefixes) != 0 {
+		result = redactHiddenByPrefixes(result, prefixes)
+	}
 	for index := range result {
+		hidden := result[index].Category == string(internaldiag.KindPermission) || result[index].Code == "PERMISSION_DENIED"
+		if !hidden {
+			for _, prefix := range prefixes {
+				prefix = strings.Trim(strings.ReplaceAll(prefix, "\\\\", "/"), "/")
+				if prefix != "" && messageMentionsHiddenPath(result[index].Message, prefix) {
+					hidden = true
+					break
+				}
+			}
+		}
+		if !hidden {
+			continue
+		}
 		result[index].Path = nil
 		result[index].Target = nil
 		result[index].Message = "target is not available in the selected read scope"
@@ -1101,9 +1142,175 @@ func redactUnavailableDiagnostics(diagnostics []internalagent.Diagnostic) []inte
 	return result
 }
 
+func unavailableHiddenPrefixes(vaultPath string) []string {
+	if strings.TrimSpace(vaultPath) == "" {
+		return nil
+	}
+	resolved, err := internalfsutil.ResolveVaultPath(vaultPath)
+	if err != nil {
+		return nil
+	}
+	sections := make(map[string]bool)
+	hiddenFiles := make([]string, 0)
+	_ = filepath.WalkDir(resolved, func(current string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		rel, relErr := filepath.Rel(resolved, current)
+		if relErr != nil || rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if entry.IsDir() {
+			if rel == ".oxpio" || strings.HasPrefix(rel, ".oxpio/") || rel == ".obsidian" || strings.HasPrefix(rel, ".obsidian/") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+			return nil
+		}
+		data, readErr := os.ReadFile(current)
+		if readErr != nil {
+			return nil
+		}
+		publish, publishKnown := sourcePublishState(data)
+		if !publishKnown || !publish {
+			hiddenFiles = append(hiddenFiles, rel, current)
+			if entry.Name() == "_index.md" && publishKnown {
+				sections[path.Dir(rel)] = false
+			}
+		}
+		if entry.Name() != "_index.md" {
+			return nil
+		}
+		document, parseErr := internalvault.ParseStrictSource(rel, data)
+		if parseErr != nil || document.Source.Section == nil {
+			return nil
+		}
+		publish = document.Source.Section.Frontmatter.Publish != nil && *document.Source.Section.Frontmatter.Publish
+		sections[document.Source.Section.SectionPath] = publish
+		return nil
+	})
+	paths := append([]string(nil), hiddenFiles...)
+	rootPublish, rootKnown := sections["."]
+	if rootKnown && !rootPublish {
+		_ = filepath.WalkDir(resolved, func(current string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			rel, relErr := filepath.Rel(resolved, current)
+			if relErr != nil || rel == "." {
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			if entry.IsDir() {
+				if internalpublishpath.IsReservedPath(rel) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if internalpublishpath.IsReservedPath(rel) {
+				return nil
+			}
+			paths = append(paths, rel, current)
+			return nil
+		})
+		return paths
+	}
+	for sectionPath, publish := range sections {
+		if publish || sectionPath == "." {
+			continue
+		}
+		paths = append(paths, sectionPath, filepath.Join(resolved, filepath.FromSlash(sectionPath)))
+	}
+	return paths
+}
+
+func messageMentionsHiddenPath(message, prefix string) bool {
+	for _, marker := range []string{"\"", "'", " ", "/", "(", ")", ":"} {
+		if strings.Contains(message, marker+prefix+marker) || strings.Contains(message, marker+prefix+"/") || strings.Contains(message, marker+prefix+" ") {
+			return true
+		}
+	}
+	return strings.HasPrefix(message, prefix+" ") || strings.HasPrefix(message, prefix+"/")
+}
+
+func redactCLIError(err error, vaultPath string) error {
+	if err == nil {
+		return nil
+	}
+	redacted := redactUnavailableDiagnostics([]internalagent.Diagnostic{{Message: err.Error()}}, vaultPath)
+	if len(redacted) != 0 && redacted[0].Message == "target is not available in the selected read scope" {
+		return errors.New(redacted[0].Message)
+	}
+	return err
+}
+
+func redactPublishError(err error, result *internalapplication.PublishResult, vaultPath string) error {
+	if err == nil {
+		return nil
+	}
+	if result != nil && result.Build != nil {
+		diagnostics := redactHiddenCatalogDiagnostics(diagnosticsFromBuild(result.Build.Diagnostics), result.Build.Catalog, vaultPath)
+		for _, diagnostic := range diagnostics {
+			if diagnostic.Message == "target is not available in the selected read scope" {
+				return errors.New(diagnostic.Message)
+			}
+		}
+	}
+	return redactCLIError(err, vaultPath)
+}
+
+func sourcePublishState(data []byte) (bool, bool) {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	if len(lines) == 0 || strings.TrimPrefix(strings.TrimSpace(lines[0]), "\ufeff") != "---" {
+		return false, false
+	}
+	block := make([]string, 0, len(lines))
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" || trimmed == "..." {
+			break
+		}
+		block = append(block, line)
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte(strings.Join(block, "\n")), &document); err == nil && len(document.Content) != 0 && document.Content[0].Kind == yaml.MappingNode {
+		root := document.Content[0]
+		for index := 0; index+1 < len(root.Content); index += 2 {
+			if root.Content[index].Value == "publish" {
+				value := root.Content[index+1]
+				if value.Kind == yaml.ScalarNode && value.Tag == "!!bool" {
+					return strings.EqualFold(value.Value, "true"), true
+				}
+				return false, false
+			}
+		}
+	}
+	for _, line := range block {
+		trimmed := strings.TrimSpace(line)
+		key, value, ok := strings.Cut(trimmed, ":")
+		if !ok || strings.TrimSpace(key) != "publish" {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if comment := strings.IndexByte(value, '#'); comment >= 0 {
+			value = strings.TrimSpace(value[:comment])
+		}
+		if strings.EqualFold(value, "true") {
+			return true, true
+		}
+		if strings.EqualFold(value, "false") {
+			return false, true
+		}
+	}
+	return false, false
+}
+
 func redactHiddenByPrefixes(diagnostics []internalagent.Diagnostic, prefixes []string) []internalagent.Diagnostic {
 	isHidden := func(value string) bool {
-		value = filepath.ToSlash(strings.TrimSpace(value))
+		value = strings.Trim(filepath.ToSlash(value), "/")
 		for _, prefix := range prefixes {
 			prefix = strings.Trim(strings.ReplaceAll(prefix, "\\\\", "/"), "/")
 			if prefix == "." || prefix == "" || value == prefix || strings.HasPrefix(value, prefix+"/") {

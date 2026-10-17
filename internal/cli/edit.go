@@ -70,7 +70,12 @@ func newEditorCommand(deps commandDependencies) *cobra.Command {
 			}
 			published, err := publishWithDependencies(deps, boundary.VaultPath, boundary.OutputPath, internalapplication.PublishOptions{DiagnosticsWriter: cmd.ErrOrStderr()})
 			if err != nil {
-				return fmt.Errorf("publish site: %w", err)
+				if published != nil && published.Build != nil {
+					if diagnosticsErr := writePublishDiagnostics(cmd.ErrOrStderr(), published, boundary.VaultPath); diagnosticsErr != nil {
+						return diagnosticsErr
+					}
+				}
+				return fmt.Errorf("publish site: %w", redactPublishError(err, published, boundary.VaultPath))
 			}
 			buildResult := published.Build
 			if buildResult == nil {

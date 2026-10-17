@@ -34,11 +34,14 @@ func CandidatePaths(note *model.Note, attachmentFolderPath string, rawDestinatio
 
 	candidates := make([]string, 0, 3)
 	appendUniqueCandidate(&candidates, resolveVaultPath(note, normalized))
-	if shouldProbeVaultRoot(normalized) {
-		appendUniqueCandidate(&candidates, normalizePath(normalized))
-	}
+	// A bare resource name checks the explicitly configured attachment folder
+	// before the vault-relative fallback. This is the single resourcepath order
+	// shared by Markdown links, embeds and raw HTML references.
 	if isBarePath(normalized) {
 		appendUniqueCandidate(&candidates, attachmentFolderPathCandidate(attachmentFolderPath, normalized))
+	}
+	if shouldProbeVaultRoot(normalized) {
+		appendUniqueCandidate(&candidates, normalizePath(normalized))
 	}
 
 	return candidates
@@ -93,7 +96,7 @@ func normalizeDestination(rawDestination string) string {
 		baseDestination = decoded
 	}
 
-	baseDestination = strings.ReplaceAll(strings.TrimSpace(baseDestination), "\\", "/")
+	baseDestination = strings.ReplaceAll(baseDestination, "\\", "/")
 	if strings.HasPrefix(baseDestination, "//") {
 		return ""
 	}
@@ -150,7 +153,7 @@ func isBarePath(value string) bool {
 }
 
 func normalizePath(value string) string {
-	cleaned := strings.TrimSpace(strings.ReplaceAll(value, "\\", "/"))
+	cleaned := strings.ReplaceAll(value, "\\", "/")
 	cleaned = strings.TrimPrefix(cleaned, "/")
 	if cleaned == "" {
 		return ""

@@ -84,6 +84,18 @@ func TestMediaUploadUsesSelectedExistingFolderAndOneFileCAS(t *testing.T) {
 	}
 }
 
+func TestValidateMediaPathPreservesPortableFragmentFilenameIdentity(t *testing.T) {
+	if err := validateMediaPath("#image.png"); err != nil {
+		t.Fatalf("validateMediaPath(#image.png) error = %v, want accepted source identity", err)
+	}
+	if !isManagedImagePath("#image.png") {
+		t.Fatal("isManagedImagePath(#image.png) = false, want accepted source identity")
+	}
+	if err := validateMediaPath(" guide/image.png"); err != nil {
+		t.Fatalf("validateMediaPath( guide/image.png) error = %v, want accepted leading-space identity", err)
+	}
+}
+
 func TestValidateMediaPathRejectsProtectedEntries(t *testing.T) {
 	for _, pathValue := range []string{
 		"../image.png",

@@ -19,7 +19,6 @@ import (
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
-	internalpublish "github.com/simp-lee/oxpio/internal/publish"
 	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
@@ -316,7 +315,7 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	seed, predictedPath, predictedAfter := predictedFileManagerJournal(coordinator.vault, mutation, current)
 	seed.BackupPath = backupPath
 	seed.CleanupPaths = []string{stageRoot}
-	transaction, err := internalpublish.AdoptStaging(coordinator.vault, coordinator.output, stageOutput, internalpublish.Options{
+	transaction, err := internalapplication.AdoptCandidateStaging(coordinator.vault, coordinator.output, stageOutput, internalapplication.CandidatePublishOptions{
 		Durable:          true,
 		InputFingerprint: inputFingerprint,
 		RemoveAll:        editOutputRemoveAll,
@@ -464,7 +463,7 @@ func predictedFileManagerJournal(vault string, mutation fileManagerMutation, cur
 }
 
 func buildCandidate(vault, output string) (*internalbuild.BuildResult, error) {
-	return internalbuild.BuildWithOptions(vault, output, internalbuild.Options{Strict: true, Ephemeral: true})
+	return internalapplication.BuildCandidate(vault, output, internalapplication.CandidateBuildOptions{})
 }
 
 func applyFileManagerMutation(vault string, mutation fileManagerMutation, current fileManagerState, artifactRoots ...string) (rollback func() error, finalize func() error, expected fileManagerState, err error) {
@@ -1062,10 +1061,16 @@ func validateManagedDirectoryTarget(vault, output, relPath string) error {
 		return err
 	}
 	attachment := filepath.ToSlash(config.AttachmentDirectory)
-	if attachment != "" && (relPath == attachment || strings.HasPrefix(relPath, attachment+"/")) {
+	if attachment != "" && managedPathWithin(relPath, attachment) {
 		return fmt.Errorf("path %q is inside attachments.directory", relPath)
 	}
 	return nil
+}
+
+func managedPathWithin(candidate, root string) bool {
+	candidate = path.Clean(strings.ReplaceAll(candidate, `\\`, "/"))
+	root = path.Clean(strings.ReplaceAll(root, `\\`, "/"))
+	return strings.EqualFold(candidate, root) || strings.HasPrefix(strings.ToLower(candidate), strings.ToLower(root)+"/")
 }
 
 func isManagedReservedSegment(segment string) bool {
@@ -1078,7 +1083,7 @@ func isManagedReservedSegment(segment string) bool {
 }
 
 func validateManagedRelPath(relPath string) error {
-	if strings.TrimSpace(relPath) == "" || strings.Contains(relPath, `\`) || strings.HasPrefix(relPath, "/") || path.Clean(relPath) != relPath || relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") || strings.ContainsAny(relPath, "?#") {
+	if strings.TrimSpace(relPath) == "" || strings.Contains(relPath, `\`) || strings.HasPrefix(relPath, "/") || path.Clean(relPath) != relPath || relPath == "." || relPath == ".." || strings.HasPrefix(relPath, "../") || strings.ContainsAny(relPath, "?") {
 		return fmt.Errorf("path %q must be a contained normalized path", relPath)
 	}
 	for _, segment := range strings.Split(relPath, "/") {

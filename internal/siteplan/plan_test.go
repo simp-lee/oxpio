@@ -14,6 +14,32 @@ import (
 	"github.com/simp-lee/oxpio/internal/vault"
 )
 
+func TestBuildForOutputIgnoresInvalidEntriesInsideFormalOutput(t *testing.T) {
+	vaultRoot := t.TempDir()
+	writePlanFile(t, vaultRoot, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writePlanFile(t, vaultRoot, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	output := filepath.Join(vaultRoot, "public")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(target, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, filepath.Join(output, "alias")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if _, err := BuildForOutputWithConfig(vaultRoot, output, model.SiteConfig{Title: "Site", BaseURL: "https://example.test/"}); err != nil {
+		t.Fatalf("BuildForOutputWithConfig() error = %v, want formal output exclusion", err)
+	}
+}
+
+func TestReservedRoutesProtectTagNamespace(t *testing.T) {
+	if _, ok := reservedRoutes()["/tags/"]; !ok {
+		t.Fatal("reserved routes do not protect /tags/")
+	}
+}
+
 func TestBuildWithConfigRejectsAmbiguousVersionSourceIdentity(t *testing.T) {
 	vault := t.TempDir()
 	for _, dir := range []string{"", "docs/", "docs/v1/", "docs/v2/"} {
@@ -38,10 +64,15 @@ func TestBuildWithConfigRejectsAmbiguousVersionSourceIdentity(t *testing.T) {
 			return
 		}
 	}
+	for _, diagnostic := range result.Diagnostics {
+		if strings.Contains(diagnostic.Message, "docs/v1/Intro.md") && strings.Contains(diagnostic.Message, "docs/v1/intro.md") && strings.Contains(diagnostic.Message, "collide on portable filesystems") {
+			return
+		}
+	}
 	t.Fatalf("missing source identity collision diagnostic: %v", result.Diagnostics)
 }
 
-func TestBuildWithConfigVersionCorrespondenceIgnoresHiddenSectionIdentity(t *testing.T) {
+func TestBuildWithConfigRejectsHiddenSectionPathIdentityCollision(t *testing.T) {
 	vault := t.TempDir()
 	for _, dir := range []string{"", "docs/", "docs/v1/", "docs/v2/", "docs/v1/Guide/", "docs/v2/Guide/"} {
 		writePlanFile(t, vault, dir+"_index.md", "---\ntitle: A\npublish: true\n---\n")
@@ -53,24 +84,8 @@ func TestBuildWithConfigVersionCorrespondenceIgnoresHiddenSectionIdentity(t *tes
 		},
 	}}
 	result, err := BuildWithConfig(vault, cfg)
-	if err != nil {
-		t.Fatalf("BuildWithConfig: %v; diagnostics=%v", err, result.Diagnostics)
-	}
-	matched := 0
-	for _, section := range result.Plan.Sections {
-		if section.RelPath != "docs/v1/Guide" && section.RelPath != "docs/v2/Guide" {
-			continue
-		}
-		matched++
-		for _, versionID := range []string{"v1", "v2"} {
-			want := "/docs/" + versionID + "/Guide/"
-			if got := section.VersionRoutes[versionID]; got != want {
-				t.Errorf("%s selector to %s = %q, want published counterpart %q", section.RelPath, versionID, got, want)
-			}
-		}
-	}
-	if matched != 2 {
-		t.Fatalf("published matching section count = %d", matched)
+	if err == nil || !strings.Contains(diagnosticMessages(result.Diagnostics), "collide on portable filesystems") {
+		t.Fatalf("BuildWithConfig: %v; diagnostics=%v, want hidden path collision", err, result.Diagnostics)
 	}
 }
 
@@ -529,7 +544,7 @@ func TestBuildWithConfigNormalizesUnicodeRoutesAndClaimsReservedOutputs(t *testi
 		t.Fatal("BuildWithConfig() error = nil, want route collisions")
 	}
 	messages := diagnosticMessages(result.Diagnostics)
-	if !strings.Contains(messages, "conflicts") || !strings.Contains(messages, "reserved output") {
+	if !strings.Contains(messages, "collide on portable filesystems") {
 		t.Fatalf("diagnostics = %q", messages)
 	}
 }
@@ -541,11 +556,8 @@ func TestBuildWithConfigRejectsCaseInsensitiveAndReservedPhysicalRoutes(t *testi
 	writePlanFile(t, vault, "foo/_index.md", "---\ntitle: Lower\npublish: true\n---\n")
 	writePlanFile(t, vault, "CON.md", "---\ntitle: Device\npublish: true\ntype: page\n---\n")
 	result, err := BuildWithConfig(vault, model.SiteConfig{Title: "Site", BaseURL: "https://example.test/"})
-	if err == nil || !strings.Contains(diagnosticMessages(result.Diagnostics), "Windows-reserved") {
-		t.Fatalf("BuildWithConfig() error=%v diagnostics=%v, want physical route rejection", err, result.Diagnostics)
-	}
-	if !strings.Contains(diagnosticMessages(result.Diagnostics), "conflicts") {
-		t.Fatalf("diagnostics=%v, want case-insensitive route collision", result.Diagnostics)
+	if err == nil || !strings.Contains(diagnosticMessages(result.Diagnostics), "non-portable path segment") {
+		t.Fatalf("BuildWithConfig() error=%v diagnostics=%v, want portable path rejection", err, result.Diagnostics)
 	}
 }
 
@@ -611,9 +623,7 @@ func TestBuildWithConfigRejectsAssetCollisionAcrossFrontmatterAndMarkdown(t *tes
 func TestBuildWithConfigRejectsMissingLocalMarkdownAssets(t *testing.T) {
 	vault := t.TempDir()
 	writePlanFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
-	writePlanFile(t, vault, "images/Cafe\u0301.png", "decomposed")
 	writePlanFile(t, vault, "images/Café.png", "composed")
-	writePlanFile(t, vault, "files/Cafe\u0301", "decomposed")
 	writePlanFile(t, vault, "files/Café", "composed")
 	writePlanFile(t, vault, "article.md", "---\ntitle: Article\npublish: true\ntype: page\n---\n![Missing](missing.png)\n\n[Attachment](missing.pdf)\n\n![[missing-embed.png]]\n\n![[missing%2Epng]]\n\n![Outside](../outside.png)\n\n[Root attachment](/missing-root.pdf)\n\n[Fragment attachment](missing-fragment.pdf#page=2)\n\n![[images/CAF%C3%89%2Epng]]\n\n![[images/CAFÉ.png]]\n\n![Exact](images/Café.png)\n\n[Ambiguous attachment](/files/CAFÉ#part)\n\n[Windows attachment](C:/assets/manual.pdf)\n\n[Malformed attachment](missing%ZZ.pdf)\n\n![Remote](https://images.example.test/remote.png)\n\n[Remote attachment](https://files.example.test/manual.pdf)\n\n![[https://cdn.example.test/embed.png]]\n\n[Missing route](missing/)\n\n[Missing extensionless route](missing-page)\n\n[[Missing Note]]\n")
 
@@ -630,9 +640,6 @@ func TestBuildWithConfigRejectsMissingLocalMarkdownAssets(t *testing.T) {
 		"../outside.png":              14,
 		"/missing-root.pdf":           16,
 		"missing-fragment.pdf#page=2": 18,
-		"images/CAF%C3%89%2Epng":      20,
-		"images/CAFÉ.png":             22,
-		"/files/CAFÉ#part":            26,
 		"C:/assets/manual.pdf":        28,
 		"missing%ZZ.pdf":              30,
 	}

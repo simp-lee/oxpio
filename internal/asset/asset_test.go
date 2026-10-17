@@ -5,6 +5,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -134,6 +135,27 @@ func TestCandidatePathsRejectUNCPaths(t *testing.T) {
 				t.Fatalf("VaultRelativePathCandidate(%q) = %q, want empty", target, got)
 			}
 		})
+	}
+}
+
+func TestCandidatePathsPreferAttachmentsBeforeVaultRootFallback(t *testing.T) {
+	note := &model.Note{RelPath: "notes/current.md"}
+	got := CandidatePaths(note, "attachments", "poster.png")
+	want := []string{"notes/poster.png", "attachments/poster.png", "poster.png"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("CandidatePaths() = %#v, want %#v", got, want)
+	}
+}
+
+func TestCandidatePathsPreserveEncodedLeadingSpaceInFilename(t *testing.T) {
+	note := &model.Note{RelPath: "notes/current.md"}
+	got := CandidatePaths(note, "", "%20poster.png")
+	want := []string{"notes/ poster.png", " poster.png"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("CandidatePaths() = %#v, want %#v", got, want)
+	}
+	if !IsPublishableAssetPath("#poster.png") {
+		t.Fatal("IsPublishableAssetPath(#poster.png) = false, want valid source identity")
 	}
 }
 

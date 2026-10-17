@@ -87,6 +87,14 @@ func Find(snapshot internalapplication.Snapshot, includeUnpublished bool, pathPr
 		return FindResult{}, fmt.Errorf("--section: %w", err)
 	}
 	if !includeUnpublished {
+		if publish != nil && !*publish {
+			return FindResult{}, internalapplication.ErrHiddenSource
+		}
+		if pathPrefix != "" {
+			if entry, entryErr := snapshot.Entry(pathPrefix, true); entryErr == nil && !entry.EffectivePublish {
+				return FindResult{}, internalapplication.ErrHiddenSource
+			}
+		}
 		if pathPrefix != "" && !snapshot.DirectoryVisibleForQuery(pathPrefix) {
 			return FindResult{}, internalapplication.ErrHiddenSource
 		}
@@ -105,7 +113,7 @@ func Find(snapshot internalapplication.Snapshot, includeUnpublished bool, pathPr
 		if section != "" && entry.SectionPath != section && !strings.HasPrefix(entry.SectionPath, section+"/") {
 			continue
 		}
-		if publish != nil && entry.Publish != *publish {
+		if publish != nil && entry.EffectivePublish != *publish {
 			continue
 		}
 		items = append(items, sourceDTO(entry))
@@ -115,8 +123,7 @@ func Find(snapshot internalapplication.Snapshot, includeUnpublished bool, pathPr
 }
 
 func normalizeFindPath(value string) (string, error) {
-	value = strings.TrimSpace(value)
-	if value == "" || value == "." {
+	if strings.TrimSpace(value) == "" || value == "." {
 		return "", nil
 	}
 	return internalapplication.NormalizeDirectoryPath(value)

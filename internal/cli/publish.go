@@ -32,7 +32,7 @@ func writePublishSummary(stdout, stderr io.Writer, vaultPath, outputPath string,
 		if _, err := fmt.Fprintf(stdout, "Pages: %d, tag pages: %d, assets: %d, warnings: %d, errors: %d\n", result.Build.NotePages, result.Build.TagPages, len(result.Build.Assets), result.Build.WarningCount, result.Build.ErrorCount); err != nil {
 			return err
 		}
-		if err := writePublishDiagnostics(stderr, result); err != nil {
+		if err := writePublishDiagnostics(stderr, result, vaultPath); err != nil {
 			return err
 		}
 		if result.Build.OutputCleanupError != nil {
@@ -44,13 +44,13 @@ func writePublishSummary(stdout, stderr io.Writer, vaultPath, outputPath string,
 	return nil
 }
 
-func writePublishDiagnostics(stderr io.Writer, result *internalapplication.PublishResult) error {
+func writePublishDiagnostics(stderr io.Writer, result *internalapplication.PublishResult, vaultPath string) error {
 	if result == nil || result.Build == nil {
 		return nil
 	}
-	diagnostics := redactHiddenCatalogDiagnostics(diagnosticsFromBuild(result.Build.Diagnostics), result.Build.Catalog)
+	diagnostics := redactHiddenCatalogDiagnostics(diagnosticsFromBuild(result.Build.Diagnostics), result.Build.Catalog, vaultPath)
 	for _, diagnostic := range diagnostics {
-		if _, err := fmt.Fprintf(stderr, "%s: %s\n", diagnostic.Severity, diagnostic.Message); err != nil {
+		if _, err := fmt.Fprintf(stderr, "%s\n", formatCLIDiagnostic(diagnostic)); err != nil {
 			return err
 		}
 	}
@@ -72,10 +72,10 @@ func newPublishCommand(deps commandDependencies) *cobra.Command {
 			result, publishErr := publishWithDependencies(deps, boundary.VaultPath, boundary.OutputPath, internalapplication.PublishOptions{DryRun: dryRun})
 			if publishErr != nil {
 				if result != nil && result.Build != nil {
-					diagnostics := redactHiddenCatalogDiagnostics(diagnosticsFromBuild(result.Build.Diagnostics), result.Build.Catalog)
+					diagnostics := redactHiddenCatalogDiagnostics(diagnosticsFromBuild(result.Build.Diagnostics), result.Build.Catalog, boundary.VaultPath)
 					if formatOf(cmd) != "json" {
 						for _, diagnostic := range diagnostics {
-							if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "%s: %s\n", diagnostic.Severity, diagnostic.Message); writeErr != nil {
+							if _, writeErr := fmt.Fprintf(cmd.ErrOrStderr(), "%s\n", formatCLIDiagnostic(diagnostic)); writeErr != nil {
 								return writeErr
 							}
 						}

@@ -794,7 +794,7 @@ func NormalizeVersionsConfig(input *model.VersionsConfig) (*model.VersionsConfig
 }
 
 func validConfigRelativeDir(value string) bool {
-	if value == "" || value == "." || strings.Contains(value, `\`) || strings.Contains(value, "//") || strings.HasPrefix(value, "/") {
+	if value == "" || value == "." || strings.Contains(value, `\`) || strings.Contains(value, "//") || strings.ContainsAny(value, "?#") || strings.HasPrefix(value, "/") {
 		return false
 	}
 	cleaned := path.Clean(value)
@@ -825,8 +825,10 @@ func normalizeAttachmentDirectory(value string) (string, error) {
 	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || cleaned != trimmed || !internalfsutil.IsPortableSitePath(cleaned) {
 		return "", fmt.Errorf("attachments.directory must be a normalized vault-relative directory")
 	}
-	if cleaned == ".oxpio" || strings.HasPrefix(cleaned, ".oxpio/") || cleaned == ".obsidian" || strings.HasPrefix(cleaned, ".obsidian/") {
-		return "", fmt.Errorf("attachments.directory must not be .oxpio or .obsidian")
+	for _, segment := range strings.Split(cleaned, "/") {
+		if strings.EqualFold(segment, ".oxpio") || strings.EqualFold(segment, ".obsidian") {
+			return "", fmt.Errorf("attachments.directory must not be .oxpio or .obsidian")
+		}
 	}
 	return cleaned, nil
 }

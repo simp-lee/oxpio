@@ -43,11 +43,27 @@ func TestReadRejectsHiddenSourceWithoutLeakingItsIdentity(t *testing.T) {
 	}
 }
 
+func TestFindPreservesLeadingSpacePathIdentity(t *testing.T) {
+	vault := t.TempDir()
+	writeQueryFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeQueryFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeQueryFile(t, vault, " guide/_index.md", "---\ntitle: Guide\npublish: true\n---\n")
+	snapshot, err := internalapplication.OpenSnapshot(vault, filepath.Join(vault, "public"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := Find(snapshot, false, " guide", "section", "", nil)
+	if err != nil || len(result.Items) != 1 || result.Items[0].Path != " guide/_index.md" {
+		t.Fatalf("Find() = %#v, %v; want leading-space section", result, err)
+	}
+}
+
 func TestFindRejectsUnsafeFiltersAndProtectsHiddenPaths(t *testing.T) {
 	vault := t.TempDir()
 	writeQueryFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
 	writeQueryFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
 	writeQueryFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n")
+	writeQueryFile(t, vault, "private/article.md", "---\ntitle: Secret\npublish: true\ntype: doc\n---\nsecret\n")
 	snapshot, err := internalapplication.OpenSnapshot(vault, filepath.Join(vault, "public"))
 	if err != nil {
 		t.Fatal(err)
@@ -60,6 +76,16 @@ func TestFindRejectsUnsafeFiltersAndProtectsHiddenPaths(t *testing.T) {
 	}
 	if _, err := Find(snapshot, false, "private", "", "", nil); !errors.Is(err, internalapplication.ErrHiddenSource) {
 		t.Fatalf("Find() hidden path error = %v", err)
+	}
+	if _, err := Find(snapshot, false, "private/article.md", "", "", nil); !errors.Is(err, internalapplication.ErrHiddenSource) {
+		t.Fatalf("Find() hidden exact path error = %v", err)
+	}
+	if _, err := Find(snapshot, false, "", "", "", boolPointer(false)); !errors.Is(err, internalapplication.ErrHiddenSource) {
+		t.Fatalf("Find() unpublished filter error = %v", err)
+	}
+	all, err := Find(snapshot, true, "", "", "", boolPointer(false))
+	if err != nil || len(all.Items) != 2 || all.Items[0].EffectivePublish || all.Items[1].EffectivePublish {
+		t.Fatalf("Find() effective publish filter = %#v, %v", all, err)
 	}
 }
 
@@ -83,6 +109,8 @@ func TestTagsHonorUnpublishedScope(t *testing.T) {
 		t.Fatalf("all tags = %#v", all)
 	}
 }
+
+func boolPointer(value bool) *bool { return &value }
 
 func writeQueryFile(t *testing.T, root, relPath, content string) {
 	t.Helper()

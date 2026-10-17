@@ -53,6 +53,9 @@ func TestGrepUsesNativeLineAndPermissionSemantics(t *testing.T) {
 		t.Fatalf("unpublished matches = %#v, %v", all.Matches, err)
 	}
 	var hiddenErr GrepError
+	if _, err := Grep(snapshot, GrepOptions{Query: "secret", Path: "private/draft.md", PathSet: true}); err == nil || !errors.As(err, &hiddenErr) || hiddenErr.Code != "PERMISSION_DENIED" {
+		t.Fatalf("hidden exact path error = %v", err)
+	}
 	if _, err := Grep(snapshot, GrepOptions{Query: "secret", File: "draft.md"}); err == nil || !errors.As(err, &hiddenErr) || hiddenErr.Code != "PERMISSION_DENIED" {
 		t.Fatalf("hidden file error = %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
@@ -24,9 +25,11 @@ import (
 	internallink "github.com/simp-lee/oxpio/internal/link"
 	internalmodel "github.com/simp-lee/oxpio/internal/model"
 	internalpublish "github.com/simp-lee/oxpio/internal/publish"
+	internalpublishpath "github.com/simp-lee/oxpio/internal/publishpath"
 	"github.com/simp-lee/oxpio/internal/siteplan"
 	internalvault "github.com/simp-lee/oxpio/internal/vault"
 	"github.com/simp-lee/oxpio/internal/workspace"
+	"gopkg.in/yaml.v3"
 )
 
 const (
@@ -83,7 +86,15 @@ type MutationError struct {
 }
 
 func (e *MutationError) Error() string {
-	if e == nil || e.Err == nil {
+	if e == nil {
+		return "mutation failed"
+	}
+	for _, diagnostic := range e.Diagnostics {
+		if diagnostic.Message == "target is not available in the selected read scope" {
+			return diagnostic.Message
+		}
+	}
+	if e.Err == nil {
 		return "mutation failed"
 	}
 	return e.Err.Error()
@@ -318,10 +329,12 @@ func mutateSourceLocked(boundary internalfsutil.VaultOutputBoundary, request Sou
 		deleted[pathValue] = true
 	}
 	analysis, analyzeErr := internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlay(boundary.VaultPath, boundary.OutputPath, 0, overlay, deleted)
-	if analyzeErr != nil || hasAnalysisErrors(analysis.Diagnostics) || analysis.Plan == nil {
+	if analyzeErr != nil || hasAnalysisErrors(analysis.Diagnostics) || analysis.Plan == nil || analysis.Plan.Plan == nil {
 		diagnostics := analysis.Diagnostics
-		if analysis.Plan != nil {
+		if analysis.Plan != nil && analysis.Plan.Plan != nil {
 			diagnostics = redactMutationDiagnostics(diagnostics, sourceCatalogFromAnalysis(analysis.Plan))
+		} else if !request.IncludeUnpublished {
+			diagnostics = redactUnavailableMutationDiagnostics(boundary.VaultPath, diagnostics)
 		}
 		if analyzeErr == nil {
 			analyzeErr = internalanalyze.Failure(diagnostics)
@@ -509,6 +522,170 @@ func hiddenMutationDiagnostic(item internaldiag.Diagnostic, catalog *internalmod
 		return true
 	}
 	return false
+}
+
+func redactUnavailableMutationDiagnostics(vaultPath string, diagnostics []internaldiag.Diagnostic) []internaldiag.Diagnostic {
+	if len(diagnostics) == 0 {
+		return nil
+	}
+	prefixes := unpublishedMutationPrefixes(vaultPath)
+	result := append([]internaldiag.Diagnostic(nil), diagnostics...)
+	for index := range result {
+		hidden := result[index].Kind == internaldiag.KindPermission
+		if !hidden {
+			for _, prefix := range prefixes {
+				prefix = strings.Trim(strings.ReplaceAll(prefix, "\\\\", "/"), "/")
+				if prefix != "" && (mutationMessageMentionsPath(result[index].Message, prefix) || mutationDiagnosticPathHidden(result[index].Location.Path, prefix) || mutationDiagnosticPathHidden(result[index].Target, prefix)) {
+					hidden = true
+					break
+				}
+			}
+		}
+		if hidden {
+			result[index].Location = internaldiag.Location{}
+			result[index].Target = ""
+			result[index].Message = "target is not available in the selected read scope"
+		}
+	}
+	return result
+}
+
+func mutationMessageMentionsPath(message, prefix string) bool {
+	for _, marker := range []string{"\"", "'", " ", "/", "(", ")", ":"} {
+		if strings.Contains(message, marker+prefix+marker) || strings.Contains(message, marker+prefix+"/") || strings.Contains(message, marker+prefix+" ") {
+			return true
+		}
+	}
+	return strings.HasPrefix(message, prefix+" ") || strings.HasPrefix(message, prefix+"/")
+}
+
+func mutationDiagnosticPathHidden(value, prefix string) bool {
+	value = strings.Trim(filepath.ToSlash(value), "/")
+	prefix = strings.Trim(filepath.ToSlash(prefix), "/")
+	return value == prefix || strings.HasPrefix(value, prefix+"/")
+}
+
+func unpublishedMutationPrefixes(vaultPath string) []string {
+	resolved, err := internalfsutil.ResolveVaultPath(vaultPath)
+	if err != nil {
+		return nil
+	}
+	sections := make(map[string]bool)
+	files := make([]string, 0)
+	_ = filepath.WalkDir(resolved, func(current string, entry fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return nil
+		}
+		rel, relErr := filepath.Rel(resolved, current)
+		if relErr != nil || rel == "." {
+			return nil
+		}
+		rel = filepath.ToSlash(rel)
+		if entry.IsDir() {
+			if internalpublishpath.IsReservedPath(rel) {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !entry.Type().IsRegular() || !strings.HasSuffix(strings.ToLower(entry.Name()), ".md") {
+			return nil
+		}
+		data, readErr := os.ReadFile(current)
+		if readErr != nil {
+			return nil
+		}
+		publish, publishKnown := mutationSourcePublishState(data)
+		if !publishKnown || !publish {
+			if entry.Name() == "_index.md" && publishKnown {
+				sections[path.Dir(rel)] = false
+			}
+			files = append(files, rel, current)
+		}
+		return nil
+	})
+	prefixes := append([]string(nil), files...)
+	rootPublish, rootKnown := sections["."]
+	if rootKnown && !rootPublish {
+		_ = filepath.WalkDir(resolved, func(current string, entry fs.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return nil
+			}
+			rel, relErr := filepath.Rel(resolved, current)
+			if relErr != nil || rel == "." {
+				return nil
+			}
+			rel = filepath.ToSlash(rel)
+			if entry.IsDir() {
+				if internalpublishpath.IsReservedPath(rel) {
+					return filepath.SkipDir
+				}
+				return nil
+			}
+			if !internalpublishpath.IsReservedPath(rel) {
+				prefixes = append(prefixes, rel, current)
+			}
+			return nil
+		})
+		return prefixes
+	}
+	for section, publish := range sections {
+		if !publish {
+			prefixes = append(prefixes, section, filepath.Join(resolved, filepath.FromSlash(section)))
+		}
+	}
+	return prefixes
+}
+
+func mutationSourcePublishState(data []byte) (bool, bool) {
+	lines := strings.Split(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n")
+	if len(lines) == 0 || strings.TrimPrefix(strings.TrimSpace(lines[0]), "\ufeff") != "---" {
+		return false, false
+	}
+	block := make([]string, 0, len(lines))
+	for _, line := range lines[1:] {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "---" || trimmed == "..." {
+			break
+		}
+		block = append(block, line)
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte(strings.Join(block, "\n")), &document); err != nil || len(document.Content) == 0 || document.Content[0].Kind != yaml.MappingNode {
+		return rawMutationPublishState(block)
+	}
+	root := document.Content[0]
+	for index := 0; index+1 < len(root.Content); index += 2 {
+		if root.Content[index].Value == "publish" {
+			value := root.Content[index+1]
+			if value.Kind == yaml.ScalarNode && value.Tag == "!!bool" {
+				return strings.EqualFold(value.Value, "true"), true
+			}
+			return false, false
+		}
+	}
+	return false, false
+}
+
+func rawMutationPublishState(lines []string) (bool, bool) {
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		key, value, ok := strings.Cut(trimmed, ":")
+		if !ok || strings.TrimSpace(key) != "publish" {
+			continue
+		}
+		value = strings.TrimSpace(value)
+		if comment := strings.IndexByte(value, '#'); comment >= 0 {
+			value = strings.TrimSpace(value[:comment])
+		}
+		if strings.EqualFold(value, "true") {
+			return true, true
+		}
+		if strings.EqualFold(value, "false") {
+			return false, true
+		}
+		return false, false
+	}
+	return false, false
 }
 
 func redactMutationDiagnostics(diagnostics []internaldiag.Diagnostic, catalog *internalmodel.SourceCatalog) []internaldiag.Diagnostic {
@@ -1029,7 +1206,7 @@ func minInt(a, b int) int {
 	return b
 }
 
-var publishScalarPattern = regexp.MustCompile(`(?m)^([ \t]*publish[ \t]*:[ \t]*)(true|false)([ \t]*(?:#.*)?(?:\r?\n|$))`)
+var publishScalarPattern = regexp.MustCompile(`(?mi)^([ \t]*publish[ \t]*:[ \t]*)(true|false)([ \t]*(?:#.*)?(?:\r?\n|$))`)
 
 func sourcePublishScalar(source []byte) (bool, bool) {
 	frontmatterEnd := sourceFrontmatterEnd(source)
@@ -1041,7 +1218,7 @@ func sourcePublishScalar(source []byte) (bool, bool) {
 		return false, false
 	}
 	value := string(source[match[4]:match[5]])
-	return value == "true", true
+	return strings.EqualFold(value, "true"), true
 }
 
 func applyPublishOverride(original, candidate []byte, wanted *bool) ([]byte, error) {
@@ -1073,21 +1250,41 @@ func applyPublishOverride(original, candidate []byte, wanted *bool) ([]byte, err
 }
 
 func sourceFrontmatterEnd(source []byte) int {
-	if !bytes.HasPrefix(source, []byte("---\n")) && !bytes.HasPrefix(source, []byte("---\r\n")) {
+	start := 0
+	if bytes.HasPrefix(source, []byte{0xef, 0xbb, 0xbf}) {
+		start = 3
+	}
+	lineEnd := func(offset int) (line []byte, next int, ok bool) {
+		if offset >= len(source) {
+			return nil, offset, false
+		}
+		end := offset
+		for end < len(source) && source[end] != '\r' && source[end] != '\n' {
+			end++
+		}
+		next = end
+		if next < len(source) {
+			next++
+			if source[end] == '\r' && next < len(source) && source[next] == '\n' {
+				next++
+			}
+		}
+		return source[offset:end], next, true
+	}
+	first, next, ok := lineEnd(start)
+	if !ok || !bytes.Equal(first, []byte("---")) {
 		return -1
 	}
-	start := bytes.Index(source, []byte("\n---"))
-	if start < 0 {
-		return -1
+	for offset := next; ; {
+		line, nextLine, ok := lineEnd(offset)
+		if !ok {
+			return -1
+		}
+		if bytes.Equal(line, []byte("---")) || bytes.Equal(line, []byte("...")) {
+			return nextLine
+		}
+		offset = nextLine
 	}
-	end := start + len("\n---")
-	for end < len(source) && source[end] != '\n' {
-		end++
-	}
-	if end < len(source) {
-		end++
-	}
-	return end
 }
 
 // applyPatchBytes applies Pi-style byte patches. Content is the strict JSON

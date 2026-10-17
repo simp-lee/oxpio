@@ -35,7 +35,10 @@ type BuildResult struct {
 
 // Options controls the strict section-based build entry point.
 type Options struct {
-	Strict            bool
+	Strict bool
+	// AllowWarnings permits isolated editor previews to render while returning
+	// analyzer warnings in the preview response. Analysis errors still fail.
+	AllowWarnings     bool
 	DiagnosticsWriter io.Writer
 	// TrackOutputTransactionPath is called when the publisher creates a
 	// temporary output transaction path.
@@ -63,7 +66,8 @@ type Options struct {
 
 // BuildWithOptions analyzes the vault once and publishes the resulting
 // canonical section plan. Normal builds continue after warnings; strict builds
-// reject both warnings and errors before opening a staging publisher.
+// reject both warnings and errors before opening a staging publisher unless
+// AllowWarnings is explicitly used for an isolated preview.
 func BuildWithOptions(vaultPath, outputPath string, options Options) (*BuildResult, error) {
 	sourceOutputPath := outputPath
 	if options.SourceOutputPath != "" {
@@ -75,7 +79,7 @@ func BuildWithOptions(vaultPath, outputPath string, options Options) (*BuildResu
 	}
 	result := buildResultFromAnalysis(analysis.Diagnostics)
 	result.Catalog = sourceCatalog(analysis.Plan)
-	if analyzeErr != nil || result.ErrorCount > 0 || options.Strict && result.WarningCount > 0 {
+	if analyzeErr != nil || result.ErrorCount > 0 || options.Strict && !options.AllowWarnings && result.WarningCount > 0 {
 		if analyzeErr != nil {
 			return result, analyzeErr
 		}
@@ -107,7 +111,7 @@ func BuildWithConfig(vaultPath, outputPath string, cfg model.SiteConfig, options
 	}
 	result := buildResultFromAnalysis(planned.Diagnostics)
 	result.Catalog = sourceCatalog(planned)
-	if analyzeErr != nil || result.ErrorCount > 0 || options.Strict && result.WarningCount > 0 {
+	if analyzeErr != nil || result.ErrorCount > 0 || options.Strict && !options.AllowWarnings && result.WarningCount > 0 {
 		if analyzeErr != nil {
 			return result, analyzeErr
 		}

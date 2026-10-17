@@ -1,6 +1,8 @@
 package vault
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -29,6 +31,61 @@ func TestParseStrictFrontmatterSeparatesSectionsAndRequiresExplicitArticleFields
 	wantRaw := "---\ntitle: Article\npublish: true\ntype: post\ndate: 2026-04-05\ntags: [go, docs]\naliases: [Guide]\nauthor: Alice\nstatus: deprecated\n---\nbody\n"
 	if string(result.RawSources["article.md"]) != wantRaw {
 		t.Fatalf("raw source = %q", result.RawSources["article.md"])
+	}
+}
+
+func TestStrictMetadataNormalizesTagsAndDeduplicatesAliases(t *testing.T) {
+	vaultPath := t.TempDir()
+	writeVaultFile(t, vaultPath, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeVaultFile(t, vaultPath, "article.md", "---\ntitle: Article\npublish: true\ntype: doc\ntags: [\" #Docs \", docs, \"!!!\", z/a, A]\naliases: [\"Résumé\", \"Re\u0301sume\u0301\", Guide, \" guide \"]\n---\nbody\n")
+	scan, err := Scan(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := ParseStrictFrontmatter(scan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	note := parsed.Articles[0]
+	if got, want := strings.Join(note.Frontmatter.Tags, ","), "a,docs,z/a"; got != want {
+		t.Fatalf("normalized frontmatter tags = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(note.Frontmatter.Aliases, ","), "Résumé,Guide"; got != want {
+		t.Fatalf("deduplicated aliases = %q, want %q", got, want)
+	}
+	collector := diag.NewCollector()
+	if _, err := BuildStrictIndex(scan, parsed, parsed.Articles, nil, collector, BuildIndexOptions{Concurrency: 1}); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := strings.Join(note.Tags, ","), "a,docs,z/a"; got != want {
+		t.Fatalf("indexed tags = %q, want %q", got, want)
+	}
+}
+
+func TestParseStrictFrontmatterRejectsInvalidUTF8AndNUL(t *testing.T) {
+	vaultPath := t.TempDir()
+	writeVaultFile(t, vaultPath, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	writeVaultFile(t, vaultPath, "invalid.md", "---\ntitle: Invalid\npublish: true\ntype: doc\n---\n")
+	invalidPath := filepath.Join(vaultPath, "invalid.md")
+	if err := os.WriteFile(invalidPath, append([]byte("---\ntitle: Invalid\npublish: true\ntype: doc\n---\n"), 0xff), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scan, err := Scan(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseStrictFrontmatter(scan); err == nil || !strings.Contains(err.Error(), "valid UTF-8") {
+		t.Fatalf("invalid UTF-8 parse error = %v", err)
+	}
+	if err := os.WriteFile(invalidPath, []byte("---\ntitle: Invalid\npublish: true\ntype: doc\n---\nbody\x00\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	scan, err = Scan(vaultPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseStrictFrontmatter(scan); err == nil || !strings.Contains(err.Error(), "NUL") {
+		t.Fatalf("NUL parse error = %v", err)
 	}
 }
 

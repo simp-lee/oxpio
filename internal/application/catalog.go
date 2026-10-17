@@ -279,8 +279,7 @@ type DirectoryEntry struct {
 // contents. Hidden source subtrees remain inaccessible unless explicitly
 // requested by the caller.
 func (snapshot Snapshot) ListDirectory(relPath string, includeUnpublished bool) ([]DirectoryEntry, error) {
-	relPath = strings.TrimSpace(relPath)
-	if relPath == "" {
+	if strings.TrimSpace(relPath) == "" {
 		relPath = "."
 	}
 	if relPath != "." {
@@ -321,7 +320,7 @@ func (snapshot Snapshot) ListDirectory(relPath string, includeUnpublished bool) 
 		if relPath != "." {
 			child = path.Join(relPath, name)
 		}
-		if child == ".oxpio" || strings.HasPrefix(child, ".oxpio/") || child == ".obsidian" || strings.HasPrefix(child, ".obsidian/") {
+		if managementPath(child) {
 			continue
 		}
 		if entry.IsDir() {
@@ -405,7 +404,7 @@ func (snapshot Snapshot) directoryVisible(relPath string) bool {
 
 // NormalizeDirectoryPath validates a Vault-relative POSIX directory path.
 func NormalizeDirectoryPath(value string) (string, error) {
-	if value != strings.TrimSpace(value) {
+	if strings.TrimSpace(value) == "" && value != "" {
 		return "", errors.New("path must be a normalized Vault-relative POSIX path")
 	}
 	if value == "" {
@@ -422,20 +421,29 @@ func NormalizeDirectoryPath(value string) (string, error) {
 }
 
 func normalizeVaultPath(value string) (string, error) {
-	if strings.HasPrefix(value, "/") || strings.Contains(value, `\`) || strings.ContainsAny(value, "?#\x00") {
+	if strings.HasPrefix(value, "/") || strings.Contains(value, `\`) || strings.ContainsAny(value, "?\x00") {
 		return "", errors.New("path must be a normalized Vault-relative POSIX path")
 	}
 	cleaned := path.Clean(value)
 	if cleaned != value || cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
 		return "", errors.New("path must be a normalized Vault-relative POSIX path")
 	}
-	if cleaned == ".oxpio" || strings.HasPrefix(cleaned, ".oxpio/") || cleaned == ".obsidian" || strings.HasPrefix(cleaned, ".obsidian/") {
-		return "", errors.New("path is outside the content source boundary")
+	if managementPath(cleaned) {
+		return "", errors.New("path is outside the reserved content source boundary")
 	}
 	if !internalfsutil.IsPortableSitePath(cleaned) {
 		return "", errors.New("path contains a non-portable path segment")
 	}
 	return cleaned, nil
+}
+
+func managementPath(value string) bool {
+	for _, segment := range strings.Split(value, "/") {
+		if strings.EqualFold(segment, ".oxpio") || strings.EqualFold(segment, ".obsidian") {
+			return true
+		}
+	}
+	return false
 }
 
 func NormalizeSourcePath(value string) (string, error) {

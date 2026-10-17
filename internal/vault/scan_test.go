@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -40,6 +41,21 @@ func TestScanCollectsSourcesWithExplicitAttachmentDirectory(t *testing.T) {
 	}
 }
 
+func TestScanRejectsUnpublishedAndUnreferencedPortablePathViolations(t *testing.T) {
+	t.Parallel()
+	vaultPath := t.TempDir()
+	writeVaultFile(t, vaultPath, "private/CON.md", "# hidden")
+	writeVaultFile(t, vaultPath, "unused/Cafe\u0301.png", "one")
+	writeVaultFile(t, vaultPath, "unused/Café.png", "two")
+	_, err := Scan(vaultPath)
+	if err == nil {
+		t.Fatal("Scan() error = nil, want portable path/collision error")
+	}
+	if !strings.Contains(err.Error(), "non-portable path segment") && !strings.Contains(err.Error(), "collide on portable filesystems") {
+		t.Fatalf("Scan() error = %v, want portable path/collision error", err)
+	}
+}
+
 func TestScanExcludesResolvedOutputAndReservedDirectories(t *testing.T) {
 	t.Parallel()
 	vaultPath := t.TempDir()
@@ -66,6 +82,7 @@ func TestScanNormalizesOverlayPathsAndExcludesOutput(t *testing.T) {
 	got, err := ScanWithOptions(vaultPath, ScanOptions{
 		OutputPath: outputPath,
 		OverlayMarkdown: map[string][]byte{
+			` notes/draft.md`:    []byte("# Leading Draft"),
 			`notes\\draft.md`:    []byte("# Draft"),
 			"public/injected.md": []byte("# Injected"),
 			"publicity.md":       []byte("# Publicity"),
@@ -76,10 +93,10 @@ func TestScanNormalizesOverlayPathsAndExcludesOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ScanWithOptions() error = %v", err)
 	}
-	if !reflect.DeepEqual(got.MarkdownFiles, []string{"notes/draft.md", "publicity.md"}) {
+	if !reflect.DeepEqual(got.MarkdownFiles, []string{" notes/draft.md", "notes/draft.md", "publicity.md"}) {
 		t.Fatalf("MarkdownFiles = %#v", got.MarkdownFiles)
 	}
-	if string(got.OverlayMarkdown["notes/draft.md"]) != "# Draft" || got.OverlayDeleted["notes/deleted.md"] != true {
+	if string(got.OverlayMarkdown[" notes/draft.md"]) != "# Leading Draft" || string(got.OverlayMarkdown["notes/draft.md"]) != "# Draft" || got.OverlayDeleted["notes/deleted.md"] != true {
 		t.Fatal("overlay paths were not normalized")
 	}
 	if _, ok := got.OverlayMarkdown["public/injected.md"]; ok {
@@ -106,6 +123,17 @@ func TestScanRejectsOverlayTraversalAndIgnoresObsidianChanges(t *testing.T) {
 	}
 	if _, err := ScanWithOptions(vaultPath, ScanOptions{OverlayMarkdown: map[string][]byte{"../escape.md": []byte("# Unsafe")}}); err == nil {
 		t.Fatal("traversal overlay was accepted")
+	}
+}
+
+func TestScanRejectsNonReservedSymlinkInputs(t *testing.T) {
+	vaultPath := t.TempDir()
+	writeVaultFile(t, vaultPath, "target.md", "# target")
+	if err := os.Symlink(filepath.Join(vaultPath, "target.md"), filepath.Join(vaultPath, "alias.md")); err != nil {
+		t.Skipf("symbolic links unavailable: %v", err)
+	}
+	if _, err := Scan(vaultPath); err == nil || !strings.Contains(err.Error(), "must not contain symbolic links") {
+		t.Fatalf("Scan() error = %v, want symlink boundary error", err)
 	}
 }
 

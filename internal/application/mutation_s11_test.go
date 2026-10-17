@@ -10,6 +10,24 @@ import (
 	internaldiag "github.com/simp-lee/oxpio/internal/diag"
 )
 
+func TestPublishOverridePreservesCaseAndBOMSourceBytes(t *testing.T) {
+	for _, source := range []string{
+		"---\ntitle: Article\npublish: TRUE\ntype: doc\n---\nBody\n",
+		"\ufeff---\r\ntitle: Article\r\npublish: false\r\ntype: doc\r\n---\r\nBody\r\n",
+		"---\ntitle: Article\npublish: true\ntype: doc\n...\nBody\n",
+	} {
+		updated, err := applyPublishOverride([]byte(source), []byte(source), boolPointerForMutation(false))
+		if err != nil {
+			t.Fatalf("applyPublishOverride(%q) error = %v", source, err)
+		}
+		if !strings.Contains(string(updated), "publish: false") {
+			t.Fatalf("updated source = %q, want publish false", updated)
+		}
+	}
+}
+
+func boolPointerForMutation(value bool) *bool { return &value }
+
 func TestEditorArticleMutationChecksHiddenSectionReferences(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
@@ -51,6 +69,27 @@ func TestAgentMutationRedactsHiddenReferenceConflicts(t *testing.T) {
 	var detailedErr *MutationError
 	if !errors.As(err, &detailedErr) || len(detailedErr.AnalysisDiagnostics()) != 1 || detailedErr.AnalysisDiagnostics()[0].Location.Path != "private/_index.md" {
 		t.Fatalf("include-unpublished move diagnostics = %#v, want hidden source path", detailedErr.AnalysisDiagnostics())
+	}
+}
+
+func TestAgentMutationRedactsPlanlessIdentityDiagnostics(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeMutationS11File(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeMutationS11File(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writeMutationS11File(t, vault, "Secret.md", "---\ntitle: Secret\npublish: false\ntype: doc\n---\nSecret\n")
+	content := "---\ntitle: Other\npublish: true\ntype: doc\n---\nOther\n"
+	writeMutationS11File(t, vault, "other.md", content)
+	request := SourceMutationRequest{Operation: MutationMove, Path: "other.md", Destination: "secret.md", ExpectedHash: hashBytes([]byte(content)), DestinationExpectedHash: AbsentHash}
+	_, err := MutateSource(vault, output, request)
+	var mutationErr *MutationError
+	if !errors.As(err, &mutationErr) || len(mutationErr.AnalysisDiagnostics()) == 0 {
+		t.Fatalf("MutateSource() error = %v, want redacted diagnostics", err)
+	}
+	for _, diagnostic := range mutationErr.AnalysisDiagnostics() {
+		if diagnostic.Location.Path != "" || diagnostic.Target != "" || diagnostic.Message != "target is not available in the selected read scope" {
+			t.Fatalf("diagnostic = %#v, want generic redaction", diagnostic)
+		}
 	}
 }
 

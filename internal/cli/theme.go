@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	internalanalyze "github.com/simp-lee/oxpio/internal/analyze"
+	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internaldiag "github.com/simp-lee/oxpio/internal/diag"
@@ -127,10 +128,10 @@ func newThemeValidateCommand() *cobra.Command {
 			return analyzeErr
 		}
 		if analyzeErr != nil {
-			return diagnosticError{err: analyzeErr, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned)}
+			return diagnosticError{err: analyzeErr, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned, boundary.VaultPath)}
 		}
 		if failure := internalanalyze.Failure(planned.Diagnostics); failure != nil {
-			return diagnosticError{err: failure, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned)}
+			return diagnosticError{err: failure, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned, boundary.VaultPath)}
 		}
 		var source internaltheme.Source
 		if selectedTheme == internaltheme.BaseID {
@@ -428,10 +429,10 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 			previewBaseURL = cfg.BaseURL
 			planned, planErr := internalsiteplan.BuildForOutputWithConfig(boundary.VaultPath, boundary.OutputPath, cfg)
 			if planErr != nil {
-				return planErr
+				return redactCLIError(planErr, boundary.VaultPath)
 			}
 			previewAssets = planned.Plan.ThemeAssetURLs
-			previewBuild, err = internalbuild.BuildWithConfig(boundary.VaultPath, temporary, cfg, internalbuild.Options{Strict: true, Ephemeral: true, SourceOutputPath: boundary.OutputPath})
+			previewBuild, err = internalapplication.BuildCandidateWithConfig(boundary.VaultPath, temporary, cfg, boundary.OutputPath)
 		} else {
 			cfg, cfgErr := internalconfig.LoadForBuildWithOutput(boundary.VaultPath, boundary.OutputPath)
 			if cfgErr != nil {
@@ -444,7 +445,7 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 			previewBaseURL = cfg.BaseURL
 			planned, planErr := internalsiteplan.BuildForOutputWithConfig(boundary.VaultPath, boundary.OutputPath, cfg)
 			if planErr != nil {
-				return planErr
+				return redactCLIError(planErr, boundary.VaultPath)
 			}
 			previewAssets = planned.Plan.ThemeAssetURLs
 			if cfg.Theme == internaltheme.BaseID {
@@ -453,11 +454,11 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 				previewSource, err = internaltheme.LoadLocal(boundary.VaultPath, cfg.Theme)
 			}
 			if err == nil {
-				previewBuild, err = internalbuild.BuildWithConfig(boundary.VaultPath, temporary, cfg, internalbuild.Options{Strict: true, Ephemeral: true, SourceOutputPath: boundary.OutputPath})
+				previewBuild, err = internalapplication.BuildCandidateWithConfig(boundary.VaultPath, temporary, cfg, boundary.OutputPath)
 			}
 		}
 		if err != nil {
-			return err
+			return redactCLIError(err, boundary.VaultPath)
 		}
 		if previewBuild == nil {
 			return fmt.Errorf("theme preview produced no result")
@@ -710,9 +711,33 @@ func checkThemeParents(vault, candidate string) error {
 			}
 		} else if !errors.Is(statErr, os.ErrNotExist) {
 			return statErr
+		} else if hasCaseVariantEntry(filepath.Dir(current), part) {
+			return fmt.Errorf("theme parent %q conflicts with an existing case-variant management path", part)
 		}
 	}
 	return nil
+}
+
+func hasCaseVariantEntry(parent, name string) bool {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return false
+	}
+	for _, entry := range entries {
+		if strings.EqualFold(entry.Name(), name) {
+			return true
+		}
+	}
+	return false
+}
+
+func themeManagementPath(name string) bool {
+	for _, segment := range strings.Split(strings.ReplaceAll(name, `\\`, "/"), "/") {
+		if strings.EqualFold(segment, ".oxpio") || strings.EqualFold(segment, ".obsidian") {
+			return true
+		}
+	}
+	return false
 }
 
 func themeFileKind(name string) string {
@@ -730,7 +755,7 @@ func readThemeCLIContent(cmd *cobra.Command, vault, name string) ([]byte, error)
 	if name == "" {
 		return nil, fmt.Errorf("content input is required")
 	}
-	if strings.HasPrefix(name, ".oxpio/") || name == ".oxpio" || strings.HasPrefix(name, ".obsidian/") || name == ".obsidian" {
+	if themeManagementPath(name) {
 		return nil, fmt.Errorf("theme input is outside the theme source boundary")
 	}
 	if !internaltheme.ValidRelativePath(name) {
