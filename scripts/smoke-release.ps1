@@ -43,7 +43,7 @@ try {
         $PublishText = Get-Content -LiteralPath $PublishLog -Raw -ErrorAction SilentlyContinue
         if ($PublishText -match 'OUTPUT_ATOMICITY_UNAVAILABLE') {
             Write-Host "release smoke verified: $Version (formal publish rejected by the documented atomicity matrix)"
-            return
+            exit 0
         }
         throw "oxpio publish exited $PublishExit`n$PublishText"
     }
