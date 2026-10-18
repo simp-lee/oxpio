@@ -249,6 +249,9 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if requestPath == "" {
 		requestPath = r.URL.Path
 	}
+	if s.redirectUnprefixedControl(w, r, requestPath, controlPath) {
+		return
+	}
 	if strings.HasPrefix(requestPath, controlPath) {
 		s.serveControl(w, r)
 		return
@@ -672,6 +675,26 @@ func (s *Server) controlPrefix() string {
 	return basePath + controlPrefix
 }
 
+func (s *Server) redirectUnprefixedControl(w http.ResponseWriter, r *http.Request, requestPath, controlPath string) bool {
+	if r == nil || (r.Method != http.MethodGet && r.Method != http.MethodHead) || controlPath == controlPrefix {
+		return false
+	}
+	rootControlPath := strings.TrimSuffix(controlPrefix, "/")
+	if requestPath != rootControlPath && !strings.HasPrefix(requestPath, controlPrefix) {
+		return false
+	}
+	suffix := strings.TrimPrefix(requestPath, rootControlPath)
+	if suffix == "" {
+		suffix = "/"
+	}
+	target := strings.TrimSuffix(controlPath, "/") + suffix
+	if r.URL.RawQuery != "" {
+		target += "?" + r.URL.RawQuery
+	}
+	http.Redirect(w, r, target, http.StatusTemporaryRedirect)
+	return true
+}
+
 func injectEditorBasePath(data []byte, basePath string) []byte {
 	if strings.TrimSpace(basePath) == "" {
 		basePath = "/"
@@ -681,7 +704,8 @@ func injectEditorBasePath(data []byte, basePath string) []byte {
 		control = control[1:]
 	}
 	data = bytes.ReplaceAll(data, []byte("__OXPIO_BASE_PATH__"), []byte(stdhtml.EscapeString(basePath)))
-	return bytes.ReplaceAll(data, []byte(`"/_oxpio/`), []byte(`"`+control))
+	data = bytes.ReplaceAll(data, []byte(`"/_oxpio/`), []byte(`"`+control))
+	return bytes.ReplaceAll(data, []byte("`/_oxpio/"), []byte("`"+control))
 }
 
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {

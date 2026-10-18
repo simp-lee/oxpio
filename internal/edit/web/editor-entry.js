@@ -14,8 +14,8 @@ const state = {
   kind: "article", mode: "visual", surface: "write", source: "", baselineSource: "", hash: "",
   bodyBaseline: "", formBaseline: {}, sourceChanged: false,
   filePath: "", fileHash: "", fileKind: "", fileSourceKind: "",
-  fileDialogMode: "", dirty: false, busy: false, loadToken: 0,
-  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, catalogSources: [], collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
+  fileDialogMode: "", dirty: false, busy: false, busyCount: 0, livePreviewController: null, loadToken: 0,
+  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
 };
 const editable = new Compartment();
 let editor;
@@ -47,13 +47,17 @@ function cancelLivePreview() {
   clearTimeout(livePreviewTimer);
   livePreviewTimer = 0;
   livePreviewRequest++;
+  if (state.livePreviewController) {
+    state.livePreviewController.abort();
+    state.livePreviewController = null;
+  }
 }
 function scheduleLivePreview(delay = 350) {
   if (state.surface !== "write" || state.mode !== "visual" || !editor) {
     cancelLivePreview();
     return;
   }
-  clearTimeout(livePreviewTimer);
+  cancelLivePreview();
   const request = ++livePreviewRequest;
   editor.dispatch({effects: [livePreviewLine.of(null), livePreviewRender.of({body: "", blocks: [], styles: ""})]});
   livePreviewTimer = setTimeout(() => refreshLivePreview(request).catch(error => diagnostics(error.diagnostics, `Live preview failed: ${error.message}`)), delay);
@@ -78,26 +82,35 @@ async function refreshLivePreview(request) {
   if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || !state.path || state.busy) return;
   const source = await compose();
   if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
-  const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source});
-  if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
-  const frame = $("#preview-frame");
-  state.previewContentURL = result.contentURL || result.url || "";
-  state.previewPageURL = result.fullURL || result.url || "";
-  state.previewKind = "content";
-  state.previewURL = state.previewContentURL;
-  const loaded = new Promise(resolve => {
-    frame.addEventListener("load", resolve, {once: true});
-    frame.src = state.previewURL;
-  });
-  frame.hidden = false;
-  await loaded;
-  if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
-  const documentRoot = frame.contentDocument?.querySelector("[data-page-content]");
-  if (!documentRoot) return;
-  const blocks = [...documentRoot.children].map(child => serializeLivePreviewBlock(child, frame.contentDocument));
-  const styles = livePreviewStyles(frame.contentDocument);
-  editor.dispatch({effects: livePreviewRender.of({body: text(), blocks, styles})});
-  diagnostics(result.diagnostics);
+  const controller = new AbortController();
+  state.livePreviewController = controller;
+  try {
+    const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source}, {}, controller.signal);
+    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
+    const frame = $("#preview-frame");
+    state.previewContentURL = result.contentURL || result.url || "";
+    state.previewPageURL = result.fullURL || result.url || "";
+    state.previewKind = "content";
+    state.previewURL = state.previewContentURL;
+    state.previewOpen = true;
+    const loaded = new Promise(resolve => {
+      frame.addEventListener("load", resolve, {once: true});
+      frame.src = state.previewURL;
+    });
+    frame.hidden = false;
+    await loaded;
+    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
+    const documentRoot = frame.contentDocument?.querySelector("[data-page-content]");
+    if (!documentRoot) return;
+    const blocks = [...documentRoot.children].map(child => serializeLivePreviewBlock(child, frame.contentDocument));
+    const styles = livePreviewStyles(frame.contentDocument);
+    editor.dispatch({effects: livePreviewRender.of({body: text(), blocks, styles})});
+    diagnostics(result.diagnostics);
+  } catch (error) {
+    if (error.name !== "AbortError") throw error;
+  } finally {
+    if (state.livePreviewController === controller) state.livePreviewController = null;
+  }
 }
 function scheduleDraft() {
   clearTimeout(state.draftTimer);
@@ -106,11 +119,28 @@ function scheduleDraft() {
   state.draftTimer = setTimeout(() => saveDraft().catch(() => status("Local draft could not be saved; check browser storage.")), 1500);
 }
 function busy(value) {
-  state.busy = value;
-  document.querySelectorAll(".header-actions button, #source, #refresh, #file-refresh, .file-actions button, #metadata input, #metadata select").forEach(input => { input.disabled = value; });
-  $("#delete").disabled = value || state.kind !== "article";
+  state.busyCount = Math.max(0, state.busyCount + (value ? 1 : -1));
+  state.busy = state.busyCount > 0;
+  document.querySelectorAll(".header-actions button, #source, #refresh, #file-refresh, .file-actions button, .toolbar button, .editor-tabs button, .preview-actions button, .source-tree-entry, .file-entry, .workspace-search input, .new-form input, .new-form select, .new-form button, #metadata input, #metadata select, #media-panel button, #media-panel input, #media-panel select").forEach(input => { input.disabled = state.busy; });
+  $("#content-editor").setAttribute("aria-busy", String(state.busy));
+  $("#delete").disabled = state.busy || state.kind !== "article";
   updateFileActions();
-  editor.dispatch({effects: editable.reconfigure(EditorView.editable.of(!value))});
+  editor.dispatch({effects: editable.reconfigure(EditorView.editable.of(!state.busy))});
+  if (!state.busy) flushPendingPreview();
+}
+function flushPendingPreview() {
+  if (state.busy || !state.previewPending) return;
+  const pending = state.previewPending;
+  state.previewPending = "";
+  if (pending === "live") scheduleLivePreview();
+  else if (pending === "full") queueMicrotask(() => preview().catch(() => {}));
+}
+function progressStatus(message) {
+  const started = Date.now();
+  const update = () => status(`${message} (${Math.floor((Date.now() - started) / 1000)}s)`);
+  update();
+  const timer = setInterval(update, 500);
+  return () => clearInterval(timer);
 }
 function text() { return editor.state.doc.toString(); }
 function setText(value) {
@@ -311,30 +341,34 @@ function postCommitWarning(result) {
   if (result?.sourceCleanupWarning) warning += " Temporary source/backup cleanup needs attention.";
   return warning;
 }
-async function mutation(method, url, body, headers = {}) {
+async function mutation(method, url, body, headers = {}, signal) {
   const session = await responseJSON(await fetch("/_oxpio/csrf"));
   headers = {...headers, "X-OXPIO-CSRF": session.csrf};
   if (body && !(body instanceof FormData) && !(body instanceof URLSearchParams) && typeof body !== "string") {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(body);
   }
-  return responseJSON(await fetch(url, {method, headers, body}));
+  return responseJSON(await fetch(url, {method, headers, body, signal}));
 }
 function renderSourceTree() {
   const tree = $("#source-tree");
   tree.replaceChildren();
   const query = ($("#document-search")?.value || "").trim().toLowerCase();
   const sources = state.catalogSources.filter(source => !query || `${source.relPath} ${source.title} ${source.effectivePublish ? "published" : "draft"}`.toLowerCase().includes(query));
+  const searchStatus = $("#document-search-status");
+  const noun = state.catalogSources.length === 1 ? "document" : "documents";
+  if (searchStatus) searchStatus.textContent = query ? `${sources.length} of ${state.catalogSources.length} ${noun}` : `${sources.length} ${noun}`;
   const parentPath = value => value.includes("/") ? value.slice(0, value.lastIndexOf("/")) : "";
   const folders = new Set([""]);
   for (const source of sources) {
     const segments = source.relPath.split("/");
     for (let index = 1; index < segments.length; index++) folders.add(segments.slice(0, index).join("/"));
   }
-  const appendSource = (source, depth) => {
+  const appendSource = (source, depth, parent) => {
     const item = document.createElement("button");
     item.type = "button";
     item.className = "source-tree-entry";
+    item.disabled = state.busy;
     item.dataset.path = source.relPath;
     item.setAttribute("role", "treeitem");
     item.setAttribute("aria-selected", String(source.relPath === state.path));
@@ -351,16 +385,19 @@ function renderSourceTree() {
     item.append(icon, label, meta);
     item.title = source.relPath;
     item.onclick = () => { if (!confirmDiscard()) return; $("#source").value = source.relPath; loadSource(source.relPath).catch(error => status(`Load failed: ${error.message}`)); };
-    tree.append(item);
+    parent.append(item);
   };
-  const appendFolder = (folder, depth) => {
+  const appendFolder = (folder, depth, parent) => {
     if (folder) {
-      const item = document.createElement("button");
-      item.type = "button";
-      item.className = "source-tree-entry source-tree-folder";
+      const item = document.createElement("div");
+      item.className = "source-tree-folder";
       item.setAttribute("role", "treeitem");
-      item.setAttribute("aria-expanded", String(!state.collapsedSourceFolders.has(folder)));
-      item.style.paddingLeft = `${0.35 + depth * 0.45}rem`;
+      item.setAttribute("aria-expanded", String(Boolean(query) || !state.collapsedSourceFolders.has(folder)));
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = "source-tree-entry";
+      toggle.disabled = state.busy;
+      toggle.style.paddingLeft = `${0.35 + depth * 0.45}rem`;
       const icon = document.createElement("span");
       icon.className = "source-tree-icon";
       icon.innerHTML = `<svg aria-hidden="true"><use href="#icon-folder"></use></svg>`;
@@ -370,22 +407,58 @@ function renderSourceTree() {
       const meta = document.createElement("small");
       meta.className = "source-tree-meta";
       meta.textContent = "Folder";
-      item.append(icon, label, meta);
-      item.title = folder;
-      item.onclick = () => { if (state.collapsedSourceFolders.has(folder)) state.collapsedSourceFolders.delete(folder); else state.collapsedSourceFolders.add(folder); renderSourceTree(); };
-      tree.append(item);
+      toggle.append(icon, label, meta);
+      toggle.title = folder;
+      toggle.onclick = () => {
+        if (query) return;
+        if (state.collapsedSourceFolders.has(folder)) state.collapsedSourceFolders.delete(folder); else state.collapsedSourceFolders.add(folder);
+        renderSourceTree();
+      };
+      item.append(toggle);
+      parent.append(item);
+      if (!query && state.collapsedSourceFolders.has(folder)) return;
+      const group = document.createElement("div");
+      group.className = "source-tree-group";
+      group.setAttribute("role", "group");
+      item.append(group);
+      parent = group;
     }
-    if (folder && state.collapsedSourceFolders.has(folder)) return;
     const children = [...folders].filter(candidate => candidate && parentPath(candidate) === folder).sort();
-    for (const child of children) appendFolder(child, depth + 1);
-    for (const source of sources.filter(candidate => parentPath(candidate.relPath) === folder).sort((a, b) => a.relPath.localeCompare(b.relPath))) appendSource(source, depth + 1);
+    for (const child of children) appendFolder(child, depth + 1, parent);
+    for (const source of sources.filter(candidate => parentPath(candidate.relPath) === folder).sort((a, b) => a.relPath.localeCompare(b.relPath))) appendSource(source, depth + 1, parent);
   };
-  appendFolder("", 0);
+  appendFolder("", 0, tree);
   if (!tree.children.length) tree.textContent = "No matching Markdown sources.";
+}
+function defaultCollapsedSourceFolders(sources, preferred) {
+  const collapsed = new Set();
+  for (const source of sources) {
+    const segments = source.relPath.split("/");
+    for (let index = 1; index < segments.length; index++) collapsed.add(segments.slice(0, index).join("/"));
+  }
+  let folder = String(preferred || "").includes("/") ? String(preferred).slice(0, String(preferred).lastIndexOf("/")) : "";
+  while (folder) {
+    collapsed.delete(folder);
+    folder = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
+  }
+  return collapsed;
+}
+function expandSourceAncestors(path) {
+  let folder = String(path || "").includes("/") ? String(path).slice(0, String(path).lastIndexOf("/")) : "";
+  while (folder) {
+    state.collapsedSourceFolders.delete(folder);
+    folder = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
+  }
 }
 async function loadCatalog(preferred = state.path) {
   const data = await responseJSON(await fetch("/_oxpio/sources"));
   state.catalogSources = data.sources;
+  if (!state.sourceTreeInitialized) {
+    state.collapsedSourceFolders = defaultCollapsedSourceFolders(data.sources, preferred);
+    state.sourceTreeInitialized = true;
+  } else {
+    expandSourceAncestors(preferred);
+  }
   const select = $("#source");
   select.replaceChildren();
   for (const source of data.sources) {
@@ -407,6 +480,32 @@ function filterDocuments() {
   for (const option of document.querySelectorAll("#source option")) option.hidden = Boolean(query) && !option.dataset.search.includes(query);
   renderSourceTree();
 }
+async function refreshCatalogFromUI() {
+  if (state.busy || !confirmDiscard()) return;
+  busy(true);
+  const stopProgress = progressStatus("Refreshing documents…");
+  try {
+    await loadCatalog();
+  } catch (error) {
+    status(`Document list failed: ${error.message}`);
+  } finally {
+    stopProgress();
+    busy(false);
+  }
+}
+async function refreshFilesFromUI() {
+  if (state.busy) return;
+  busy(true);
+  const stopProgress = progressStatus("Refreshing files…");
+  try {
+    await refreshFiles();
+  } catch (error) {
+    status(`File list failed: ${error.message}`);
+  } finally {
+    stopProgress();
+    busy(false);
+  }
+}
 
 async function refreshFiles(preferred = state.filePath) {
   const data = await responseJSON(await fetch("/_oxpio/files"));
@@ -420,6 +519,7 @@ async function refreshFiles(preferred = state.filePath) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "file-entry";
+    button.disabled = state.busy;
     button.dataset.path = entry.path;
     button.setAttribute("role", "treeitem");
     button.setAttribute("aria-selected", String(entry.path === preferred || entry.path === state.filePath));
@@ -482,6 +582,8 @@ function updateFileActions() {
   $("#file-delete").disabled = !hasSelection || !state.fileEditable;
 }
 function clearEditor() {
+  cancelLivePreview();
+  state.previewPending = "";
   state.path = "";
   state.kind = "article";
   state.source = "";
@@ -494,6 +596,7 @@ function clearEditor() {
   state.previewContentURL = "";
   state.previewPageURL = "";
   state.previewKind = "content";
+  state.previewOpen = false;
   state.surface = "write";
   showForm({publish: false});
   setText("");
@@ -509,12 +612,15 @@ function clearEditor() {
   status("No Markdown sources");
 }
 async function loadSource(path) {
+  cancelLivePreview();
+  state.previewPending = "";
   const token = ++state.loadToken;
   busy(true);
   try {
     const data = await responseJSON(await fetch(`/_oxpio/source-meta?path=${encodeURIComponent(path)}`));
     if (token !== state.loadToken) return;
     state.path = path;
+    expandSourceAncestors(path);
     renderSourceTree();
     state.kind = data.kind;
     state.hash = data.sourceHash;
@@ -549,10 +655,10 @@ async function loadSource(path) {
   } catch (error) { status(`Load failed: ${error.message}`); }
   finally {
     if (token === state.loadToken) {
-      busy(false);
-      if (state.surface === "write" && !state.suppressPreview) scheduleLivePreview();
-      else if (state.keepPreview && state.previewOpen && !state.suppressPreview) queueMicrotask(() => preview().catch(() => {}));
+      if (state.surface === "write" && !state.suppressPreview) state.previewPending = "live";
+      else if (state.keepPreview && state.previewOpen && !state.suppressPreview) state.previewPending = "full";
     }
+    busy(false);
   }
 }
 function updateMode() {
@@ -639,30 +745,39 @@ async function operation(label, action) {
 }
 async function save() {
   await operation("Save", async () => {
-    status("Validating, building, and saving…");
+    const stopProgress = progressStatus("Validating, building, and saving…");
     saveState("saving", "Saving");
-    const path = state.path;
-    const oldHash = state.hash;
-    const mode = state.mode;
-    const reopenPreview = state.keepPreview && state.previewOpen;
-    const reopenPreviewKind = state.previewKind;
-    const source = await compose();
-    const result = await mutation("PUT", `/_oxpio/source?path=${encodeURIComponent(path)}`, source, {"X-OXPIO-Source-Hash": state.hash});
-    await clearDraft(path);
-    dirty(false);
-    state.suppressPreview = true;
-    try { await loadCatalog(path); } finally { state.suppressPreview = false; }
-    if (mode === "source") { state.mode = "source"; setText(state.source); updateMode(); }
-    if (reopenPreview) {
-      try {
-        const previewResult = await mutation("POST", "/_oxpio/preview", {path: state.path, source: state.source});
-        applyPreviewResult(previewResult, reopenPreviewKind);
-      } catch (error) { diagnostics(error.diagnostics, `Preview refresh failed: ${error.message}`); }
+    try {
+      cancelLivePreview();
+      state.previewPending = "";
+      const path = state.path;
+      const oldHash = state.hash;
+      const mode = state.mode;
+      const reopenLivePreview = state.surface === "write" && state.mode === "visual";
+      const reopenPreview = state.keepPreview && state.surface !== "write" && state.previewOpen;
+      const reopenPreviewKind = state.previewKind;
+      const source = await compose();
+      const result = await mutation("PUT", `/_oxpio/source?path=${encodeURIComponent(path)}`, source, {"X-OXPIO-Source-Hash": state.hash});
+      await clearDraft(path);
+      dirty(false);
+      state.suppressPreview = true;
+      try { await loadCatalog(path); } finally { state.suppressPreview = false; }
+      if (mode === "source") { state.mode = "source"; setText(state.source); updateMode(); }
+      if (reopenLivePreview) {
+        state.previewPending = "live";
+      } else if (reopenPreview) {
+        try {
+          const previewResult = await mutation("POST", "/_oxpio/preview", {path: state.path, source: state.source});
+          applyPreviewResult(previewResult, reopenPreviewKind);
+        } catch (error) { diagnostics(error.diagnostics, `Preview refresh failed: ${error.message}`); }
+      }
+      diagnostics(result.diagnostics);
+      const cleanupWarning = postCommitWarning(result);
+      saveState("saved", result.warningCount || cleanupWarning ? "Saved with warnings" : "Saved");
+      status(result.warningCount ? `Saved and rebuilt with warnings.${cleanupWarning}` : `Saved and rebuilt.${cleanupWarning}`);
+    } finally {
+      stopProgress();
     }
-    diagnostics(result.diagnostics);
-    const cleanupWarning = postCommitWarning(result);
-    saveState("saved", result.warningCount || cleanupWarning ? "Saved with warnings" : "Saved");
-    status(result.warningCount ? `Saved and rebuilt with warnings.${cleanupWarning}` : `Saved and rebuilt.${cleanupWarning}`);
   });
 }
 async function preview(kind = "content") {
@@ -1067,8 +1182,8 @@ function mediaReference(mediaPath) {
   const alt = mediaPath.split("/").pop().replace(/\.[^.]+$/, "").replace(/[\[\]\\]/g, "\\$&");
   return `![${alt}](${destination})`;
 }
-function insertMedia(path) {
-  if (state.busy) return;
+function insertMedia(path, allowBusy = false) {
+  if (state.busy && !allowBusy) return;
   const reference = mediaReference(path);
   let {from, to} = editor.state.selection.main;
   let afterFrontmatter = false;
@@ -1102,7 +1217,7 @@ async function loadMedia() {
     for (const media of data.items) {
       const item = document.createElement("div"); item.className = "media-item";
       const image = document.createElement("img"); image.src = media.url; image.alt = media.path; image.loading = "lazy"; item.append(image);
-      const addButton = (label, action) => { const button = document.createElement("button"); button.type = "button"; button.textContent = label; button.onclick = action; item.append(button); };
+      const addButton = (label, action) => { const button = document.createElement("button"); button.type = "button"; button.disabled = state.busy; button.textContent = label; button.onclick = () => { if (!state.busy) action(); }; item.append(button); };
       addButton(media.name, () => insertMedia(media.path));
       for (const [field, label] of [["cover", "Set cover"], ["banner", "Set banner"]]) {
         if (state.mode === "source" || (state.kind === "section" && field === "cover")) continue;
@@ -1115,6 +1230,8 @@ async function loadMedia() {
 async function uploadMedia(file) {
   if (!file || state.busy) return;
   if (file instanceof FileList && file.length !== 1) { status("Upload exactly one file."); return; }
+  busy(true);
+  const stopProgress = progressStatus("Upload: validating, building, and saving…");
   try {
     const form = new FormData();
     form.append("file", file);
@@ -1130,10 +1247,13 @@ async function uploadMedia(file) {
     await loadMedia();
     await refreshFiles(result.path);
     if (/\.md$/iu.test(file.name)) await loadCatalog(result.path);
-    else insertMedia(result.path);
+    else {
+      insertMedia(result.path, true);
+      if (state.surface === "write" && state.mode === "visual") state.previewPending = "live";
+    }
     status(`Uploaded ${result.path} and rebuilt successfully.${postCommitWarning(result)}`);
   } catch (error) { diagnostics(error.diagnostics, `Upload failed: ${error.message}`); saveState("failed", "Build failed"); status(`Upload failed: ${error.message}`); }
-  finally { $("#media-upload").value = ""; }
+  finally { stopProgress(); busy(false); $("#media-upload").value = ""; }
 }
 function openFileDialog(mode) {
   if (state.busy) return;
@@ -1159,6 +1279,7 @@ function openFileDialog(mode) {
 async function runFileMutation(label, action, preferred = state.filePath, reloadSource = true) {
   if (state.busy) return;
   busy(true);
+  const stopProgress = progressStatus(`${label}: validating, building, and saving…`);
   try {
     const result = await action();
     if (reloadSource) {
@@ -1174,6 +1295,7 @@ async function runFileMutation(label, action, preferred = state.filePath, reload
     status(`${label} failed; see diagnostics.`);
     throw error;
   } finally {
+    stopProgress();
     busy(false);
   }
 }
@@ -1241,7 +1363,7 @@ $("#source").onchange = event => {
   if (confirmDiscard()) loadSource(event.target.value);
   else event.target.value = state.path;
 };
-$("#refresh").onclick = () => { if (confirmDiscard()) loadCatalog().catch(error => status(error.message)); };
+$("#refresh").onclick = refreshCatalogFromUI;
 $("#save").onclick = save;
 $("#diff-wrap").onclick = () => { state.diffWrap = !state.diffWrap; rebuildDiffView(); };
 $("#toolbar-fullscreen").onclick = event => {
@@ -1250,7 +1372,7 @@ $("#toolbar-fullscreen").onclick = event => {
 };
 $("#metadata").oninput = () => { dirty(); scheduleLivePreview(); };
 $("#metadata").onsubmit = event => event.preventDefault();
-$("#file-refresh").onclick = () => refreshFiles().catch(error => status(`File list failed: ${error.message}`));
+$("#file-refresh").onclick = refreshFilesFromUI;
 $("#file-new-folder").onclick = () => openFileDialog("folder");
 $("#file-new-markdown").onclick = () => openFileDialog("markdown");
 $("#file-rename").onclick = () => openFileDialog("rename");
@@ -1299,21 +1421,32 @@ $("#new").onclick = () => { if (confirmDiscard()) $("#new-dialog").showModal(); 
 $("#new-form").onsubmit = async event => {
   if (event.submitter?.value === "cancel") return;
   event.preventDefault();
+  if (state.busy) return;
   const form = new URLSearchParams(new FormData(event.target));
+  busy(true);
+  const stopProgress = progressStatus("Create: validating, building, and saving…");
   try {
     const result = await mutation("POST", "/_oxpio/source", form, {"X-OXPIO-Source-Hash": "absent"});
     $("#new-dialog").close(); dirty(false);
     await loadCatalog(form.get("path"));
     status(`Created and rebuilt.${postCommitWarning(result)}`);
   } catch (error) { diagnostics(error.diagnostics, error.message); saveState("failed", "Build failed"); $("#new-dialog").close(); status(`Create failed: ${error.message}`); }
+  finally { stopProgress(); busy(false); }
 };
-$("#delete").onclick = () => operation("Delete", async () => {
+$("#delete").onclick = () => {
   if (state.kind !== "article" || !confirm("Delete this article?")) return;
-  const deletedPath = state.path;
-  const result = await mutation("DELETE", `/_oxpio/source?path=${encodeURIComponent(deletedPath)}&confirm=true`, null, {"X-OXPIO-Source-Hash": state.hash});
-  await clearDraft(deletedPath);
-  dirty(false); await loadCatalog(""); status(`Deleted and rebuilt.${postCommitWarning(result)}`);
-});
+  operation("Delete", async () => {
+    const stopProgress = progressStatus("Delete: validating, building, and saving…");
+    try {
+      const deletedPath = state.path;
+      const result = await mutation("DELETE", `/_oxpio/source?path=${encodeURIComponent(deletedPath)}&confirm=true`, null, {"X-OXPIO-Source-Hash": state.hash});
+      await clearDraft(deletedPath);
+      dirty(false); await loadCatalog(""); status(`Deleted and rebuilt.${postCommitWarning(result)}`);
+    } finally {
+      stopProgress();
+    }
+  });
+};
 $("#media").onclick = openMedia;
 $("#media-close").onclick = () => { $("#media-panel").hidden = true; };
 $("#media-upload").onchange = event => { if (event.target.files.length !== 1) { saveState("failed", "Upload failed"); diagnostics([], "Upload exactly one file; no files were written."); status("Upload exactly one file; no files were written."); event.target.value = ""; return; } uploadMedia(event.target.files[0]); };

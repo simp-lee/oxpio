@@ -139,6 +139,18 @@ test('authenticated catalog maps articles, sections, drafts, and preserves full 
   await page.goto(`${origin}/article/`);
   await expect(page.locator('.edit-page-link')).toHaveCount(0);
   await login(page);
+  await expect(page.locator('.source-tree-folder')).toHaveAttribute('aria-expanded', 'false');
+  await page.locator('#document-search').fill('Section');
+  await expect(page.locator('#document-search-status')).toHaveText('1 of 5 documents');
+  await expect(page.locator('.source-tree-folder')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.source-tree-group[role="group"]')).toHaveCount(1);
+  const sectionSource = page.locator('.source-tree-entry[data-path="section/_index.md"]');
+  await expect(sectionSource).toBeVisible();
+  await sectionSource.click();
+  await expect(sectionSource).toHaveAttribute('aria-selected', 'true');
+  await page.locator('#document-search').fill('');
+  await expect(sectionSource).toBeVisible();
+  await expect(page.locator('.source-tree-folder')).toHaveAttribute('aria-expanded', 'true');
 
   await page.goto(`${origin}/article/`);
   await expect(page.locator('.edit-page-link')).toHaveAttribute('href', /path=article\.md/);
@@ -232,6 +244,10 @@ test('live preview renders unsaved editor changes in the same workspace', async 
   const editor = page.locator('#editor .cm-content');
   await expect(editor).toBeVisible();
   await expect(page.locator('.preview-pane')).toBeHidden();
+  await editor.fill('# Immediate save marker\n\nUnsaved before first preview');
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
   await editor.fill('# Live preview marker\n\nInline math: $E = mc^2$.\n\n```go\nfunc Preview() {}\n```\n\n| Stage | Result |\n| --- | --- |\n| Draft | Ready |');
   await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
   const renderedBeforeHover = await page.locator('#editor .live-rendered-block').count();
@@ -241,6 +257,9 @@ test('live preview renders unsaved editor changes in the same workspace', async 
     const html = [...document.querySelectorAll('#editor .live-rendered-block')].map(element => element.shadowRoot?.innerHTML || '').join('');
     return {math: html.includes('katex'), code: html.includes('<pre'), table: html.includes('<table')};
   })).toEqual({math: true, code: true, table: true});
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
   await page.locator('#editor .live-rendered-block').first().click();
   await expect(page.locator('#source-mode')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#editor .cm-content')).toContainText('# Live preview marker');
@@ -312,6 +331,7 @@ test('editor dark mode keeps metadata and long file labels readable', async ({br
   expect(labelLayout.overflow).toBe('hidden');
   expect(labelLayout.textOverflow).toBe('ellipsis');
   await expect(page.locator('.metadata-advanced summary')).toHaveCSS('color', 'rgb(200, 212, 223)');
+  await expect(page.locator('#document-search-status')).toHaveCSS('color', 'rgb(200, 212, 223)');
   await context.close();
 });
 

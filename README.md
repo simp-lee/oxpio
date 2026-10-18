@@ -64,7 +64,7 @@ Enable the single-account editor explicitly with:
 oxpio editor --vault ./vault --port 8080
 ```
 
-The command runs a strict publish before listening and serves the generated site anonymously. The default listener is loopback (`oxpio editor --listen 127.0.0.1 --port 8080`); binding all interfaces requires the explicit `--listen 0.0.0.0` option. Configure an account interactively once with `oxpio editor --setup --vault ./vault`; setup requires a terminal, refuses an existing or invalid account, writes only an Argon2id PHC hash atomically, and never prints the password. Use `oxpio editor --reset-password --vault ./vault` to replace the password while preserving the username; setup/reset do not publish or start a listener. The strict `editor` section contains only `username` and `passwordHash`:
+Open `http://127.0.0.1:8080/_oxpio/login` after startup. If `baseURL` includes a path prefix, keep that prefix in the local URL (for example, `http://127.0.0.1:8080/HowToLiveBetter/_oxpio/login`); the unprefixed management URL redirects there. The command runs a strict publish before listening and serves the generated site anonymously. The default listener is loopback (`oxpio editor --listen 127.0.0.1 --port 8080`); binding all interfaces requires the explicit `--listen 0.0.0.0` option. Configure an account interactively once with `oxpio editor --setup --vault ./vault`; setup requires a terminal, refuses an existing or invalid account, writes only an Argon2id PHC hash atomically, and never prints the password. Use `oxpio editor --reset-password --vault ./vault` to replace the password while preserving the username; setup/reset do not publish or start a listener. The strict `editor` section contains only `username` and `passwordHash`:
 
 ```yaml
 editor:

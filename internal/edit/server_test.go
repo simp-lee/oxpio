@@ -86,6 +86,18 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	if editor.Code != http.StatusOK || !strings.Contains(editor.Body.String(), `href="/docs/"`) {
 		t.Fatalf("editor = %d %s", editor.Code, editor.Body.String())
 	}
+	asset := httptest.NewRecorder()
+	assetRequest := httptest.NewRequest(http.MethodGet, "/docs/_oxpio/editor.js", nil)
+	assetRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
+	server.ServeHTTP(asset, assetRequest)
+	if asset.Code != http.StatusOK || strings.Contains(asset.Body.String(), "`/_oxpio/") || !strings.Contains(asset.Body.String(), "`/docs/_oxpio/") {
+		t.Fatalf("editor asset base path = %d %s", asset.Code, asset.Body.String())
+	}
+	legacy := httptest.NewRecorder()
+	server.ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/_oxpio/login?next=%2Fdocs%2F", nil))
+	if legacy.Code != http.StatusTemporaryRedirect || legacy.Header().Get("Location") != "/docs/_oxpio/login?next=%2Fdocs%2F" {
+		t.Fatalf("legacy editor route = %d location=%q", legacy.Code, legacy.Header().Get("Location"))
+	}
 }
 
 func TestEditorControlRoutesUseEscapedSiteBasePath(t *testing.T) {
