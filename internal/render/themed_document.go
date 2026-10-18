@@ -5,12 +5,46 @@ import (
 	"fmt"
 	"html/template"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/simp-lee/oxpio/internal/model"
 	"github.com/simp-lee/oxpio/internal/render/viewmodel"
 	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 )
+
+// ThemeRenderer renders one immutable theme View Model page.
+type ThemeRenderer interface {
+	Render(kind string, page viewmodel.Page) ([]byte, error)
+}
+
+type sectionViewProvider interface {
+	Section(plan *model.SitePlan, section *model.Section) *viewmodel.Section
+}
+
+type cachedThemeRenderer struct {
+	renderer ThemeRenderer
+	mu       sync.Mutex
+	sections map[*model.Section]*viewmodel.Section
+}
+
+func (r *cachedThemeRenderer) Render(kind string, page viewmodel.Page) ([]byte, error) {
+	return r.renderer.Render(kind, page)
+}
+
+func (r *cachedThemeRenderer) Section(plan *model.SitePlan, section *model.Section) *viewmodel.Section {
+	if section == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if cached := r.sections[section]; cached != nil {
+		return cached
+	}
+	cached := themedSection(plan, section)
+	r.sections[section] = cached
+	return cached
+}
 
 type themedPageExtras struct {
 	index                          *model.VaultIndex
@@ -22,7 +56,9 @@ type themedPageExtras struct {
 	titleID, metadataHTML, tocHTML string
 }
 
-func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description string, breadcrumbs []model.Breadcrumb, versionID string, versionRoutes map[string]string, socialImage string, metadata *model.Note, sourcePath string, sidebarNodes []model.SidebarNode, body string, extras themedPageExtras) ([]byte, error) {
+// CompileTheme compiles the selected immutable theme snapshot once for reuse
+// across all pages in one build.
+func CompileTheme(plan *model.SitePlan) (ThemeRenderer, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("theme page requires a site plan")
 	}
@@ -33,6 +69,35 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 	renderer, err := internaltheme.Compile(selected, plan.ThemeAssetURLs, plan.Config.BaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("compile selected theme: %w", err)
+	}
+	return &cachedThemeRenderer{renderer: renderer, sections: make(map[*model.Section]*viewmodel.Section)}, nil
+}
+
+func sectionViewForRenderer(renderer ThemeRenderer, plan *model.SitePlan, section *model.Section) *viewmodel.Section {
+	if provider, ok := renderer.(sectionViewProvider); ok {
+		return provider.Section(plan, section)
+	}
+	return themedSection(plan, section)
+}
+
+func cloneSectionView(section *viewmodel.Section) *viewmodel.Section {
+	if section == nil {
+		return nil
+	}
+	clone := *section
+	return &clone
+}
+
+func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description string, breadcrumbs []model.Breadcrumb, versionID string, versionRoutes map[string]string, socialImage string, metadata *model.Note, sourcePath string, sidebarNodes []model.SidebarNode, body string, extras themedPageExtras, renderer ThemeRenderer) ([]byte, error) {
+	if plan == nil {
+		return nil, fmt.Errorf("theme page requires a site plan")
+	}
+	if renderer == nil {
+		var err error
+		renderer, err = CompileTheme(plan)
+		if err != nil {
+			return nil, err
+		}
 	}
 	canonical := strictAbsoluteURL(plan, currentRoute)
 	kind := strictPageKind(currentRoute, metadata, sourcePath)
@@ -101,7 +166,7 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 	}
 	if metadata != nil {
 		if section := findStrictSection(plan, metadata.SectionPath, metadata.VersionID); section != nil {
-			page.Section = themedSection(plan, section)
+			page.Section = sectionViewForRenderer(renderer, plan, section)
 			page.Article.Position, page.Article.Total = themedArticlePosition(section, metadata)
 			docs := section.Documents
 			for index, note := range docs {
@@ -121,7 +186,7 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 		}
 	} else if sourcePath != "" {
 		if section := findSectionBySource(plan, sourcePath); section != nil {
-			page.Section = themedSection(plan, section)
+			page.Section = cloneSectionView(sectionViewForRenderer(renderer, plan, section))
 			page.Section.TitleID = extras.titleID
 			if extras.entries == nil {
 				page.Entries = append(page.Entries, page.Section.Articles...)

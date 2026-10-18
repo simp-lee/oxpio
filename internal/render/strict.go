@@ -29,7 +29,7 @@ func RenderStrictSection(plan *model.SitePlan, section *model.Section, index *mo
 }
 
 // RenderStrictSectionPage renders one canonical page of a section article list.
-func RenderStrictSectionPage(plan *model.SitePlan, section *model.Section, route string, notes []*model.Note, index *model.VaultIndex, assets markdown.AssetSink) ([]byte, error) {
+func RenderStrictSectionPage(plan *model.SitePlan, section *model.Section, route string, notes []*model.Note, index *model.VaultIndex, assets markdown.AssetSink, themeRenderers ...ThemeRenderer) ([]byte, error) {
 	if plan == nil || section == nil {
 		return nil, fmt.Errorf("section page requires a plan and section")
 	}
@@ -51,13 +51,13 @@ func RenderStrictSectionPage(plan *model.SitePlan, section *model.Section, route
 	if section.Banner != "" && section.BannerURL == "" {
 		return nil, fmt.Errorf("section banner %q has no planned asset destination", section.Banner)
 	}
-	return strictDocument(plan, route, section.Title, section.Description, section.Breadcrumbs, section.VersionID, section.VersionRoutes, "", nil, section.SourcePath, StrictSidebarNodes(plan, section.VersionID), content, themedPageExtras{index: index, entries: notes, titleID: headingID})
+	return strictDocument(plan, route, section.Title, section.Description, section.Breadcrumbs, section.VersionID, section.VersionRoutes, "", nil, section.SourcePath, StrictSidebarNodes(plan, section.VersionID), content, themedPageExtras{index: index, entries: notes, titleID: headingID}, firstThemeRenderer(themeRenderers))
 }
 
 // RenderStrictArticleWithRecommendations renders a normalized article page with
 // the same recommendation DTO that the Agent adapter returns, preserving score
 // and signal evidence for themes.
-func RenderStrictArticleWithRecommendations(plan *model.SitePlan, article *model.Note, previous, next *model.Note, position, total int, backlinks, related []*model.Note, recommendations []model.RelatedRecommendation, index *model.VaultIndex, assets markdown.AssetSink) ([]byte, error) {
+func RenderStrictArticleWithRecommendations(plan *model.SitePlan, article *model.Note, previous, next *model.Note, position, total int, backlinks, related []*model.Note, recommendations []model.RelatedRecommendation, index *model.VaultIndex, assets markdown.AssetSink, themeRenderers ...ThemeRenderer) ([]byte, error) {
 	if plan == nil || article == nil {
 		return nil, fmt.Errorf("article page requires a plan and article")
 	}
@@ -89,15 +89,15 @@ func RenderStrictArticleWithRecommendations(plan *model.SitePlan, article *model
 	var metadataHTML, tocHTML strings.Builder
 	writeStrictArticleMetadata(&metadataHTML, article)
 	writeStrictTOC(&tocHTML, article, tocHeadingID)
-	return strictDocument(plan, article.Route, article.Frontmatter.Title, article.Frontmatter.Description, breadcrumbs, article.VersionID, article.VersionRoutes, article.SocialImage, article, article.RelPath, StrictSidebarNodes(plan, article.VersionID), content, themedPageExtras{index: index, previous: previous, next: next, position: position, total: total, backlinks: backlinks, related: related, relatedRecommendations: recommendations, titleID: headingID, metadataHTML: metadataHTML.String(), tocHTML: tocHTML.String()})
+	return strictDocument(plan, article.Route, article.Frontmatter.Title, article.Frontmatter.Description, breadcrumbs, article.VersionID, article.VersionRoutes, article.SocialImage, article, article.RelPath, StrictSidebarNodes(plan, article.VersionID), content, themedPageExtras{index: index, previous: previous, next: next, position: position, total: total, backlinks: backlinks, related: related, relatedRecommendations: recommendations, titleID: headingID, metadataHTML: metadataHTML.String(), tocHTML: tocHTML.String()}, firstThemeRenderer(themeRenderers))
 }
 
 // RenderStrictNotFound renders the fixed static 404 page.
-func RenderStrictNotFound(plan *model.SitePlan) ([]byte, error) {
+func RenderStrictNotFound(plan *model.SitePlan, themeRenderers ...ThemeRenderer) ([]byte, error) {
 	if plan == nil {
 		return nil, fmt.Errorf("404 page requires a plan")
 	}
-	return strictDocument(plan, "/404.html", "Not found", "", nil, "", nil, "", nil, "", StrictSidebarNodes(plan, ""), `The requested page could not be found.`, themedPageExtras{})
+	return strictDocument(plan, "/404.html", "Not found", "", nil, "", nil, "", nil, "", StrictSidebarNodes(plan, ""), `The requested page could not be found.`, themedPageExtras{}, firstThemeRenderer(themeRenderers))
 }
 
 // RenderStrictTag renders a deterministic unversioned tag archive from the
@@ -115,11 +115,11 @@ func RenderStrictTagPage(plan *model.SitePlan, tag *model.Tag, route string, not
 }
 
 // RenderStrictTagPageForVersion renders a tag page in the selected partition.
-func RenderStrictTagPageForVersion(plan *model.SitePlan, tag *model.Tag, route, versionID string, notes []*model.Note) ([]byte, error) {
+func RenderStrictTagPageForVersion(plan *model.SitePlan, tag *model.Tag, route, versionID string, notes []*model.Note, themeRenderers ...ThemeRenderer) ([]byte, error) {
 	if plan == nil || tag == nil {
 		return nil, fmt.Errorf("tag page requires a plan and tag")
 	}
-	return strictDocument(plan, route, "Tag: "+tag.Name, "", nil, versionID, nil, "", nil, "", StrictSidebarNodes(plan, versionID), "", themedPageExtras{tag: tag, entries: notes})
+	return strictDocument(plan, route, "Tag: "+tag.Name, "", nil, versionID, nil, "", nil, "", StrictSidebarNodes(plan, versionID), "", themedPageExtras{tag: tag, entries: notes}, firstThemeRenderer(themeRenderers))
 }
 
 // RenderStrictTimeline renders the optional unversioned recent-article archive.
@@ -128,11 +128,11 @@ func RenderStrictTimeline(plan *model.SitePlan, route string, notes []*model.Not
 }
 
 // RenderStrictTimelineForVersion renders a timeline in the selected partition.
-func RenderStrictTimelineForVersion(plan *model.SitePlan, route, versionID string, notes []*model.Note) ([]byte, error) {
+func RenderStrictTimelineForVersion(plan *model.SitePlan, route, versionID string, notes []*model.Note, themeRenderers ...ThemeRenderer) ([]byte, error) {
 	if plan == nil || strings.Trim(route, "/") == "" {
 		return nil, fmt.Errorf("timeline page requires a plan and route")
 	}
-	return strictDocument(plan, route, "Recent articles", "", nil, versionID, nil, "", nil, "", StrictSidebarNodes(plan, versionID), "", themedPageExtras{entries: notes})
+	return strictDocument(plan, route, "Recent articles", "", nil, versionID, nil, "", nil, "", StrictSidebarNodes(plan, versionID), "", themedPageExtras{entries: notes}, firstThemeRenderer(themeRenderers))
 }
 
 func timelinePageInfo(plan *model.SitePlan, route string) (page, total int) {
@@ -333,8 +333,15 @@ func strictMetadataTime(value time.Time) string {
 	return value.UTC().Format("Jan 2, 2006")
 }
 
-func strictDocument(plan *model.SitePlan, currentRoute, title, description string, breadcrumbs []model.Breadcrumb, versionID string, versionRoutes map[string]string, socialImage string, metadata *model.Note, sourcePath string, sidebarNodes []model.SidebarNode, body string, extras themedPageExtras) ([]byte, error) {
-	return renderThemedDocument(plan, currentRoute, title, description, breadcrumbs, versionID, versionRoutes, socialImage, metadata, sourcePath, sidebarNodes, body, extras)
+func firstThemeRenderer(renderers []ThemeRenderer) ThemeRenderer {
+	if len(renderers) == 0 {
+		return nil
+	}
+	return renderers[0]
+}
+
+func strictDocument(plan *model.SitePlan, currentRoute, title, description string, breadcrumbs []model.Breadcrumb, versionID string, versionRoutes map[string]string, socialImage string, metadata *model.Note, sourcePath string, sidebarNodes []model.SidebarNode, body string, extras themedPageExtras, renderer ThemeRenderer) ([]byte, error) {
+	return renderThemedDocument(plan, currentRoute, title, description, breadcrumbs, versionID, versionRoutes, socialImage, metadata, sourcePath, sidebarNodes, body, extras, renderer)
 }
 
 func strictBasePath(plan *model.SitePlan) string {

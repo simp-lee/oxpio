@@ -137,6 +137,10 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 	}
 	applyStrictPlannedDestinations(assets, assetCollector.PlanDestinations(assets))
 	applyStrictAssetURLs(plan, assets)
+	themeRenderer, err := render.CompileTheme(plan)
+	if err != nil {
+		return result, err
+	}
 	lookupDigests, err := strictCacheLookupDigests(planned.Index)
 	if err != nil {
 		return result, err
@@ -175,7 +179,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		for _, page := range pages.Pages {
 			pageAssets := newStrictCacheAssetSink(assetCollector)
 			pageNotes := section.Articles[page.Start:page.End]
-			data, renderErr := render.RenderStrictSectionPage(plan, section, page.Route, pageNotes, planned.Index, pageAssets)
+			data, renderErr := render.RenderStrictSectionPage(plan, section, page.Route, pageNotes, planned.Index, pageAssets, themeRenderer)
 			if renderErr != nil {
 				return result, fmt.Errorf("render section %q: %w", section.RelPath, renderErr)
 			}
@@ -219,7 +223,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		backlinks := strictBacklinks(planned.Index, graph, article)
 		related := relatedByPath[article.RelPath]
 		pageAssets := newStrictCacheAssetSink(assetCollector)
-		data, renderErr := render.RenderStrictArticleWithRecommendations(plan, article, previous, next, position, total, backlinks, related, relatedDetailsByPath[article.RelPath], planned.Index, pageAssets)
+		data, renderErr := render.RenderStrictArticleWithRecommendations(plan, article, previous, next, position, total, backlinks, related, relatedDetailsByPath[article.RelPath], planned.Index, pageAssets, themeRenderer)
 		if renderErr != nil {
 			return result, fmt.Errorf("render article %q: %w", article.RelPath, renderErr)
 		}
@@ -256,7 +260,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 			}
 			for _, page := range pages.Pages {
 				pageNotes := notes[page.Start:page.End]
-				data, renderErr := render.RenderStrictTagPageForVersion(plan, tag, page.Route, partition.VersionID, pageNotes)
+				data, renderErr := render.RenderStrictTagPageForVersion(plan, tag, page.Route, partition.VersionID, pageNotes, themeRenderer)
 				if renderErr != nil {
 					return result, fmt.Errorf("render tag %q in partition %q: %w", tag.Name, partitionName, renderErr)
 				}
@@ -283,7 +287,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 					owner += ":page:" + strconv.Itoa(page.Number)
 				}
 				pagePosts := partition.Posts[page.Start:page.End]
-				data, renderErr := render.RenderStrictTimelineForVersion(plan, page.Route, partition.VersionID, pagePosts)
+				data, renderErr := render.RenderStrictTimelineForVersion(plan, page.Route, partition.VersionID, pagePosts, themeRenderer)
 				if renderErr != nil {
 					return result, fmt.Errorf("render timeline in partition %q: %w", partitionName, renderErr)
 				}
@@ -374,7 +378,7 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 			return result, err
 		}
 	}
-	if err := writeStrictMetadataOutputs(staging, plan, planned.Index, outputs); err != nil {
+	if err := writeStrictMetadataOutputs(staging, plan, planned.Index, outputs, themeRenderer); err != nil {
 		return result, err
 	}
 	if diagnosticsWriter != nil {
@@ -1469,7 +1473,7 @@ type strictSidebarPayload struct {
 	Versions map[string][]model.SidebarNode `json:"versions,omitempty"`
 }
 
-func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *model.VaultIndex, outputs *strictOutputRegistry) error {
+func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *model.VaultIndex, outputs *strictOutputRegistry, themeRenderer render.ThemeRenderer) error {
 	var sitemap strings.Builder
 	sitemapTimeline := make([]string, 0)
 	sitemap.WriteString(`<?xml version="1.0" encoding="UTF-8"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">`)
@@ -1657,7 +1661,7 @@ func writeStrictMetadataOutputs(outputRoot string, plan *model.SitePlan, index *
 			return err
 		}
 	}
-	notFound, err := render.RenderStrictNotFound(plan)
+	notFound, err := render.RenderStrictNotFound(plan, themeRenderer)
 	if err != nil {
 		return err
 	}

@@ -3,16 +3,18 @@ package social
 
 import (
 	"bytes"
+	"compress/zlib"
 	"crypto/sha256"
 	_ "embed"
+	"encoding/binary"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/draw"
 	_ "image/jpeg"
-	"image/png"
 	"strings"
 	"sync"
 	"time"
@@ -28,7 +30,7 @@ import (
 const (
 	Width                = 1200
 	Height               = 630
-	GeneratorVersion     = "oxpio-social-card-v2"
+	GeneratorVersion     = "oxpio-social-card-v3"
 	cardPrimaryFontName  = "KaTeX_Main-Regular.ttf"
 	cardFallbackFontName = "DroidSansFallbackFull.ttf"
 )
@@ -188,18 +190,104 @@ func Generate(input Input) (Result, error) {
 			return Result{}, err
 		}
 	}
-	var encoded bytes.Buffer
-	// Cards are independently content-addressed; BestSpeed keeps their bytes
-	// deterministic while avoiding default zlib compression cost at scale.
-	encoder := png.Encoder{CompressionLevel: png.BestSpeed}
-	if err := encoder.Encode(&encoded, canvas); err != nil {
+	pngBytes, err := encodePNG(canvas)
+	if err != nil {
 		return Result{}, err
 	}
-	pngBytes := encoded.Bytes()
 	inputHash := sha256.Sum256(canonicalJSON)
 	pngHash := sha256.Sum256(pngBytes)
 	urlHash := sha256.Sum256([]byte(input.CanonicalURL))
 	return Result{CanonicalJSON: append([]byte(nil), canonicalJSON...), PNG: append([]byte(nil), pngBytes...), Path: fmt.Sprintf("assets/social/%x/%x-%x.png", urlHash, inputHash, pngHash), InputHash: hex.EncodeToString(inputHash[:]), PNGHash: hex.EncodeToString(pngHash[:])}, nil
+}
+
+// encodePNG emits opaque RGB cards with a fixed Up filter. The canvas shape
+// and palette are stable, so evaluating every PNG filter for every row only
+// adds cost without improving the deterministic card contract.
+func encodePNG(canvas *image.RGBA) ([]byte, error) {
+	if canvas == nil {
+		return nil, fmt.Errorf("PNG canvas is required")
+	}
+	bounds := canvas.Bounds()
+	width, height := bounds.Dx(), bounds.Dy()
+	if width <= 0 || height <= 0 {
+		return nil, fmt.Errorf("PNG canvas must be non-empty")
+	}
+	if !canvas.Opaque() {
+		return nil, fmt.Errorf("PNG canvas must be opaque")
+	}
+
+	var encoded bytes.Buffer
+	encoded.Write([]byte{137, 80, 78, 71, 13, 10, 26, 10})
+	writeChunk := func(kind string, data []byte) error {
+		if len(kind) != 4 {
+			return fmt.Errorf("PNG chunk type must be four bytes")
+		}
+		var header [4]byte
+		binary.BigEndian.PutUint32(header[:], uint32(len(data)))
+		encoded.Write(header[:])
+		encoded.WriteString(kind)
+		encoded.Write(data)
+		checksum := crc32.NewIEEE()
+		_, _ = checksum.Write([]byte(kind))
+		_, _ = checksum.Write(data)
+		binary.BigEndian.PutUint32(header[:], checksum.Sum32())
+		encoded.Write(header[:])
+		return nil
+	}
+
+	var header [13]byte
+	binary.BigEndian.PutUint32(header[0:4], uint32(width))
+	binary.BigEndian.PutUint32(header[4:8], uint32(height))
+	header[8] = 8
+	header[9] = 2
+	if err := writeChunk("IHDR", header[:]); err != nil {
+		return nil, err
+	}
+
+	var compressed bytes.Buffer
+	writer, err := zlib.NewWriterLevel(&compressed, zlib.BestSpeed)
+	if err != nil {
+		return nil, err
+	}
+	filter := []byte{2}
+	previous := make([]byte, width*3)
+	filtered := make([]byte, width*3)
+	for y := bounds.Min.Y; y < bounds.Max.Y; y++ {
+		start := canvas.PixOffset(bounds.Min.X, y)
+		row := canvas.Pix[start : start+width*4]
+		for pixel := 0; pixel < width; pixel++ {
+			source := pixel * 4
+			destination := pixel * 3
+			filtered[destination] = row[source] - previous[destination]
+			filtered[destination+1] = row[source+1] - previous[destination+1]
+			filtered[destination+2] = row[source+2] - previous[destination+2]
+		}
+		if _, err := writer.Write(filter); err != nil {
+			_ = writer.Close()
+			return nil, err
+		}
+		if _, err := writer.Write(filtered); err != nil {
+			_ = writer.Close()
+			return nil, err
+		}
+		for pixel := 0; pixel < width; pixel++ {
+			source := pixel * 4
+			destination := pixel * 3
+			previous[destination] = row[source]
+			previous[destination+1] = row[source+1]
+			previous[destination+2] = row[source+2]
+		}
+	}
+	if err := writer.Close(); err != nil {
+		return nil, err
+	}
+	if err := writeChunk("IDAT", compressed.Bytes()); err != nil {
+		return nil, err
+	}
+	if err := writeChunk("IEND", nil); err != nil {
+		return nil, err
+	}
+	return encoded.Bytes(), nil
 }
 
 func normalizeInput(input Input) (Input, error) {
