@@ -44,12 +44,21 @@ const (
 var baseFS embed.FS
 
 var (
-	requiredLayouts              = [...]string{"base", "section", "article", "tag", "timeline", "404"}
-	staticThemeAssetURLPattern   = regexp.MustCompile(`(?i)\b(?:src|href)\s*=\s*["'](/?assets/[^"'#?\s]+)`)
-	themeAssetCallPattern        = regexp.MustCompile(`\{\{\s*assetURL\s+"([^"]+)"\s*\}\}`)
-	themeAssetBacktickPattern    = regexp.MustCompile("\\{\\{\\s*assetURL\\s+`([^`]+)`\\s*\\}\\}")
-	themeExternalURLPattern      = regexp.MustCompile(`(?i)(?:https?:)?//`)
-	themeExternalResourcePattern = regexp.MustCompile(`(?i)(?:href|src)\s*=\s*["'](?:https?:)?//|url\s*\(\s*(?:https?:)?//`)
+	requiredLayouts                        = [...]string{"base", "section", "article", "tag", "timeline", "404"}
+	staticThemeAssetURLPattern             = regexp.MustCompile(`(?i)\b(?:src|href)\s*=\s*["'](/?assets/[^"'#?\s]+)`)
+	themeAssetCallPattern                  = regexp.MustCompile(`\{\{\s*assetURL\s+"([^"]+)"\s*\}\}`)
+	themeAssetBacktickPattern              = regexp.MustCompile("\\{\\{\\s*assetURL\\s+`([^`]+)`\\s*\\}\\}")
+	themeExternalResourcePattern           = regexp.MustCompile(`(?i)(?:href|src)\s*=\s*["'](?:https?:)?//|url\s*\(\s*(?:https?:)?//`)
+	themeExternalSourcePattern             = regexp.MustCompile(`(?is)\b(?:src|poster|data)\s*=\s*["']((?:https?:)?//[^"']+)`)
+	themeExternalUnquotedSourcePattern     = regexp.MustCompile(`(?is)\b(?:src|poster|data)\s*=\s*((?:https?:)?//[^\s>]+)`)
+	themeExternalStylesheetPattern         = regexp.MustCompile(`(?is)<link\b[^>]*\bhref\s*=\s*["']((?:https?:)?//[^"']+)`)
+	themeExternalUnquotedStylesheetPattern = regexp.MustCompile(`(?is)<link\b[^>]*\bhref\s*=\s*((?:https?:)?//[^\s>]+)`)
+	themeExternalCSSURLPattern             = regexp.MustCompile(`(?is)\burl\s*\(\s*["']?((?:https?:)?//[^)"'\s]+)`)
+	themeExternalCSSImportPattern          = regexp.MustCompile(`(?is)@import\b\s*(?:url\s*\(\s*)?["']?((?:https?:)?//[^)"'\s;]+)`)
+	themeExternalSVGHrefPattern            = regexp.MustCompile(`(?is)<(?:use|image)\b[^>]*\b(?:xlink:)?href\s*=\s*["']((?:https?:)?//[^"']+)`)
+	themeExternalUnquotedSVGHrefPattern    = regexp.MustCompile(`(?is)<(?:use|image)\b[^>]*\b(?:xlink:)?href\s*=\s*((?:https?:)?//[^\s>]+)`)
+	themeSrcsetAttributePattern            = regexp.MustCompile(`(?is)\b(?:srcset|imagesrcset)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))`)
+	themeExternalURLCandidatePattern       = regexp.MustCompile(`(?i)(?:https?:)?//[^\s"',<>]+`)
 )
 
 // File describes one theme-domain regular file without exposing its host path.
@@ -352,6 +361,65 @@ func validateThemeTemplateActions(name string, data []byte) error {
 	return nil
 }
 
+func externalThemeResourceDiagnostic(name string, data []byte) (error, bool) {
+	type candidate struct {
+		offset int
+		url    string
+		kind   string
+	}
+	var candidates []candidate
+	for _, item := range []struct {
+		pattern *regexp.Regexp
+		kind    string
+	}{
+		{themeExternalSourcePattern, "resource attribute"},
+		{themeExternalUnquotedSourcePattern, "resource attribute"},
+		{themeExternalStylesheetPattern, "stylesheet href"},
+		{themeExternalUnquotedStylesheetPattern, "stylesheet href"},
+		{themeExternalCSSURLPattern, "CSS url()"},
+		{themeExternalCSSImportPattern, "CSS @import"},
+		{themeExternalSVGHrefPattern, "SVG resource href"},
+		{themeExternalUnquotedSVGHrefPattern, "SVG resource href"},
+	} {
+		for _, indexes := range item.pattern.FindAllSubmatchIndex(data, -1) {
+			if len(indexes) < 4 || indexes[2] < 0 {
+				continue
+			}
+			candidates = append(candidates, candidate{offset: indexes[2], url: string(data[indexes[2]:indexes[3]]), kind: item.kind})
+		}
+	}
+	for _, indexes := range themeSrcsetAttributePattern.FindAllSubmatchIndex(data, -1) {
+		valueStart, valueEnd := -1, -1
+		for group := 1; group <= 3; group++ {
+			start, end := indexes[group*2], indexes[group*2+1]
+			if start >= 0 {
+				valueStart, valueEnd = start, end
+				break
+			}
+		}
+		if valueStart < 0 {
+			continue
+		}
+		value := data[valueStart:valueEnd]
+		for _, urlIndexes := range themeExternalURLCandidatePattern.FindAllIndex(value, -1) {
+			start, end := valueStart+urlIndexes[0], valueStart+urlIndexes[1]
+			candidates = append(candidates, candidate{offset: start, url: string(data[start:end]), kind: "responsive image resource"})
+		}
+	}
+	if len(candidates) == 0 {
+		return nil, false
+	}
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].offset < candidates[j].offset })
+	match := candidates[0]
+	line := bytes.Count(data[:match.offset], []byte{'\n'}) + 1
+	lineStart := bytes.LastIndex(data[:match.offset], []byte{'\n'})
+	column := match.offset + 1
+	if lineStart >= 0 {
+		column = match.offset - lineStart
+	}
+	return fmt.Errorf("theme template %s contains an external resource URL at line %d, column %d (%s %q); external navigation href attributes are allowed", name, line, column, match.kind, match.url), true
+}
+
 func ValidateWithAssets(source Source, assets map[string]string, baseURL string) error {
 	if err := Validate(source); err != nil {
 		return err
@@ -368,8 +436,8 @@ func ValidateWithAssets(source Source, assets map[string]string, baseURL string)
 		if err := validateThemeTemplateActions(name, data); err != nil {
 			return err
 		}
-		if themeExternalURLPattern.Match(data) {
-			return fmt.Errorf("theme template %s contains an external resource URL", name)
+		if diagnostic, ok := externalThemeResourceDiagnostic(name, data); ok {
+			return diagnostic
 		}
 		if match := staticThemeAssetURLPattern.FindSubmatch(data); len(match) == 2 {
 			return fmt.Errorf("theme template %s must use assetURL for local asset %q", name, string(match[1]))

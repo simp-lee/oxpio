@@ -13,13 +13,14 @@ import (
 )
 
 func TestRewritePreviewHTMLRewritesQuotedRootURLs(t *testing.T) {
-	body := []byte(`<a href = "/docs/">Docs</a><img SRC='/images/logo.svg'><script src="//cdn.example/app.js"></script><img srcset="/images/small.png 1x, /images/large.png 2x">`)
+	body := []byte(`<a href = "/docs/">Docs</a><img SRC='/images/logo.svg'><script src="//cdn.example/app.js"></script><img srcset="/images/small.png 1x, /images/large.png 2x"><img imagesrcset="/images/hero.png 1x">`)
 	got := string(rewritePreviewHTML(body, "/_oxpio/preview/token"))
 	for _, want := range []string{
 		`href = "/_oxpio/preview/token/docs/"`,
 		`SRC='/_oxpio/preview/token/images/logo.svg'`,
 		`src="//cdn.example/app.js"`,
 		`srcset="/_oxpio/preview/token/images/small.png 1x,/_oxpio/preview/token/images/large.png 2x"`,
+		`imagesrcset="/_oxpio/preview/token/images/hero.png 1x"`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rewritten HTML missing %q: %s", want, got)
@@ -28,16 +29,31 @@ func TestRewritePreviewHTMLRewritesQuotedRootURLs(t *testing.T) {
 }
 
 func TestRewritePreviewHTMLRewritesMinifiedUnquotedRootURLs(t *testing.T) {
-	body := []byte(`<link rel=stylesheet href=/assets/oxpio-runtime/katex.min.css><script src=/assets/oxpio-runtime/katex.min.js></script><img src=/images/logo.svg><img srcset=/images/logo.svg>`)
+	body := []byte(`<link rel=stylesheet href=/assets/oxpio-runtime/katex.min.css><script src=/assets/oxpio-runtime/katex.min.js></script><img src=/images/logo.svg><img srcset=/images/logo.svg,/images/other.svg><img imagesrcset=/images/hero.svg>`)
 	got := string(rewritePreviewHTML(body, "/_oxpio/preview/token"))
 	for _, want := range []string{
 		`href=/_oxpio/preview/token/assets/oxpio-runtime/katex.min.css`,
 		`src=/_oxpio/preview/token/assets/oxpio-runtime/katex.min.js`,
 		`src=/_oxpio/preview/token/images/logo.svg`,
-		`srcset=/_oxpio/preview/token/images/logo.svg`,
+		`srcset=/_oxpio/preview/token/images/logo.svg,/_oxpio/preview/token/images/other.svg`,
+		`imagesrcset=/_oxpio/preview/token/images/hero.svg`,
 	} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("rewritten minified HTML missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestRewritePreviewHTMLRewritesRouteRelativeResources(t *testing.T) {
+	body := []byte(`<img src="../assets/image.png"><img srcset="../assets/small.png 1x, ../../assets/large.png 2x"><img imagesrcset=../assets/hero.png,../../assets/other.png>`)
+	got := string(rewritePreviewHTMLAt(body, "/_oxpio/preview/token", "/docs/article/"))
+	for _, want := range []string{
+		`src="/_oxpio/preview/token/docs/assets/image.png"`,
+		`srcset="/_oxpio/preview/token/docs/assets/small.png 1x,/_oxpio/preview/token/assets/large.png 2x"`,
+		`imagesrcset=/_oxpio/preview/token/docs/assets/hero.png,/_oxpio/preview/token/assets/other.png`,
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("relative preview URL missing %q: %s", want, got)
 		}
 	}
 }
@@ -126,6 +142,47 @@ func TestServerCloseRemovesTemporaryPreviews(t *testing.T) {
 	}
 	if err := server.Close(); err != nil {
 		t.Fatalf("second Close() error = %v", err)
+	}
+}
+
+func TestRenderContentPreviewHTMLKeepsArticleContentAndDropsSiteShell(t *testing.T) {
+	fullPage := []byte(`<!doctype html><html lang="en" data-oxpio-math><head><title>Article</title><link rel="stylesheet" href="/docs/theme.css"><script src="/docs/runtime.js"></script></head><body class="site-body"><header class="site-header">Navigation</header><main class="site-main"><div class="site-content"><article><h1>Title</h1><div data-page-content><p>Body</p></div></article></div></main><footer>Footer</footer></body></html>`)
+	got, err := renderContentPreviewHTML(fullPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(got)
+	for _, want := range []string{"data-oxpio-math", "<h1>Title</h1>", "data-page-content", "theme.css", "runtime.js", "Body"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("content preview missing %q: %s", want, html)
+		}
+	}
+	for _, unwanted := range []string{"site-header", "Footer", "Navigation"} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("content preview retained %q: %s", unwanted, html)
+		}
+	}
+}
+
+func TestRenderContentPreviewHTMLUsesRendererMarkersWithoutThemeMarker(t *testing.T) {
+	fullPage := []byte(`<!doctype html><html><head></head><body><header class="site-header">Navigation</header><main><article><h1>Title</h1><!--oxpio-content-start-7c4f7e1b6d2a--><p>Body</p><script>window.contentScript=1</script><!--oxpio-content-end-7c4f7e1b6d2a--></article></main><footer>Footer</footer></body></html>`)
+	got, err := renderContentPreviewHTML(fullPage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	html := string(got)
+	for _, want := range []string{"<h1>Title</h1>", "<p>Body</p>", "data-page-content"} {
+		if !strings.Contains(html, want) {
+			t.Fatalf("marker-based content preview missing %q: %s", want, html)
+		}
+	}
+	for _, unwanted := range []string{"site-header", "Footer", "Navigation"} {
+		if strings.Contains(html, unwanted) {
+			t.Fatalf("marker-based content preview retained %q: %s", unwanted, html)
+		}
+	}
+	if strings.Count(html, "window.contentScript=1") != 1 {
+		t.Fatalf("marker-based content preview duplicated content script: %s", html)
 	}
 }
 

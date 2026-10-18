@@ -3,7 +3,9 @@
 Themes are Go `html/template` files using `oxpio.theme.vm/v1`. The required
 entries are `layouts/base.html`, `section.html`, `article.html`, `tag.html`,
 `timeline.html`, and `404.html`; each page entry receives a page View Model
-and may call the shared `base` template.
+and may call the shared `base` template. A local theme must also contain the
+`partials/` and `assets/` directories; either directory may be empty when the
+theme has no partials or static assets.
 
 Page kinds are `section`, `article`, `tag`, `timeline`, and `404`. Main fields
 include `.Site`, `.Kind`, `.Title`, `.Description`, `.URL`, `.Href`,
@@ -16,6 +18,8 @@ empty or nil rather than inferred.
 The pure template functions are `siteURL(path)`, `routeURL(route)`,
 `assetURL(themePath)`, `formatDate(value, layout)`, and
 `emitJSONLD(value)`. `assetURL` accepts only a planned path such as
-`assets/style.css`; it never reads files or the network. Use `theme context`,
+`assets/style.css`; it never reads files or the network. External `href`
+navigation links are allowed, but external `src`, stylesheet, and CSS
+`url()` resources are rejected so theme previews remain offline. Use `theme context`,
 `theme validate`, and `theme preview` for the complete current contract and
 feedback loop. Copy the embedded `base` theme with `theme init` before editing.

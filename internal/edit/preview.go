@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -17,9 +18,14 @@ import (
 
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
+	xhtml "golang.org/x/net/html"
 )
 
-const previewLifetime = 30 * time.Minute
+const (
+	previewLifetime           = 30 * time.Minute
+	previewContentStartMarker = "oxpio-content-start-7c4f7e1b6d2a"
+	previewContentEndMarker   = "oxpio-content-end-7c4f7e1b6d2a"
+)
 
 type editorPreview struct {
 	static      *internalserver.Server
@@ -121,6 +127,187 @@ func renderPreviewPage(static *internalserver.Server, requestPath string) ([]byt
 		return nil, fmt.Errorf("preview page returned %q", recorder.Header().Get("Content-Type"))
 	}
 	return append([]byte(nil), recorder.Body.Bytes()...), nil
+}
+
+func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
+	document, err := xhtml.Parse(bytes.NewReader(fullPage))
+	if err != nil {
+		return nil, err
+	}
+	content := findPreviewElement(document, func(node *xhtml.Node) bool {
+		for _, attribute := range node.Attr {
+			if attribute.Key == "data-page-content" {
+				return true
+			}
+		}
+		return false
+	})
+	contentStart, contentEnd := (*xhtml.Node)(nil), (*xhtml.Node)(nil)
+	if content == nil {
+		contentStart = findPreviewElement(document, func(node *xhtml.Node) bool {
+			return node.Type == xhtml.CommentNode && node.Data == previewContentStartMarker
+		})
+		if contentStart != nil {
+			contentEnd = findPreviewSibling(contentStart, func(node *xhtml.Node) bool {
+				return node.Type == xhtml.CommentNode && node.Data == previewContentEndMarker
+			})
+		}
+		if contentStart == nil || contentEnd == nil || contentStart.Parent != contentEnd.Parent || !previewNodeFollows(contentStart, contentEnd) {
+			return fullPage, nil
+		}
+	}
+	contentRoot := content
+	if contentRoot == nil {
+		contentRoot = contentStart
+	}
+	for parent := contentRoot.Parent; parent != nil; parent = parent.Parent {
+		if parent.Type == xhtml.ElementNode && (parent.Data == "article" || parent.Data == "section") {
+			contentRoot = parent
+			break
+		}
+	}
+	if content == nil && contentRoot == contentStart {
+		contentRoot = &xhtml.Node{Type: xhtml.ElementNode, Data: "div", Attr: []xhtml.Attribute{{Key: "data-page-content", Val: ""}}}
+		for child := contentStart.NextSibling; child != nil && child != contentEnd; child = child.NextSibling {
+			contentRoot.AppendChild(clonePreviewNode(child))
+		}
+	}
+	htmlRoot := findPreviewElement(document, func(node *xhtml.Node) bool { return node.Type == xhtml.ElementNode && node.Data == "html" })
+	headRoot := findPreviewElement(document, func(node *xhtml.Node) bool { return node.Type == xhtml.ElementNode && node.Data == "head" })
+	bodyRoot := findPreviewElement(document, func(node *xhtml.Node) bool { return node.Type == xhtml.ElementNode && node.Data == "body" })
+	if htmlRoot == nil || headRoot == nil || bodyRoot == nil {
+		return fullPage, nil
+	}
+
+	previewDocument := &xhtml.Node{Type: xhtml.DocumentNode}
+	previewDocument.AppendChild(&xhtml.Node{Type: xhtml.DoctypeNode, Data: "html"})
+	previewHTML := &xhtml.Node{Type: xhtml.ElementNode, Data: "html", Attr: append([]xhtml.Attribute(nil), htmlRoot.Attr...)}
+	previewDocument.AppendChild(previewHTML)
+	previewHead := &xhtml.Node{Type: xhtml.ElementNode, Data: "head", Attr: append([]xhtml.Attribute(nil), headRoot.Attr...)}
+	for child := headRoot.FirstChild; child != nil; child = child.NextSibling {
+		previewHead.AppendChild(clonePreviewNode(child))
+	}
+	previewHTML.AppendChild(previewHead)
+	previewBody := &xhtml.Node{Type: xhtml.ElementNode, Data: "body", Attr: append([]xhtml.Attribute(nil), bodyRoot.Attr...)}
+	previewBody.Attr = append(previewBody.Attr, xhtml.Attribute{Key: "data-oxpio-content-preview", Val: ""})
+	previewMain := &xhtml.Node{Type: xhtml.ElementNode, Data: "main", Attr: []xhtml.Attribute{{Key: "class", Val: "site-main content-preview-main"}}}
+	previewContent := &xhtml.Node{Type: xhtml.ElementNode, Data: "div", Attr: []xhtml.Attribute{{Key: "class", Val: "site-content"}}}
+	contentClone := clonePreviewNode(contentRoot)
+	if content == nil {
+		wrapPreviewContentMarkers(contentClone)
+	}
+	previewContent.AppendChild(contentClone)
+	previewMain.AppendChild(previewContent)
+	previewBody.AppendChild(previewMain)
+	appendPreviewScripts(previewBody, bodyRoot, contentRoot, contentStart, contentEnd)
+	previewHTML.AppendChild(previewBody)
+
+	var rendered bytes.Buffer
+	if err := xhtml.Render(&rendered, previewDocument); err != nil {
+		return nil, err
+	}
+	return rendered.Bytes(), nil
+}
+
+func previewNodeFollows(start, end *xhtml.Node) bool {
+	for node := start.NextSibling; node != nil; node = node.NextSibling {
+		if node == end {
+			return true
+		}
+	}
+	return false
+}
+
+func wrapPreviewContentMarkers(root *xhtml.Node) {
+	start := findPreviewElement(root, func(node *xhtml.Node) bool {
+		return node.Type == xhtml.CommentNode && node.Data == previewContentStartMarker
+	})
+	end := findPreviewSibling(start, func(node *xhtml.Node) bool {
+		return node.Type == xhtml.CommentNode && node.Data == previewContentEndMarker
+	})
+	if start == nil || end == nil || start.Parent != end.Parent || !previewNodeFollows(start, end) {
+		return
+	}
+	parent := start.Parent
+	first := start.NextSibling
+	parent.RemoveChild(start)
+	wrapper := &xhtml.Node{Type: xhtml.ElementNode, Data: "div", Attr: []xhtml.Attribute{{Key: "data-page-content", Val: ""}}}
+	for child := first; child != nil && child != end; {
+		next := child.NextSibling
+		parent.RemoveChild(child)
+		wrapper.AppendChild(child)
+		child = next
+	}
+	parent.InsertBefore(wrapper, end)
+	parent.RemoveChild(end)
+}
+
+func findPreviewSibling(start *xhtml.Node, match func(*xhtml.Node) bool) *xhtml.Node {
+	if start == nil {
+		return nil
+	}
+	for node := start.NextSibling; node != nil; node = node.NextSibling {
+		if match(node) {
+			return node
+		}
+	}
+	return nil
+}
+
+func findPreviewElement(root *xhtml.Node, match func(*xhtml.Node) bool) *xhtml.Node {
+	if root == nil {
+		return nil
+	}
+	if match(root) {
+		return root
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if found := findPreviewElement(child, match); found != nil {
+			return found
+		}
+	}
+	return nil
+}
+
+func clonePreviewNode(node *xhtml.Node) *xhtml.Node {
+	clone := &xhtml.Node{Type: node.Type, DataAtom: node.DataAtom, Namespace: node.Namespace, Data: node.Data, Attr: append([]xhtml.Attribute(nil), node.Attr...)}
+	for child := node.FirstChild; child != nil; child = child.NextSibling {
+		clone.AppendChild(clonePreviewNode(child))
+	}
+	return clone
+}
+
+func appendPreviewScripts(parent, original, excluded, contentStart, contentEnd *xhtml.Node) {
+	if original == nil || original == excluded || previewNodeWithinRange(original, contentStart, contentEnd) {
+		return
+	}
+	if original.Type == xhtml.ElementNode && original.Data == "script" {
+		parent.AppendChild(clonePreviewNode(original))
+		return
+	}
+	for child := original.FirstChild; child != nil; child = child.NextSibling {
+		appendPreviewScripts(parent, child, excluded, contentStart, contentEnd)
+	}
+}
+
+func previewNodeWithinRange(node, start, end *xhtml.Node) bool {
+	if node == nil || start == nil || end == nil || start.Parent == nil || start.Parent != end.Parent {
+		return false
+	}
+	parent := start.Parent
+	direct := node
+	for direct.Parent != nil && direct.Parent != parent {
+		direct = direct.Parent
+	}
+	if direct.Parent != parent {
+		return false
+	}
+	for child := start.NextSibling; child != nil && child != end; child = child.NextSibling {
+		if child == direct {
+			return true
+		}
+	}
+	return false
 }
 
 func previewSitePath(basePath, route string) string {
@@ -262,7 +449,13 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, previewFailureMessage("could not render preview page", cleanupErr), http.StatusInternalServerError)
 		return
 	}
-	contentHTML := rewritePreviewHTML(fullPage, s.controlPrefix()+"preview/"+token)
+	contentPage, err := renderContentPreviewHTML(fullPage)
+	if err != nil {
+		cleanupErr := s.discardUnpublishedPreview(static, root)
+		http.Error(w, previewFailureMessage("could not render content preview", cleanupErr), http.StatusInternalServerError)
+		return
+	}
+	contentHTML := rewritePreviewHTMLAt(contentPage, s.controlPrefix()+"preview/"+token, previewSitePath(basePath, previewEntry.Route))
 	s.previewMu.Lock()
 	if s.closed {
 		s.previewMu.Unlock()
@@ -390,11 +583,93 @@ func previewFailureMessage(message string, cleanupErr error) string {
 }
 
 var (
-	previewURLAttributePattern            = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data-src)\s*=\s*)(["'])(/[^"']*)`)
-	previewUnquotedURLAttributePattern    = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data-src)\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
-	previewSrcsetAttributePattern         = regexp.MustCompile(`(?i)(\bsrcset\s*=\s*)(["'])(/[^"']*)`)
-	previewUnquotedSrcsetAttributePattern = regexp.MustCompile(`(?i)(\bsrcset\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
+	previewURLAttributePattern                    = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data|data-src)\s*=\s*)(["'])(/[^"']*)`)
+	previewUnquotedURLAttributePattern            = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data|data-src)\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
+	previewRelativeURLAttributePattern            = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data|data-src)\s*=\s*)(["'])([^"']*)`)
+	previewUnquotedRelativeURLAttributePattern    = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data|data-src)\s*=\s*)([^\s"'=<>` + "`" + `]+)`)
+	previewSrcsetAttributePattern                 = regexp.MustCompile(`(?i)(\b(?:srcset|imagesrcset)\s*=\s*)(["'])(/[^"']*)`)
+	previewUnquotedSrcsetAttributePattern         = regexp.MustCompile(`(?i)(\b(?:srcset|imagesrcset)\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
+	previewRelativeSrcsetAttributePattern         = regexp.MustCompile(`(?i)(\b(?:srcset|imagesrcset)\s*=\s*)(["'])([^"']*)`)
+	previewUnquotedRelativeSrcsetAttributePattern = regexp.MustCompile(`(?i)(\b(?:srcset|imagesrcset)\s*=\s*)([^\s"'=<>` + "`" + `]+)`)
 )
+
+func rewritePreviewHTMLAt(body []byte, prefix, pagePath string) []byte {
+	text := previewRelativeURLAttributePattern.ReplaceAllStringFunc(string(body), func(match string) string {
+		parts := previewRelativeURLAttributePattern.FindStringSubmatch(match)
+		if len(parts) != 4 {
+			return match
+		}
+		return parts[1] + parts[2] + rewritePreviewRelativeURL(parts[3], prefix, pagePath)
+	})
+	text = previewUnquotedRelativeURLAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := previewUnquotedRelativeURLAttributePattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		return parts[1] + rewritePreviewRelativeURL(parts[2], prefix, pagePath)
+	})
+	text = previewRelativeSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := previewRelativeSrcsetAttributePattern.FindStringSubmatch(match)
+		if len(parts) != 4 {
+			return match
+		}
+		return parts[1] + parts[2] + rewritePreviewRelativeSrcset(parts[3], prefix, pagePath)
+	})
+	text = previewUnquotedRelativeSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
+		parts := previewUnquotedRelativeSrcsetAttributePattern.FindStringSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+		return parts[1] + rewritePreviewRelativeSrcset(parts[2], prefix, pagePath)
+	})
+	return rewritePreviewHTML([]byte(text), prefix)
+}
+
+func rewritePreviewRelativeSrcset(value, prefix, pagePath string) string {
+	candidates := strings.Split(value, ",")
+	for index, candidate := range candidates {
+		fields := strings.Fields(candidate)
+		if len(fields) == 0 {
+			continue
+		}
+		fields[0] = rewritePreviewRelativeURL(fields[0], prefix, pagePath)
+		candidates[index] = strings.Join(fields, " ")
+	}
+	return strings.Join(candidates, ",")
+}
+
+func rewritePreviewRelativeURL(value, prefix, pagePath string) string {
+	if value == "" || strings.HasPrefix(value, "/") || strings.HasPrefix(value, "#") || value == prefix || strings.HasPrefix(value, prefix+"/") {
+		return value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.Opaque != "" {
+		return value
+	}
+	basePath := pagePath
+	if !strings.HasPrefix(basePath, "/") {
+		basePath = "/" + basePath
+	}
+	if !strings.HasSuffix(basePath, "/") {
+		basePath += "/"
+	}
+	base, err := url.Parse("https://preview.invalid" + basePath)
+	if err != nil {
+		return value
+	}
+	resolved := base.ResolveReference(parsed)
+	resolvedPath := resolved.EscapedPath()
+	if resolvedPath == "" {
+		resolvedPath = "/"
+	}
+	if resolved.RawQuery != "" {
+		resolvedPath += "?" + resolved.RawQuery
+	}
+	if resolved.Fragment != "" {
+		resolvedPath += "#" + resolved.EscapedFragment()
+	}
+	return prefix + resolvedPath
+}
 
 func rewritePreviewHTML(body []byte, prefix string) []byte {
 	text := previewURLAttributePattern.ReplaceAllStringFunc(string(body), func(match string) string {
@@ -432,7 +707,16 @@ func rewritePreviewHTML(body []byte, prefix string) []byte {
 		if len(parts) != 3 {
 			return match
 		}
-		return parts[1] + rewritePreviewRootURL(parts[2], prefix)
+		candidates := strings.Split(parts[2], ",")
+		for index, candidate := range candidates {
+			fields := strings.Fields(candidate)
+			if len(fields) == 0 || strings.HasPrefix(fields[0], "//") || !strings.HasPrefix(fields[0], "/") {
+				continue
+			}
+			fields[0] = rewritePreviewRootURL(fields[0], prefix)
+			candidates[index] = strings.Join(fields, " ")
+		}
+		return parts[1] + strings.Join(candidates, ",")
 	}))
 }
 

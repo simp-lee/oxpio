@@ -687,12 +687,11 @@ func injectEditorBasePath(data []byte, basePath string) []byte {
 func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case http.MethodGet, http.MethodHead:
-		htmlBody, err := editorWeb.ReadFile("web/login.html")
+		htmlBody, err := s.renderLoginPage(r.URL.Query().Get("next"), "", "")
 		if err != nil {
 			http.Error(w, "login unavailable", http.StatusInternalServerError)
 			return
 		}
-		htmlBody = injectEditorBasePath(htmlBody, s.static.BasePath())
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(htmlBody)))
@@ -710,13 +709,17 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		username := r.Form.Get("username")
-		password := r.Form.Get("password")
+		next := s.loginNext(r.Form.Get("next"))
 		validUsername := subtle.ConstantTimeCompare([]byte(username), []byte(s.username)) == 1
-		validPassword, err := internalconfig.VerifyArgon2idPassword(password, s.hash)
+		validPassword, err := internalconfig.VerifyArgon2idPassword(r.Form.Get("password"), s.hash)
 		if err != nil {
 			validPassword = false
 		}
 		if !validUsername || !validPassword {
+			if loginWantsHTML(r) {
+				s.writeLoginError(w, http.StatusUnauthorized, next, username, "Invalid username or password.")
+				return
+			}
 			http.Error(w, "invalid credentials", http.StatusUnauthorized)
 			return
 		}
@@ -734,12 +737,63 @@ func (s *Server) serveLogin(w http.ResponseWriter, r *http.Request) {
 		s.sessions[sessionID] = session{username: s.username, csrf: csrf, expires: s.now().Add(sessionLifetime)}
 		s.mu.Unlock()
 		http.SetCookie(w, &http.Cookie{Name: sessionCookieName, Value: sessionID, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode, MaxAge: int(sessionLifetime / time.Second)})
+		if loginWantsHTML(r) {
+			http.Redirect(w, r, next, http.StatusSeeOther)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = io.WriteString(w, `{"authenticated":true}`)
 	default:
 		w.Header().Set("Allow", "GET, POST")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
+}
+
+func (s *Server) renderLoginPage(next, username, message string) ([]byte, error) {
+	htmlBody, err := editorWeb.ReadFile("web/login.html")
+	if err != nil {
+		return nil, err
+	}
+	htmlBody = injectEditorBasePath(htmlBody, s.static.BasePath())
+	htmlBody = bytes.ReplaceAll(htmlBody, []byte("__OXPIO_LOGIN_NEXT__"), []byte(stdhtml.EscapeString(s.loginNext(next))))
+	htmlBody = bytes.ReplaceAll(htmlBody, []byte("__OXPIO_LOGIN_USERNAME__"), []byte(stdhtml.EscapeString(username)))
+	hidden := ""
+	if message == "" {
+		hidden = " hidden"
+	}
+	htmlBody = bytes.ReplaceAll(htmlBody, []byte("__OXPIO_LOGIN_ERROR_HIDDEN__"), []byte(hidden))
+	htmlBody = bytes.ReplaceAll(htmlBody, []byte("__OXPIO_LOGIN_ERROR__"), []byte(stdhtml.EscapeString(message)))
+	return htmlBody, nil
+}
+
+func (s *Server) writeLoginError(w http.ResponseWriter, status int, next, username, message string) {
+	htmlBody, err := s.renderLoginPage(next, username, message)
+	if err != nil {
+		http.Error(w, "login unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(htmlBody)))
+	w.WriteHeader(status)
+	_, _ = w.Write(htmlBody)
+}
+
+func loginWantsHTML(r *http.Request) bool {
+	return r.Form.Get("response") == "html" || strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/html")
+}
+
+func (s *Server) loginNext(value string) string {
+	fallback := s.controlPrefix() + "editor"
+	value = strings.TrimSpace(value)
+	if value == "" || strings.HasPrefix(value, "//") || strings.ContainsAny(value, "\\\r\n") {
+		return fallback
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.Opaque != "" || parsed.User != nil || !strings.HasPrefix(parsed.Path, "/") || strings.ContainsAny(parsed.Path+parsed.RawPath, "\\\r\n") {
+		return fallback
+	}
+	return parsed.String()
 }
 
 func (s *Server) serveLoginAsset(w http.ResponseWriter, r *http.Request) {

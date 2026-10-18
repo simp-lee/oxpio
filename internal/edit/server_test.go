@@ -212,6 +212,24 @@ func TestEditServerAuthenticatesBelowReservedControlBoundary(t *testing.T) {
 	}
 	_ = response.Body.Close()
 
+	browserClient := *httpClient
+	browserClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }
+	loginRequest, err = http.NewRequest(http.MethodPost, listener.URL+"/_oxpio/login", strings.NewReader("username=admin&password=secret&response=html&next=%2Farticle%2F"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	loginRequest.Header.Set("Origin", listener.URL)
+	loginRequest.Header.Set("Accept", "text/html")
+	response, err = browserClient.Do(loginRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode != http.StatusSeeOther || response.Header.Get("Location") != "/article/" {
+		t.Fatalf("browser login response = %d location=%q", response.StatusCode, response.Header.Get("Location"))
+	}
+	_ = response.Body.Close()
+
 	loginRequest, err = http.NewRequest(http.MethodPost, listener.URL+"/_oxpio/login", strings.NewReader("username=admin&password=secret"))
 	if err != nil {
 		t.Fatal(err)

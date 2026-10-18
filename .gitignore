@@ -21,3 +21,5 @@ dist/
 
 # Local OS files
 .DS_Store
+# Generated OXPIO demo site
+oxpio_demo/

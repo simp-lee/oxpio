@@ -15,7 +15,7 @@ const state = {
   bodyBaseline: "", formBaseline: {}, sourceChanged: false,
   filePath: "", fileHash: "", fileKind: "", fileSourceKind: "",
   fileDialogMode: "", dirty: false, busy: false, loadToken: 0,
-  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, catalogSources: [], collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
+  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, catalogSources: [], collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
 };
 const editable = new Compartment();
 let editor;
@@ -58,6 +58,22 @@ function scheduleLivePreview(delay = 350) {
   editor.dispatch({effects: [livePreviewLine.of(null), livePreviewRender.of({body: "", blocks: [], styles: ""})]});
   livePreviewTimer = setTimeout(() => refreshLivePreview(request).catch(error => diagnostics(error.diagnostics, `Live preview failed: ${error.message}`)), delay);
 }
+function previewURLFor(kind) {
+  return kind === "page" ? state.previewPageURL || state.previewContentURL : state.previewContentURL || state.previewPageURL;
+}
+function applyPreviewResult(result, kind = "content") {
+  state.previewContentURL = result.contentURL || result.url || "";
+  state.previewPageURL = result.fullURL || result.url || "";
+  state.previewKind = kind;
+  state.previewURL = previewURLFor(kind);
+  state.previewOpen = true;
+  const frame = $("#preview-frame");
+  frame.hidden = false;
+  frame.src = state.previewURL;
+  frame.onload = bindPreviewFrame;
+  $("#preview-empty").hidden = true;
+  updateMode();
+}
 async function refreshLivePreview(request) {
   if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || !state.path || state.busy) return;
   const source = await compose();
@@ -65,10 +81,13 @@ async function refreshLivePreview(request) {
   const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source});
   if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
   const frame = $("#preview-frame");
-  const url = result.contentURL || result.url;
+  state.previewContentURL = result.contentURL || result.url || "";
+  state.previewPageURL = result.fullURL || result.url || "";
+  state.previewKind = "content";
+  state.previewURL = state.previewContentURL;
   const loaded = new Promise(resolve => {
     frame.addEventListener("load", resolve, {once: true});
-    frame.src = url;
+    frame.src = state.previewURL;
   });
   frame.hidden = false;
   await loaded;
@@ -471,6 +490,10 @@ function clearEditor() {
   state.bodyBaseline = "";
   state.formBaseline = {};
   state.sourceChanged = false;
+  state.previewURL = "";
+  state.previewContentURL = "";
+  state.previewPageURL = "";
+  state.previewKind = "content";
   state.surface = "write";
   showForm({publish: false});
   setText("");
@@ -504,6 +527,10 @@ async function loadSource(path) {
     state.mode = data.parseError ? "source" : "visual";
     state.surface = state.mode === "source" ? "source" : "write";
     state.sourceChanged = false;
+    state.previewURL = "";
+    state.previewContentURL = "";
+    state.previewPageURL = "";
+    state.previewKind = "content";
     showForm(data.frontmatter);
     setText(state.mode === "source" ? data.source : data.body);
     state.bodyBaseline = text();
@@ -542,7 +569,16 @@ function updateMode() {
   $(".workspace").dataset.mode = state.surface;
   $("#editor-pane-title").textContent = state.surface === "write" ? "Write" : "Markdown";
   $("#preview-refresh").hidden = state.surface !== "read";
-  if (state.surface !== "diff") $("#preview-title").textContent = state.surface === "write" ? "Write" : "Preview";
+  const pagePreview = $("#page-preview");
+  if (pagePreview) {
+    pagePreview.hidden = state.surface !== "read";
+    pagePreview.setAttribute("aria-pressed", String(state.previewKind === "page"));
+  }
+  if (state.surface !== "diff") $("#preview-title").textContent = state.surface === "write" ? "Write" : (state.previewKind === "page" ? "Page preview" : "Content preview");
+}
+function sourceBodyOffset(value) {
+  const frontmatter = /^(?:\uFEFF)?---(?:\r\n|\r|\n)[\s\S]*?(?:\r\n|\r|\n)(?:---|\.\.\.)(?:(?:\r\n|\r|\n)|$)/.exec(value);
+  return frontmatter ? value.slice(0, frontmatter[0].length).replace(/\r\n?/g, "\n").length : 0;
 }
 function originalOffsetForNormalized(value, target) {
   let normalized = 0;
@@ -609,6 +645,7 @@ async function save() {
     const oldHash = state.hash;
     const mode = state.mode;
     const reopenPreview = state.keepPreview && state.previewOpen;
+    const reopenPreviewKind = state.previewKind;
     const source = await compose();
     const result = await mutation("PUT", `/_oxpio/source?path=${encodeURIComponent(path)}`, source, {"X-OXPIO-Source-Hash": state.hash});
     await clearDraft(path);
@@ -619,12 +656,7 @@ async function save() {
     if (reopenPreview) {
       try {
         const previewResult = await mutation("POST", "/_oxpio/preview", {path: state.path, source: state.source});
-        const frame = $("#preview-frame");
-        frame.hidden = false;
-        frame.src = previewResult.contentURL || previewResult.url;
-        frame.onload = bindPreviewFrame;
-        $("#preview-empty").hidden = true;
-        state.previewOpen = true;
+        applyPreviewResult(previewResult, reopenPreviewKind);
       } catch (error) { diagnostics(error.diagnostics, `Preview refresh failed: ${error.message}`); }
     }
     diagnostics(result.diagnostics);
@@ -633,20 +665,17 @@ async function save() {
     status(result.warningCount ? `Saved and rebuilt with warnings.${cleanupWarning}` : `Saved and rebuilt.${cleanupWarning}`);
   });
 }
-async function preview() {
-  await operation("Preview", async () => {
-    status("Generating server-rendered draft preview…");
+async function preview(kind = "content") {
+  await operation(kind === "page" ? "Page preview" : "Preview", async () => {
+    status(kind === "page" ? "Generating complete page preview…" : "Generating focused content preview…");
     const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source: await compose()});
-    const frame = $("#preview-frame");
-    frame.hidden = false;
-    state.previewOpen = true;
-    $("#preview-empty").hidden = true;
-    frame.src = result.contentURL || result.url;
-    frame.onload = bindPreviewFrame;
+    applyPreviewResult(result, kind);
     diagnostics(result.diagnostics);
-    status(result.warningCount ? "Content preview generated with warnings." : "Content preview generated; source and public output were not changed.");
+    const label = kind === "page" ? "Page preview" : "Content preview";
+    status(result.warningCount ? `${label} generated with warnings.` : `${label} generated; source and public output were not changed.`);
   });
 }
+async function pagePreview() { return preview("page"); }
 function diffExtensions() {
   return [basicSetup, markdown(), ...(state.diffWrap ? [EditorView.lineWrapping] : [])];
 }
@@ -758,7 +787,7 @@ function bindPreviewFrame() {
 function showPreviewSurface() {
   $("#diff-editor").hidden = true;
   $("#diff-wrap").hidden = true;
-  $("#preview-title").textContent = state.surface === "write" ? "Write" : "Preview";
+  $("#preview-title").textContent = state.surface === "write" ? "Write" : (state.previewKind === "page" ? "Page preview" : "Content preview");
   $("#preview-title-icon").setAttribute("href", "#icon-eye");
   if (!$("#preview-frame").src) $("#preview-empty").hidden = false;
   else $("#preview-frame").hidden = false;
@@ -793,7 +822,7 @@ function rebuildDiffView() {
   updateDiffControl();
 }
 
-async function toggleMode() {
+async function toggleMode(sourcePosition = null) {
   await operation("Switch mode", async () => {
     const source = await compose();
     if (state.mode === "visual") {
@@ -802,6 +831,11 @@ async function toggleMode() {
       state.mode = "source";
       state.surface = "source";
       setText(source);
+      if (sourcePosition != null) {
+        const position = Math.max(0, Math.min(sourceBodyOffset(source) + sourcePosition, editor.state.doc.length));
+        editor.dispatch({selection: {anchor: position}});
+        editor.focus();
+      }
     } else {
       const result = await mutation("POST", "/_oxpio/frontmatter", {path: state.path, source});
       if (result.parseError) throw new Error(result.parseError);
@@ -919,16 +953,12 @@ function livePreviewStyles(documentRoot) {
 }
 function liveReplace(from, to) { return from < to ? Decoration.replace({}).range(from, to) : null; }
 function liveWidget(from, to, text, className) { return from < to ? Decoration.replace({widget: new LivePreviewWidget(text, className)}).range(from, to) : null; }
-function renderedLivePreviewDecorations(viewState, activeLine, rendered) {
+function renderedLivePreviewDecorations(viewState, _activeLine, rendered) {
   if (!rendered?.blocks?.length || rendered.body !== viewState.doc.toString()) return null;
-  const doc = viewState.doc;
   const blocks = markdownBlocks(rendered.body);
   if (blocks.length !== rendered.blocks.length) return null;
-  const line = doc.line(activeLine || doc.lineAt(viewState.selection.main.head).number);
-  const activeBlock = blocks.findIndex(block => line.from >= block.from && line.from <= block.to);
   const ranges = [];
   blocks.forEach((block, index) => {
-    if (index === activeBlock) return;
     ranges.push(Decoration.replace({widget: new LiveRenderedWidget(rendered.blocks[index], rendered.styles), block: true}).range(block.from, block.to));
   });
   return ranges.length ? Decoration.set(ranges, true) : Decoration.none;
@@ -938,10 +968,8 @@ function buildLivePreviewDecorations(viewState, activeLine, rendered) {
   const renderedDecorations = renderedLivePreviewDecorations(viewState, activeLine, rendered);
   if (renderedDecorations) return renderedDecorations;
   const doc = viewState.doc;
-  const currentLine = activeLine || doc.lineAt(viewState.selection.main.head).number;
   const ranges = [];
   for (let number = 1; number <= doc.lines; number++) {
-    if (number === currentLine) continue;
     const line = doc.line(number);
     const source = line.text;
     const add = range => { if (range) ranges.push(range); };
@@ -1152,23 +1180,14 @@ async function runFileMutation(label, action, preferred = state.filePath, reload
 
 document.querySelectorAll("button svg, label svg, .workspace-search svg").forEach(svg => { svg.setAttribute("aria-hidden", "true"); svg.setAttribute("focusable", "false"); });
 editor = new EditorView({state: EditorState.create({extensions: editorExtensions()}), parent: $("#editor")});
-let liveHoveredLine = null;
-function updateLiveHoveredLine(event) {
+editor.dom.addEventListener("click", event => {
   if (state.surface !== "write" || state.mode !== "visual") return;
-  const target = event.target instanceof Element ? event.target : null;
+  const target = event.target instanceof Element ? event.target.closest(".live-rendered-block") : null;
   if (!target) return;
-  const lineElement = target.closest(".cm-line");
-  const position = editor.posAtDOM(lineElement || target, 0);
-  const line = editor.state.doc.lineAt(position).number;
-  if (line === liveHoveredLine) return;
-  liveHoveredLine = line;
-  editor.dispatch({effects: livePreviewLine.of(line)});
-}
-editor.dom.addEventListener("mousemove", updateLiveHoveredLine);
-editor.dom.addEventListener("mouseleave", () => {
-  if (liveHoveredLine == null) return;
-  liveHoveredLine = null;
-  editor.dispatch({effects: livePreviewLine.of(null)});
+  let position;
+  try { position = editor.posAtDOM(target, 0); } catch { position = editor.state.selection.main.head; }
+  event.preventDefault();
+  toggleMode(position).catch(error => diagnostics(error.diagnostics, `Switch mode failed: ${error.message}`));
 });
 loadPreferences();
 $("#document-search").oninput = filterDocuments;
@@ -1216,7 +1235,8 @@ $(".editor-tabs").onkeydown = event => {
   tabs[next].focus();
   tabs[next].click();
 };
-$("#preview-refresh").onclick = preview;
+$("#preview-refresh").onclick = () => preview("content");
+$("#page-preview").onclick = pagePreview;
 $("#source").onchange = event => {
   if (confirmDiscard()) loadSource(event.target.value);
   else event.target.value = state.path;

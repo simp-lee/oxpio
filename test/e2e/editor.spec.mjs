@@ -47,7 +47,8 @@ async function login(page) {
   await page.locator('input[name="username"]').fill('admin');
   await page.locator('input[name="password"]').fill('secret');
   await page.getByRole('button', {name: 'Log in'}).click();
-  await expect(page.locator('body')).toContainText('authenticated');
+  await expect(page).toHaveURL(/\/_oxpio\/editor$/);
+  await expect(page.locator('body')).toContainText('Content editor');
 }
 
 async function session(context) {
@@ -190,8 +191,10 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   await expect(page.locator('#preview-empty')).toBeHidden();
   const preview = page.frameLocator('#preview-frame');
   await expect(preview.locator('[data-page-content]')).toContainText('Original');
-  await expect(preview.locator('.site-header')).toHaveCount(1);
+  await expect(preview.locator('.site-header')).toHaveCount(0);
   await expect(preview.locator('link[href*="style.css"]')).toHaveCount(1);
+  await page.locator('#page-preview').click();
+  await expect(page.frameLocator('#preview-frame').locator('.site-header')).toHaveCount(1);
 
   await page.locator('#file-new-folder').click();
   await expect(page.locator('#markdown-file-fields')).toBeHidden();
@@ -231,13 +234,19 @@ test('live preview renders unsaved editor changes in the same workspace', async 
   await expect(page.locator('.preview-pane')).toBeHidden();
   await editor.fill('# Live preview marker\n\nInline math: $E = mc^2$.\n\n```go\nfunc Preview() {}\n```\n\n| Stage | Result |\n| --- | --- |\n| Draft | Ready |');
   await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
+  const renderedBeforeHover = await page.locator('#editor .live-rendered-block').count();
   await page.locator('#editor .live-rendered-block').first().hover();
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBe(renderedBeforeHover);
   await expect.poll(async () => page.evaluate(() => {
     const html = [...document.querySelectorAll('#editor .live-rendered-block')].map(element => element.shadowRoot?.innerHTML || '').join('');
     return {math: html.includes('katex'), code: html.includes('<pre'), table: html.includes('<table')};
   })).toEqual({math: true, code: true, table: true});
-  await expect(page.locator('#editor .cm-line').filter({hasText: '# Live preview marker'})).toHaveCount(1);
-  await page.locator('#source-mode').click();
+  await page.locator('#editor .live-rendered-block').first().click();
+  await expect(page.locator('#source-mode')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#editor .cm-content')).toContainText('# Live preview marker');
+  await page.locator('#editor .cm-content').press('X');
+  await expect(page.locator('#editor .cm-content')).toContainText('X# Live preview marker');
+  await expect(page.locator('#editor .cm-content')).not.toContainText('X---');
   await expect(page.locator('.preview-pane')).toBeHidden();
   await context.close();
 });

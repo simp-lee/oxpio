@@ -128,10 +128,10 @@ func newThemeValidateCommand() *cobra.Command {
 			return analyzeErr
 		}
 		if analyzeErr != nil {
-			return diagnosticError{err: analyzeErr, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned, boundary.VaultPath)}
+			return themeValidationFailure(cmd, analyzeErr, planned, boundary.VaultPath)
 		}
 		if failure := internalanalyze.Failure(planned.Diagnostics); failure != nil {
-			return diagnosticError{err: failure, diagnostics: redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned, boundary.VaultPath)}
+			return themeValidationFailure(cmd, failure, planned, boundary.VaultPath)
 		}
 		var source internaltheme.Source
 		if selectedTheme == internaltheme.BaseID {
@@ -149,6 +149,16 @@ func newThemeValidateCommand() *cobra.Command {
 	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&themeID, "theme", "", "Temporarily select a theme")
 	return cmd
+}
+
+func themeValidationFailure(cmd *cobra.Command, err error, planned *internalsiteplan.Result, vaultPath string) error {
+	diagnostics := redactHiddenDiagnostics(diagnosticsFromBuild(planned.Diagnostics), planned, vaultPath)
+	if formatOf(cmd) != "json" {
+		if writeErr := writeValidationDiagnostics(cmd.ErrOrStderr(), diagnostics, err); writeErr != nil {
+			return writeErr
+		}
+	}
+	return diagnosticError{err: err, diagnostics: diagnostics}
 }
 
 func themeDiagnosticCounts(items []internaldiag.Diagnostic) (warnings, errors int) {
@@ -487,18 +497,28 @@ func newThemePreviewCommand(deps commandDependencies) *cobra.Command {
 				}
 				handler.ServeHTTP(response, request)
 			})
-			return ready.ListenAndServeWithReadyHandlerOn("127.0.0.1", previewHandler, announce)
+			if err := ready.ListenAndServeWithReadyHandlerOn("127.0.0.1", previewHandler, announce); err != nil {
+				return themePreviewListenError(port, err)
+			}
+			return nil
 		}
 		if err := announce(); err != nil {
 			return err
 		}
-		return server.ListenAndServe()
+		if err := server.ListenAndServe(); err != nil {
+			return themePreviewListenError(port, err)
+		}
+		return nil
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
 	cmd.Flags().StringVar(&themeID, "theme", "", "Temporarily select a theme")
 	cmd.Flags().IntVar(&port, "port", 8080, "Listener port")
 	return cmd
+}
+
+func themePreviewListenError(port int, err error) error {
+	return fmt.Errorf("theme preview could not listen on 127.0.0.1:%d: %w; try --port NUM", port, err)
 }
 
 func previewBaseURLForPort(base string, port int) (string, error) {

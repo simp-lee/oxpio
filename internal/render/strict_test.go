@@ -42,6 +42,26 @@ func TestStrictArticleThemeReceivesRecommendationEvidence(t *testing.T) {
 	}
 }
 
+func TestStrictArticleThemeMarksContentForFocusedPreview(t *testing.T) {
+	files, err := internaltheme.BaseFiles()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["layouts/base.html"] = []byte(`{{define "base"}}<!doctype html><html><body><article>{{.Content}}</article></body></html>{{end}}`)
+	plan := &model.SitePlan{Config: model.SiteConfig{Title: "Site", BaseURL: "https://example.test/", Theme: "base"}, ThemeFiles: files}
+	article := &model.Note{RelPath: "article.md", Route: "/article/", Frontmatter: model.Frontmatter{Title: "Article", Type: "doc"}, RawContent: []byte("Body\n")}
+	data, err := RenderStrictArticleWithRecommendations(plan, article, nil, nil, 0, 0, nil, nil, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := string(data)
+	for _, want := range []string{"<!--oxpio-content-start-7c4f7e1b6d2a-->", "<!--oxpio-content-end-7c4f7e1b6d2a-->", "Body"} {
+		if !strings.Contains(output, want) {
+			t.Fatalf("themed article output missing %q: %s", want, output)
+		}
+	}
+}
+
 func TestThemedRecommendationCardsPreserveAgentEvidence(t *testing.T) {
 	plan := &model.SitePlan{Config: model.SiteConfig{BaseURL: "https://example.test/"}}
 	index := &model.VaultIndex{Notes: map[string]*model.Note{

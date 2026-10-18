@@ -139,6 +139,59 @@ func TestThemeCompilerRejectsUnplannedSiteAsset(t *testing.T) {
 	}
 }
 
+func TestThemeCompilerAllowsExternalNavigationAndReportsExternalResources(t *testing.T) {
+	files, err := InitFiles("minimal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["layouts/article.html"] = []byte(`{{define "article"}}<a href="https://github.com/example/project">Project</a>{{end}}`)
+	source := sourceFromFiles("minimal", files, false)
+	if err := ValidateWithAssets(source, ValidationAssets(source), "https://example.test/"); err != nil {
+		t.Fatalf("external navigation validation error = %v", err)
+	}
+
+	files["layouts/article.html"] = []byte("{{define \"article\"}}\n<img src=\"https://images.example.test/hero.png\">\n{{end}}")
+	source = sourceFromFiles("minimal", files, false)
+	err = ValidateWithAssets(source, ValidationAssets(source), "https://example.test/")
+	if err == nil || !strings.Contains(err.Error(), "line 2, column 11") || !strings.Contains(err.Error(), "resource attribute") || !strings.Contains(err.Error(), "external navigation href attributes are allowed") {
+		t.Fatalf("external resource validation error = %v", err)
+	}
+
+	files["layouts/article.html"] = []byte(`{{define "article"}}<img srcset="https://images.example.test/hero.png 1x">{{end}}`)
+	source = sourceFromFiles("minimal", files, false)
+	err = ValidateWithAssets(source, ValidationAssets(source), "https://example.test/")
+	if err == nil || !strings.Contains(err.Error(), "responsive image resource") || !strings.Contains(err.Error(), "https://images.example.test/hero.png") {
+		t.Fatalf("external srcset validation error = %v", err)
+	}
+
+	files["layouts/article.html"] = []byte(`{{define "article"}}<style>@import "https://cdn.example.test/theme.css";</style>{{end}}`)
+	source = sourceFromFiles("minimal", files, false)
+	err = ValidateWithAssets(source, ValidationAssets(source), "https://example.test/")
+	if err == nil || !strings.Contains(err.Error(), "CSS @import") || !strings.Contains(err.Error(), "https://cdn.example.test/theme.css") {
+		t.Fatalf("external CSS import validation error = %v", err)
+	}
+
+	files["layouts/article.html"] = []byte(`{{define "article"}}<svg><use href="https://cdn.example.test/icon.svg#mark"></use></svg>{{end}}`)
+	source = sourceFromFiles("minimal", files, false)
+	err = ValidateWithAssets(source, ValidationAssets(source), "https://example.test/")
+	if err == nil || !strings.Contains(err.Error(), "SVG resource href") || !strings.Contains(err.Error(), "https://cdn.example.test/icon.svg#mark") {
+		t.Fatalf("external SVG resource validation error = %v", err)
+	}
+
+	for _, body := range []string{
+		`{{define "article"}}<img src=https://images.example.test/hero.png>{{end}}`,
+		`{{define "article"}}<link rel=stylesheet href=https://cdn.example.test/theme.css>{{end}}`,
+		`{{define "article"}}<img srcset=/local.png,https://images.example.test/hero.png>{{end}}`,
+	} {
+		files["layouts/article.html"] = []byte(body)
+		source = sourceFromFiles("minimal", files, false)
+		err = ValidateWithAssets(source, ValidationAssets(source), "https://example.test/")
+		if err == nil || !strings.Contains(err.Error(), "external") {
+			t.Fatalf("unquoted external resource validation error = %v", err)
+		}
+	}
+}
+
 func TestThemeCompilerRejectsUnknownFunctionAndMissingAsset(t *testing.T) {
 	files, err := InitFiles("minimal")
 	if err != nil {

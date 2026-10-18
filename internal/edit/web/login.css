@@ -42,6 +42,7 @@ body {
 }
 h1 { margin: 0; font-size: clamp(1.8rem, 6vw, 2.35rem); letter-spacing: -.03em; }
 .intro { margin: .65rem 0 1.7rem; color: #526170; line-height: 1.55; }
+.login-error { margin: -0.8rem 0 1rem; padding: .65rem .75rem; border: 1px solid #e1a5a5; border-radius: .4rem; color: #8d2525; background: #fff2f2; line-height: 1.4; }
 form { display: grid; gap: .45rem; }
 label { margin-top: .45rem; color: #354352; font-size: .86rem; font-weight: 650; }
 input {
@@ -73,5 +74,6 @@ button:focus-visible { outline: 3px solid rgba(23, 105, 170, .28); outline-offse
   .brand { color: #8bd0ff; }
   .eyebrow { color: #c2d2df; }
   .intro, label, .footer { color: #aebbc6; }
+  .login-error { border-color: #794b4b; color: #ffb9b9; background: #3a2528; }
   input { border-color: #52616e; color: #e7edf2; background: #202a33; }
 }

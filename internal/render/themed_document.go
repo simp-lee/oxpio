@@ -22,6 +22,11 @@ type sectionViewProvider interface {
 	Section(plan *model.SitePlan, section *model.Section) *viewmodel.Section
 }
 
+const (
+	contentPreviewStartMarker = "<!--oxpio-content-start-7c4f7e1b6d2a-->"
+	contentPreviewEndMarker   = "<!--oxpio-content-end-7c4f7e1b6d2a-->"
+)
+
 type cachedThemeRenderer struct {
 	renderer ThemeRenderer
 	mu       sync.Mutex
@@ -110,7 +115,7 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 	page := viewmodel.Page{
 		Schema: viewmodel.SchemaVersion, Kind: kind, Site: viewmodel.Site{Title: plan.Config.Title, BaseURL: plan.Config.BaseURL, Author: plan.Config.Author, Description: plan.Config.Description, Language: plan.Config.Language},
 		Title: title, Description: description, URL: currentRoute, Href: strictSitePath(plan, currentRoute), Canonical: canonical,
-		Content: template.HTML(body), HeadHTML: template.HTML(head),
+		Content: template.HTML(contentPreviewStartMarker + body + contentPreviewEndMarker), HeadHTML: template.HTML(head),
 		Navigation: themedNavigation(plan, currentRoute, canonical), Breadcrumbs: themedBreadcrumbs(plan, breadcrumbs), Sidebar: themedSidebar(plan, sidebarNodes, currentRoute),
 		Versions: themedVersions(plan, versionID, versionRoutes), VersionID: versionID, HasMath: strings.Contains(body, "data-oxpio-math-source"), HasMermaid: strings.Contains(body, `class="mermaid"`), Popover: plan.Config.Popover.Enabled, BasePath: strictBasePath(plan),
 		SEO: pageSEO,

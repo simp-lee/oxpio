@@ -12,9 +12,12 @@
     <p class="eyebrow">Content workspace</p>
     <h1>Welcome back</h1>
     <p class="intro">Log in to write, organize, and publish your Markdown.</p>
+    <p class="login-error"__OXPIO_LOGIN_ERROR_HIDDEN__ role="alert">__OXPIO_LOGIN_ERROR__</p>
     <form method="post" action="/_oxpio/login">
+      <input type="hidden" name="next" value="__OXPIO_LOGIN_NEXT__">
+      <input type="hidden" name="response" value="html">
       <label for="username">Username</label>
-      <input id="username" name="username" autocomplete="username" required autofocus>
+      <input id="username" name="username" value="__OXPIO_LOGIN_USERNAME__" autocomplete="username" required autofocus>
       <label for="password">Password</label>
       <input id="password" type="password" name="password" autocomplete="current-password" required>
       <button type="submit">Log in</button>
