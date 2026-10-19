@@ -1581,7 +1581,7 @@ func mutateConfigLocked(boundary internalfsutil.VaultOutputBoundary, request Con
 		return MutationResult{}, fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during mutation")
 	}
 	fingerprint := startFingerprint
-	journal := workspace.Journal{Version: workspace.JournalVersion, CommitKind: "source-only", Phase: "prepared", InputFingerprint: fingerprint, TargetPath: output, SourcePath: filepath.Join(vault, internalconfig.Filename), SourceBeforePath: filepath.Join(vault, internalconfig.Filename), OutputPath: output, TemporaryPath: filepath.Join(vault, ".oxpio", ".oxpio-config-only-"+fingerprint[:minInt(16, len(fingerprint))]), SourceBeforeHash: beforeHash, SourceAfterHash: hashBytes(candidate), AfterHash: hashBytes(candidate), OutputBeforeHash: internalpublish.DirectoryHash(output), OutputIdentity: internalpublish.OutputIdentity(output)}
+	journal := workspace.Journal{Version: workspace.JournalVersion, CommitKind: "source-only", Phase: "prepared", InputFingerprint: fingerprint, TargetPath: output, SourcePath: filepath.Join(vault, internalconfig.Filename), SourceBeforePath: filepath.Join(vault, internalconfig.Filename), OutputPath: output, TemporaryPath: filepath.Join(vault, ".oxpio-config-only-"+fingerprint[:minInt(16, len(fingerprint))]), SourceBeforeHash: beforeHash, SourceAfterHash: hashBytes(candidate), AfterHash: hashBytes(candidate), OutputBeforeHash: internalpublish.DirectoryHash(output), OutputIdentity: internalpublish.OutputIdentity(output)}
 	if err := workspace.WriteJournal(vault, journal); err != nil {
 		return MutationResult{}, err
 	}

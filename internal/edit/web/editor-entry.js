@@ -1859,8 +1859,14 @@ $("#file-form").onsubmit = async event => {
   }
 };
 $("#new").onclick = () => { if (confirmDiscard()) $("#new-dialog").showModal(); };
+$("#new-cancel").onclick = () => { $("#new-dialog").close(); $("#new").focus(); };
 $("#new-form").onsubmit = async event => {
-  if (event.submitter?.value === "cancel") return;
+  if (event.submitter?.value === "cancel") {
+    event.preventDefault();
+    $("#new-dialog").close();
+    $("#new").focus();
+    return;
+  }
   event.preventDefault();
   if (state.busy) return;
   const form = new URLSearchParams(new FormData(event.target));

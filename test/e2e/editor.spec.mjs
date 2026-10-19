@@ -216,7 +216,9 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   await page.locator('#file-dialog').evaluate(dialog => dialog.close());
   await page.locator('#new').click();
   await expect(page.locator('#new-dialog')).toBeVisible();
-  await page.locator('#new-dialog').evaluate(dialog => dialog.close());
+  await page.locator('#new-dialog').getByRole('button', {name: 'Cancel'}).click();
+  await expect(page.locator('#new-dialog')).toBeHidden();
+  await expect(page.locator('#new')).toBeFocused();
 
   await page.locator('#source-mode').click();
   await page.locator('#media').click();

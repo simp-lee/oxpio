@@ -1,13 +1,38 @@
 package cli
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
+
+func TestThemeInputReadIsBounded(t *testing.T) {
+	if _, err := readBoundedThemeInput(bytes.NewReader(make([]byte, maxThemeInput+1))); err == nil {
+		t.Fatal("readBoundedThemeInput accepted oversized input")
+	}
+}
+
+func TestThemeInputCannotReadFormalOutput(t *testing.T) {
+	vault := t.TempDir()
+	writeCLIConfig(t, vault)
+	output := filepath.Join(vault, "public")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeValidateFile(t, vault, "public/input.css", "body { color: red; }\n")
+	_, _, err := executeForTest(t, testCommandDependencies(), []string{
+		"theme", "write", "custom.css", "--vault", vault, "--output", output,
+		"--content-file", "public/input.css", "--if-hash", "absent", "--format", "json",
+	})
+	if err == nil || !strings.Contains(err.Error(), "formal output boundary") {
+		t.Fatalf("theme output-boundary input error = %v", err)
+	}
+}
 
 func TestThemeMutationJSONIncludesNullPublished(t *testing.T) {
 	vault := t.TempDir()

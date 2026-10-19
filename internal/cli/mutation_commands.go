@@ -10,11 +10,13 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	internalagent "github.com/simp-lee/oxpio/internal/agent"
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	internalpublish "github.com/simp-lee/oxpio/internal/publish"
+	"github.com/simp-lee/oxpio/internal/publishpath"
 	"github.com/spf13/cobra"
 )
 
@@ -47,7 +49,7 @@ func newWriteCommand() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
 	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
-	cmd.Flags().StringVar(&contentFile, "content-file", "", "Complete UTF-8 source or -")
+	cmd.Flags().StringVar(&contentFile, "content-file", "", "Vault-relative POSIX source file or - for stdin; file must stay inside the Agent input boundary")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash or absent")
 	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Allow unpublished source")
 	cmd.Flags().BoolVar(&publish, "publish", false, "Explicitly publish the source")
@@ -87,7 +89,7 @@ func newEditCommand() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
 	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
-	cmd.Flags().StringVar(&editsFile, "edits-file", "", "Strict PatchRequest JSON or -")
+	cmd.Flags().StringVar(&editsFile, "edits-file", "", "Vault-relative POSIX PatchRequest JSON file or - for stdin; file must stay inside the Agent input boundary")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash")
 	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Allow unpublished source")
 	cmd.Flags().BoolVar(&publish, "publish", false, "Explicitly publish the source")
@@ -181,7 +183,7 @@ func newUploadCommand() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
 	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
-	cmd.Flags().StringVar(&file, "file", "", "Input file or -")
+	cmd.Flags().StringVar(&file, "file", "", "Vault-relative input file or - for stdin; use --name with -; file must stay inside the Agent input boundary")
 	cmd.Flags().StringVar(&name, "name", "", "Safe destination basename for stdin")
 	cmd.Flags().StringVar(&kind, "kind", "", "Upload kind: article, section-index, or attachment")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "Must be absent")
@@ -217,6 +219,156 @@ func readUploadInput(vaultPath, outputPath, value string) ([]byte, error) {
 		return nil, errors.New("upload exceeds 64 MiB")
 	}
 	return data, nil
+}
+
+func newImportCommand() *cobra.Command {
+	var vault, output, manifestFile string
+	var includeUnpublished, dryRun bool
+	cmd := &cobra.Command{Use: "import", Short: "Import mutually-referencing Markdown sources as one strict overlay", Args: cobra.NoArgs, RunE: func(cmd *cobra.Command, _ []string) error {
+		boundary, err := resolveVaultOutputPaths(vault, output)
+		if err != nil {
+			return err
+		}
+		data, err := readAgentInput(cmd, boundary.VaultPath, boundary.OutputPath, manifestFile, false)
+		if err != nil {
+			return err
+		}
+		if len(data) > 64<<20 {
+			return errors.New("import manifest exceeds 64 MiB")
+		}
+		manifest, err := decodeImportManifest(data)
+		if err != nil {
+			return err
+		}
+		items := make([]internalapplication.UploadBatchItem, 0, len(manifest.Files))
+		for _, file := range manifest.Files {
+			if file.Path == nil || file.Kind == nil || file.Content == nil {
+				return errors.New("invalid import manifest: each file requires non-null path, kind, and content")
+			}
+			items = append(items, internalapplication.UploadBatchItem{Path: *file.Path, Kind: *file.Kind, Content: []byte(*file.Content)})
+		}
+		result, mutationErr := internalapplication.MutateUploadBatch(boundary.VaultPath, boundary.OutputPath, internalapplication.UploadBatchMutationRequest{Items: items, IncludeUnpublished: includeUnpublished, DryRun: dryRun})
+		return writeMutationCommandResult(cmd, result, mutationErr)
+	}}
+	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
+	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
+	cmd.Flags().StringVar(&manifestFile, "manifest-file", "", "Vault-relative JSON manifest or - for stdin; all content is analyzed before commit")
+	cmd.Flags().BoolVar(&includeUnpublished, "include-unpublished", false, "Allow unpublished source")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
+	_ = cmd.MarkFlagRequired("manifest-file")
+	return cmd
+}
+
+type importManifest struct {
+	Files []importManifestFile `json:"files"`
+}
+
+type importManifestFile struct {
+	Path    *string `json:"path"`
+	Kind    *string `json:"kind"`
+	Content *string `json:"content"`
+}
+
+func decodeImportManifest(data []byte) (importManifest, error) {
+	if len(data) == 0 {
+		return importManifest{}, errors.New("import manifest is empty")
+	}
+	if !utf8.Valid(data) {
+		return importManifest{}, errors.New("invalid import manifest: input is not valid UTF-8")
+	}
+	if err := rejectDuplicateImportJSONKeys(data); err != nil {
+		return importManifest{}, fmt.Errorf("invalid import manifest: %w", err)
+	}
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	decoder.DisallowUnknownFields()
+	var manifest importManifest
+	if err := decoder.Decode(&manifest); err != nil {
+		return importManifest{}, fmt.Errorf("invalid import manifest: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return importManifest{}, errors.New("invalid import manifest: trailing data")
+		}
+		return importManifest{}, fmt.Errorf("invalid import manifest: %w", err)
+	}
+	if manifest.Files == nil {
+		return importManifest{}, errors.New("invalid import manifest: files must be an array")
+	}
+	for _, file := range manifest.Files {
+		if file.Path == nil || file.Kind == nil || file.Content == nil {
+			return importManifest{}, errors.New("invalid import manifest: each file requires non-null path, kind, and content")
+		}
+	}
+	return manifest, nil
+}
+
+func rejectDuplicateImportJSONKeys(data []byte) error {
+	decoder := json.NewDecoder(bytes.NewReader(data))
+	var walk func(int) error
+	walk = func(objectDepth int) error {
+		token, err := decoder.Token()
+		if err != nil {
+			return err
+		}
+		delim, ok := token.(json.Delim)
+		if !ok {
+			return nil
+		}
+		switch delim {
+		case '{':
+			seen := make(map[string]struct{})
+			var allowed map[string]struct{}
+			switch objectDepth {
+			case 0:
+				allowed = map[string]struct{}{"files": {}}
+			case 2:
+				allowed = map[string]struct{}{"path": {}, "kind": {}, "content": {}}
+			}
+			for decoder.More() {
+				keyToken, err := decoder.Token()
+				if err != nil {
+					return err
+				}
+				key, ok := keyToken.(string)
+				if !ok {
+					return errors.New("object key is not a string")
+				}
+				if _, exists := seen[key]; exists {
+					return fmt.Errorf("duplicate JSON key %q", key)
+				}
+				if _, known := allowed[key]; !known {
+					return fmt.Errorf("unknown import manifest key %q", key)
+				}
+				seen[key] = struct{}{}
+				if err := walk(objectDepth + 1); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		case '[':
+			for decoder.More() {
+				if err := walk(objectDepth + 1); err != nil {
+					return err
+				}
+			}
+			_, err = decoder.Token()
+			return err
+		}
+		return nil
+	}
+	if err := walk(0); err != nil {
+		return err
+	}
+	var extra any
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if err == nil {
+			return errors.New("trailing data")
+		}
+		return err
+	}
+	return nil
 }
 
 func newMkdirCommand() *cobra.Command {
@@ -318,7 +470,7 @@ func newConfigWriteCommand() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
 	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
-	cmd.Flags().StringVar(&contentFile, "content-file", "", "Complete YAML or -")
+	cmd.Flags().StringVar(&contentFile, "content-file", "", "Vault-relative POSIX YAML file or - for stdin; file must stay inside the Agent input boundary")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash or absent")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
 	_ = cmd.MarkFlagRequired("content-file")
@@ -343,7 +495,7 @@ func newConfigEditCommand() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
 	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
-	cmd.Flags().StringVar(&editsFile, "edits-file", "", "Strict PatchRequest JSON or -")
+	cmd.Flags().StringVar(&editsFile, "edits-file", "", "Vault-relative POSIX PatchRequest JSON file or - for stdin; file must stay inside the Agent input boundary")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
 	_ = cmd.MarkFlagRequired("edits-file")
@@ -351,31 +503,41 @@ func newConfigEditCommand() *cobra.Command {
 	return cmd
 }
 
+const maxAgentInput = 64 << 20
+
 func readAgentInput(cmd *cobra.Command, vaultPath, outputPath, value string, jsonInput bool) ([]byte, error) {
 	if strings.TrimSpace(value) == "" {
 		return nil, errors.New("input file is required")
 	}
 	if value == "-" {
-		data, err := io.ReadAll(cmd.InOrStdin())
-		if err != nil {
-			return nil, err
-		}
-		return data, nil
+		return readBoundedAgentInput(cmd.InOrStdin())
 	}
 	vault, err := resolveVaultPath(vaultPath)
 	if err != nil {
 		return nil, err
 	}
 	if err := validateAgentInputPath(vault, outputPath, value); err != nil {
-		return nil, fmt.Errorf("input file: %w", err)
+		return nil, fmt.Errorf("input file: %w; use the command's FILE|- option for stdin (for example --content-file -, --edits-file -, or --manifest-file -), or a Vault-relative POSIX path outside .oxpio, .obsidian, and the formal output", err)
 	}
 	if jsonInput && strings.HasSuffix(strings.ToLower(value), ".md") {
 		return nil, errors.New("edits-file must be JSON")
 	}
 	absolute := filepath.Join(vault, filepath.FromSlash(value))
-	_, data, _, err := internalfsutil.ReadContainedRegularFile(vault, absolute)
+	_, file, _, err := internalfsutil.OpenContainedRegularFile(vault, absolute)
 	if err != nil {
 		return nil, err
+	}
+	defer func() { _ = file.Close() }()
+	return readBoundedAgentInput(file)
+}
+
+func readBoundedAgentInput(input io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(input, maxAgentInput+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(data) > maxAgentInput {
+		return nil, fmt.Errorf("input file exceeds %d MiB", maxAgentInput>>20)
 	}
 	return data, nil
 }
@@ -387,11 +549,8 @@ func validateAgentInputPath(vaultPath, outputPath, value string) error {
 	if value == "." || value == ".." || strings.HasPrefix(value, "../") {
 		return errors.New("must be a Vault-relative POSIX file path")
 	}
-	for _, segment := range strings.Split(value, "/") {
-		switch strings.ToLower(segment) {
-		case ".oxpio", ".obsidian":
-			return errors.New("is outside the Agent input boundary")
-		}
+	if publishpath.IsReservedPath(value) {
+		return errors.New("is outside the Agent input boundary")
 	}
 	candidate := filepath.Join(vaultPath, filepath.FromSlash(value))
 	if strings.TrimSpace(outputPath) != "" && internalfsutil.PathWithinRootAfterSymlinks(outputPath, candidate) {

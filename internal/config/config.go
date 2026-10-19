@@ -14,6 +14,7 @@ import (
 
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/publishpath"
 	"github.com/simp-lee/oxpio/internal/slug"
 	"gopkg.in/yaml.v3"
 )
@@ -152,6 +153,37 @@ func LoadForBuildWithOutput(resolvedVault, resolvedOutput string) (model.SiteCon
 // a missing or invalid current selection in memory.
 func LoadForThemePreview(resolvedVault, resolvedOutput string) (model.SiteConfig, error) {
 	return loadForBuild(resolvedVault, resolvedOutput, true)
+}
+
+// ConfiguredAttachmentDirectory reads and normalizes the configured attachment
+// root without requiring that the directory already exists. Mutation commands
+// use this narrow view to initialize the root before the normal build loader
+// enforces its required-directory contract.
+func ConfiguredAttachmentDirectory(resolvedVault string) (string, error) {
+	vaultRoot := filepath.Clean(strings.TrimSpace(resolvedVault))
+	if vaultRoot == "" || !filepath.IsAbs(vaultRoot) {
+		return "", fmt.Errorf("resolved vault path is required")
+	}
+	configPath := filepath.Join(vaultRoot, Filename)
+	_, data, _, err := internalfsutil.ReadContainedRegularFile(vaultRoot, configPath)
+	if err != nil {
+		return "", fmt.Errorf("read config %q: %w", configPath, err)
+	}
+	if err := validateStrictConfigDocument(data); err != nil {
+		return "", fmt.Errorf("parse config %q: %w", configPath, err)
+	}
+	parsed, err := parseFileConfig(data)
+	if err != nil {
+		return "", fmt.Errorf("parse config %q: %w", configPath, err)
+	}
+	if err := validateParsedFileConfig(parsed); err != nil {
+		return "", fmt.Errorf("validate config %q: %w", configPath, err)
+	}
+	cfg, err := normalizeAndValidate(applyFileConfig(Defaults(), parsed))
+	if err != nil {
+		return "", fmt.Errorf("validate config %q: %w", configPath, err)
+	}
+	return cfg.AttachmentDirectory, nil
 }
 
 func loadForBuild(resolvedVault, resolvedOutput string, skipThemeDirectory bool) (model.SiteConfig, error) {
@@ -825,10 +857,8 @@ func normalizeAttachmentDirectory(value string) (string, error) {
 	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") || cleaned != trimmed || !internalfsutil.IsPortableSitePath(cleaned) {
 		return "", fmt.Errorf("attachments.directory must be a normalized vault-relative directory")
 	}
-	for _, segment := range strings.Split(cleaned, "/") {
-		if strings.EqualFold(segment, ".oxpio") || strings.EqualFold(segment, ".obsidian") {
-			return "", fmt.Errorf("attachments.directory must not be .oxpio or .obsidian")
-		}
+	if publishpath.IsReservedPath(cleaned) {
+		return "", fmt.Errorf("attachments.directory must not be a reserved control path")
 	}
 	return cleaned, nil
 }

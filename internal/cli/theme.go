@@ -20,6 +20,8 @@ import (
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internaldiag "github.com/simp-lee/oxpio/internal/diag"
+	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/publishpath"
 	internalsiteplan "github.com/simp-lee/oxpio/internal/siteplan"
 	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	"github.com/simp-lee/oxpio/internal/workspace"
@@ -315,7 +317,7 @@ func newThemeWriteCommand() *cobra.Command {
 		if kindErr != nil {
 			return kindErr
 		}
-		data, err := readThemeCLIContent(cmd, vault, contentFile)
+		data, err := readThemeCLIContent(cmd, vault, boundary.OutputPath, contentFile)
 		if err != nil {
 			return err
 		}
@@ -329,7 +331,7 @@ func newThemeWriteCommand() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
-	cmd.Flags().StringVar(&contentFile, "content-file", "", "Complete file content or -")
+	cmd.Flags().StringVar(&contentFile, "content-file", "", "Vault-relative source file outside .oxpio or - for stdin")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash or absent")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
 	_ = cmd.MarkFlagRequired("content-file")
@@ -357,7 +359,7 @@ func newThemeEditCommand() *cobra.Command {
 		if kind == "binary" {
 			return fmt.Errorf("theme edit requires a text file")
 		}
-		patch, err := readThemeCLIContent(cmd, vault, editsFile)
+		patch, err := readThemeCLIContent(cmd, vault, boundary.OutputPath, editsFile)
 		if err != nil {
 			return err
 		}
@@ -386,7 +388,7 @@ func newThemeEditCommand() *cobra.Command {
 	}}
 	cmd.Flags().StringVar(&vaultPath, "vault", "", "Path to the Vault")
 	cmd.Flags().StringVar(&outputPath, "output", "", "Formal output boundary")
-	cmd.Flags().StringVar(&editsFile, "edits-file", "", "JSON patch file or -")
+	cmd.Flags().StringVar(&editsFile, "edits-file", "", "Vault-relative JSON patch file outside .oxpio or - for stdin")
 	cmd.Flags().StringVar(&expected, "if-hash", "", "SHA-256 hash")
 	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
 	_ = cmd.MarkFlagRequired("edits-file")
@@ -686,7 +688,7 @@ func resolveThemeFile(vault, value string) (string, string, error) {
 	}
 	parts := strings.Split(rel, "/")
 	if len(parts) < 4 || parts[0] != ".oxpio" || parts[1] != "themes" || !safeThemeSegment(parts[2]) || parts[2] == internaltheme.BaseID || !safeThemeRelative(parts[3:]) {
-		return "", "", fmt.Errorf("theme path must be inside .oxpio/themes/<theme-id>")
+		return "", "", fmt.Errorf("theme path must be inside .oxpio/themes/<theme-id>; use a full Vault-relative path such as .oxpio/themes/<theme-id>/layouts/base.html")
 	}
 	candidate := filepath.Join(vault, filepath.FromSlash(rel))
 	return candidate, parts[2], nil
@@ -699,18 +701,29 @@ func safeThemeRelative(parts []string) bool {
 	return internaltheme.ValidRelativePath(strings.Join(parts, "/"))
 }
 
+const maxThemeInput = 16 << 20
+
 func readThemeFile(vault, candidate string) ([]byte, error) {
 	if err := checkThemeParents(vault, candidate); err != nil {
 		return nil, err
 	}
-	info, err := os.Lstat(candidate)
+	_, file, _, err := internalfsutil.OpenContainedRegularFile(vault, candidate)
 	if err != nil {
 		return nil, err
 	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
-		return nil, fmt.Errorf("theme target must be a regular file")
+	defer func() { _ = file.Close() }()
+	return readBoundedThemeInput(file)
+}
+
+func readBoundedThemeInput(input io.Reader) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(input, maxThemeInput+1))
+	if err != nil {
+		return nil, err
 	}
-	return os.ReadFile(candidate)
+	if len(data) > maxThemeInput {
+		return nil, fmt.Errorf("theme file exceeds %d MiB", maxThemeInput>>20)
+	}
+	return data, nil
 }
 
 func checkThemeParents(vault, candidate string) error {
@@ -753,12 +766,7 @@ func hasCaseVariantEntry(parent, name string) bool {
 }
 
 func themeManagementPath(name string) bool {
-	for _, segment := range strings.Split(strings.ReplaceAll(name, `\\`, "/"), "/") {
-		if strings.EqualFold(segment, ".oxpio") || strings.EqualFold(segment, ".obsidian") {
-			return true
-		}
-	}
-	return false
+	return publishpath.IsReservedPath(strings.ReplaceAll(name, `\\`, "/"))
 }
 
 func themeFileKind(name string) string {
@@ -769,20 +777,24 @@ func themeFileKind(name string) string {
 	return kind
 }
 
-func readThemeCLIContent(cmd *cobra.Command, vault, name string) ([]byte, error) {
+func readThemeCLIContent(cmd *cobra.Command, vault, outputPath, name string) ([]byte, error) {
 	if name == "-" {
-		return io.ReadAll(cmd.InOrStdin())
+		return readBoundedThemeInput(cmd.InOrStdin())
 	}
 	if name == "" {
-		return nil, fmt.Errorf("content input is required")
+		return nil, fmt.Errorf("content input is required; use --content-file - for stdin or a Vault-relative source file")
 	}
 	if themeManagementPath(name) {
-		return nil, fmt.Errorf("theme input is outside the theme source boundary")
+		return nil, fmt.Errorf("theme input is outside the theme source boundary; use --content-file - for stdin or a Vault-relative source file outside .oxpio")
 	}
 	if !internaltheme.ValidRelativePath(name) {
-		return nil, fmt.Errorf("input path %q must be a Vault-relative path", name)
+		return nil, fmt.Errorf("input path %q must be a Vault-relative path; use --content-file - for stdin", name)
 	}
-	return readThemeFile(vault, filepath.Join(vault, filepath.FromSlash(name)))
+	candidate := filepath.Join(vault, filepath.FromSlash(name))
+	if internalfsutil.PathWithinRootAfterSymlinks(outputPath, candidate) {
+		return nil, fmt.Errorf("theme input must not read the formal output boundary; use --content-file - for stdin")
+	}
+	return readThemeFile(vault, candidate)
 }
 
 func mutateThemeFile(cmd *cobra.Command, vault, output, candidate, rel string, data []byte, expected string, dryRun bool) error {

@@ -15,6 +15,33 @@ import (
 	"github.com/simp-lee/oxpio/internal/model"
 )
 
+func TestDecodeImportManifestRejectsDuplicateAndUnknownKeys(t *testing.T) {
+	if _, err := decodeImportManifest([]byte(`{"files":[],"files":[]}`)); err == nil || !strings.Contains(err.Error(), "duplicate JSON key") {
+		t.Fatalf("duplicate import manifest error = %v", err)
+	}
+	if _, err := decodeImportManifest([]byte(`{"FILES":[]}`)); err == nil || !strings.Contains(err.Error(), "unknown import manifest key") {
+		t.Fatalf("case-variant import manifest error = %v", err)
+	}
+	if _, err := decodeImportManifest([]byte(`{"files":[{"PATH":"x","kind":"article","content":"x"}]}`)); err == nil || !strings.Contains(err.Error(), "unknown import manifest key") {
+		t.Fatalf("case-variant file manifest error = %v", err)
+	}
+	if _, err := decodeImportManifest([]byte(`{"files":[{"path":"x","kind":null,"content":"x"}]}`)); err == nil || !strings.Contains(err.Error(), "requires non-null") {
+		t.Fatalf("null import manifest error = %v", err)
+	}
+	if _, err := decodeImportManifest([]byte(`{"files":[],"extra":true}`)); err == nil || !strings.Contains(err.Error(), "unknown import manifest key") {
+		t.Fatalf("unknown import manifest error = %v", err)
+	}
+	if _, err := decodeImportManifest([]byte{'{', '"', 'f', 'i', 'l', 'e', 's', '"', ':', '[', ']', ',', '"', 'x', '"', ':', '"', 0xff, '"', '}'}); err == nil || !strings.Contains(err.Error(), "valid UTF-8") {
+		t.Fatalf("invalid UTF-8 import manifest error = %v", err)
+	}
+}
+
+func TestReadAgentInputIsBounded(t *testing.T) {
+	if _, err := readBoundedAgentInput(bytes.NewReader(make([]byte, maxAgentInput+1))); err == nil {
+		t.Fatal("readBoundedAgentInput accepted oversized input")
+	}
+}
+
 func TestValidateAgentInputPathUsesCaseInsensitiveReservedDirectories(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")

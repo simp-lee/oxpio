@@ -20,6 +20,7 @@ import (
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internaledit "github.com/simp-lee/oxpio/internal/edit"
+	internalpublish "github.com/simp-lee/oxpio/internal/publish"
 	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
@@ -118,6 +119,7 @@ func TestStartServeWatchLoopSuppressesPendingSourceOnlyJournal(t *testing.T) {
 		Version: workspace.JournalVersion, CommitKind: "source-only", Phase: "source-committed",
 		InputFingerprint: "input", TargetPath: outputPath, OutputPath: outputPath,
 		SourcePath: notePath, SourceBeforePath: notePath, SourceAfterHash: hex.EncodeToString(hash[:]),
+		OutputBeforeHash: internalpublish.DirectoryHash(outputPath), OutputIdentity: internalpublish.OutputIdentity(outputPath),
 	}); err != nil {
 		cancel()
 		<-done

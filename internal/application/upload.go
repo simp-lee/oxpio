@@ -116,17 +116,24 @@ func mutateUploadLocked(boundary internalfsutil.VaultOutputBoundary, request Upl
 	} else if len(request.Content) > maxUploadAttachment {
 		return MutationResult{}, errors.New("attachment exceeds 64 MiB")
 	}
+	var attachmentRoot string
 	if request.Kind == UploadAttachment {
 		cfg, configErr := internalconfig.LoadForBuildWithOutput(boundary.VaultPath, boundary.OutputPath)
 		if configErr != nil {
-			return MutationResult{}, configErr
+			return MutationResult{}, attachmentConfigurationError(boundary.VaultPath, configErr)
 		}
-		root := cfg.AttachmentDirectory
-		if root == "" || !portablePathWithin(directory, root) {
+		attachmentRoot = cfg.AttachmentDirectory
+		if attachmentRoot == "" {
+			return MutationResult{}, attachmentConfigurationError(boundary.VaultPath, errors.New("attachment upload requires attachments.directory"))
+		}
+		if !portablePathWithin(directory, attachmentRoot) {
 			return MutationResult{}, errors.New("attachment upload must stay inside attachments.directory")
 		}
 	}
 	if err := validateUploadTarget(boundary, directory, target); err != nil {
+		if request.Kind == UploadAttachment {
+			return MutationResult{}, attachmentUploadDirectoryError(boundary.VaultPath, directory, attachmentRoot, err)
+		}
 		return MutationResult{}, err
 	}
 	if request.Kind == UploadAttachment {
@@ -156,7 +163,7 @@ func mutateUploadLocked(boundary internalfsutil.VaultOutputBoundary, request Upl
 	if request.Kind != UploadAttachment {
 		if request.Kind == UploadArticle && directory != "." {
 			if _, _, _, ancestryErr := internalfsutil.ReadContainedRegularFile(boundary.VaultPath, filepathJoin(boundary.VaultPath, path.Join(directory, "_index.md"))); ancestryErr != nil {
-				return MutationResult{}, fmt.Errorf("article upload requires an existing section: %w", ancestryErr)
+				return MutationResult{}, fmt.Errorf("article upload requires section %q; create its _index.md from the root down before uploading articles: %w", directory, ancestryErr)
 			}
 		}
 		if err := validateSectionAncestry(boundary.VaultPath, directory); err != nil {
@@ -315,7 +322,11 @@ func normalizeUploadName(value string) (string, error) {
 }
 
 func uploadReservedSegment(value string) bool {
-	switch strings.ToLower(value) {
+	lower := strings.ToLower(value)
+	if strings.HasPrefix(lower, ".oxpio-") {
+		return true
+	}
+	switch lower {
 	case ".oxpio", ".obsidian", ".git", "node_modules", "oxpio.yaml":
 		return true
 	default:
@@ -344,16 +355,59 @@ func validateUploadTarget(boundary internalfsutil.VaultOutputBoundary, directory
 
 func validateSectionAncestry(vault, sectionPath string) error {
 	if _, _, _, err := internalfsutil.ReadContainedRegularFile(vault, filepathJoin(vault, "_index.md")); err != nil {
-		return errors.New("section ancestry must include the root _index.md")
+		return errors.New("section ancestry must include the root _index.md; initialize the root section before uploading nested sections")
 	}
 	current := path.Dir(sectionPath)
 	for current != "." && current != "" {
 		if _, _, _, err := internalfsutil.ReadContainedRegularFile(vault, filepathJoin(vault, path.Join(current, "_index.md"))); err != nil {
-			return fmt.Errorf("section ancestry is missing %q", path.Join(current, "_index.md"))
+			return fmt.Errorf("section ancestry is missing %q; create section indexes from the root down before uploading this file", path.Join(current, "_index.md"))
 		}
 		current = path.Dir(current)
 	}
 	return nil
+}
+
+func attachmentConfigurationError(vault string, cause error) error {
+	attachment, err := internalconfig.ConfiguredAttachmentDirectory(vault)
+	if err == nil && attachment == "" {
+		return errors.New("attachments.directory is not configured; add it to oxpio.yaml, then create that directory with `oxpio mkdir <directory>` before uploading attachments")
+	}
+	if err == nil && attachment != "" {
+		_, info, inspectErr := internalfsutil.InspectContainedDirectory(vault, attachment)
+		if inspectErr == nil && info != nil && info.IsDir() {
+			return cause
+		}
+		if inspectErr != nil && !errors.Is(inspectErr, os.ErrNotExist) {
+			return fmt.Errorf("attachments.directory %q is not a safe ordinary directory: %w", attachment, inspectErr)
+		}
+		return fmt.Errorf("attachments.directory %q does not exist; initialize it with %s: %w", attachment, attachmentInitializationHint(attachment), cause)
+	}
+	return cause
+}
+
+func attachmentInitializationHint(directory string) string {
+	parts := strings.Split(path.Clean(directory), "/")
+	commands := make([]string, 0, len(parts))
+	for index := range parts {
+		commands = append(commands, fmt.Sprintf("`oxpio mkdir %s`", path.Join(parts[:index+1]...)))
+	}
+	return strings.Join(commands, "; then ")
+}
+
+func attachmentUploadDirectoryError(vault, directory, root string, cause error) error {
+	if root != "" && portablePathWithin(directory, root) {
+		_, info, inspectErr := internalfsutil.InspectContainedDirectory(vault, directory)
+		if inspectErr != nil {
+			if errors.Is(inspectErr, os.ErrNotExist) {
+				return fmt.Errorf("upload directory %q does not exist; create it first with `oxpio mkdir %s`: %w", directory, directory, cause)
+			}
+			return fmt.Errorf("upload directory %q is not a safe ordinary directory: %w", directory, inspectErr)
+		}
+		if info == nil || !info.IsDir() {
+			return fmt.Errorf("upload directory %q is not a safe ordinary directory: %w", directory, cause)
+		}
+	}
+	return cause
 }
 
 func recheckUploadBeforeCommit(boundary internalfsutil.VaultOutputBoundary, target, startFingerprint string) error {

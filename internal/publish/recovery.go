@@ -4,11 +4,13 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/publishpath"
 	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
@@ -43,7 +45,7 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		if err := validateRecoveryReadOnly(vault, journal); err != nil {
 			return result, err
 		}
-		result.Action = recoveryAction(journal)
+		result.Action = recoveryAction(vault, journal)
 		return result, nil
 	}
 
@@ -105,6 +107,9 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 	}
 	switch journal.Phase {
 	case "prepared":
+		if journal.CommitKind == "source-batch" && journal.OutputAfterHash != "" {
+			return result, fmt.Errorf("%w: source-batch journal has an output-after hash", workspace.ErrRecovery)
+		}
 		if journal.OutputAfterHash != "" && directoryHash(journal.TargetPath) == journal.OutputAfterHash {
 			if err := validatePreparedOutput(journal); err != nil {
 				return result, err
@@ -123,6 +128,28 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		}
 		if journal.OutputIdentity != "" && outputIdentity(journal.TargetPath) != journal.OutputIdentity {
 			return result, fmt.Errorf("%w: prepared output identity changed before recovery", workspace.ErrRecovery)
+		}
+		if journal.CommitKind == "source-batch" {
+			if sourceBatchAfter(vault, journal) {
+				if err := validateSourceBatchFingerprint(vault, journal); err != nil {
+					return result, err
+				}
+				journal.Phase = "source-committed"
+				if err := workspace.WriteJournal(vault, journal); err != nil {
+					return result, fmt.Errorf("%w: finalize source-batch recovery: %v", workspace.ErrRecovery, err)
+				}
+				if err := workspace.ClearJournal(vault); err != nil {
+					return result, err
+				}
+				result.Action, result.Changed = "confirm-source-batch", true
+				break
+			}
+			if err := sourceBatchResetPrepared(vault, journal); err != nil {
+				return result, err
+			}
+			if err := workspace.RemoveCompleted(vault, sourceBatchCompletedPaths(journal)); err != nil {
+				return result, err
+			}
 		}
 		if journal.CommitKind == "source-only" {
 			if sourceOnlyAfter(journal) {
@@ -170,6 +197,19 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		}
 		result.Action, result.Changed = "discard-prepared", true
 	case "source-committed":
+		if journal.CommitKind == "source-batch" {
+			if err := validateSourceBatchAfter(vault, journal); err != nil {
+				return result, err
+			}
+			if err := removeJournalArtifacts(journal); err != nil {
+				return result, err
+			}
+			if err := workspace.ClearJournal(vault); err != nil {
+				return result, err
+			}
+			result.Action, result.Changed = "confirm-source-batch", true
+			break
+		}
 		if journal.CommitKind == "source-only" {
 			sourcePath := journal.SourcePath
 			if sourcePath == "" {
@@ -300,6 +340,113 @@ func sourceOnlyCompletedPaths(journal workspace.Journal) []workspace.CompletedPa
 	return paths
 }
 
+func sourceBatchFileHash(vault, name string) string {
+	if _, err := os.Lstat(name); errors.Is(err, os.ErrNotExist) {
+		return "absent"
+	} else if err != nil {
+		return "unavailable"
+	}
+	if err := internalfsutil.EnsureNoSymlinkComponents(filepath.Dir(name)); err != nil {
+		return "unavailable"
+	}
+	_, file, _, err := internalfsutil.OpenContainedRegularFile(vault, name)
+	if err != nil {
+		return "unavailable"
+	}
+	defer func() { _ = file.Close() }()
+	data, err := io.ReadAll(io.LimitReader(file, (64<<20)+1))
+	if err != nil || len(data) > 64<<20 {
+		return "unavailable"
+	}
+	return fmt.Sprintf("%x", sha256Sum(data))
+}
+
+func sourceBatchAfter(vault string, journal workspace.Journal) bool {
+	if len(journal.SourceChanges) == 0 {
+		return false
+	}
+	for _, change := range journal.SourceChanges {
+		if sourceBatchFileHash(vault, change.Path) != change.AfterHash {
+			return false
+		}
+	}
+	return true
+}
+
+func validateSourceBatchPrepared(vault string, journal workspace.Journal) error {
+	if len(journal.SourceChanges) == 0 {
+		return fmt.Errorf("%w: source-batch journal has no source changes", workspace.ErrRecovery)
+	}
+	for _, change := range journal.SourceChanges {
+		actual := sourceBatchFileHash(vault, change.Path)
+		if actual == change.BeforeHash {
+			continue
+		}
+		if actual == change.AfterHash && change.BeforeHash == "absent" {
+			continue
+		}
+		return fmt.Errorf("%w: prepared source-batch mutation has an unknown source state", workspace.ErrRecovery)
+	}
+	if sourceBatchAfter(vault, journal) {
+		return validateSourceBatchFingerprint(vault, journal)
+	}
+	return nil
+}
+
+func sourceBatchCompletedPaths(journal workspace.Journal) []workspace.CompletedPath {
+	paths := make([]workspace.CompletedPath, 0, len(journal.SourceChanges))
+	for _, change := range journal.SourceChanges {
+		paths = append(paths, workspace.CompletedPath{Path: change.Path, AfterHash: change.AfterHash})
+	}
+	return paths
+}
+
+func sourceBatchResetPrepared(vault string, journal workspace.Journal) error {
+	for _, change := range journal.SourceChanges {
+		actual := sourceBatchFileHash(vault, change.Path)
+		if actual == change.BeforeHash {
+			continue
+		}
+		if actual != change.AfterHash || change.BeforeHash != "absent" {
+			return fmt.Errorf("%w: prepared source-batch mutation has an unknown source state", workspace.ErrRecovery)
+		}
+		if err := workspace.RemoveFileCAS(change.Path, change.AfterHash); err != nil {
+			return fmt.Errorf("%w: remove partial source-batch file: %v", workspace.ErrRecovery, err)
+		}
+	}
+	return nil
+}
+
+func validateSourceBatchFingerprint(vault string, journal workspace.Journal) error {
+	if !validDigest(journal.AfterFingerprint) {
+		return fmt.Errorf("%w: source-batch after fingerprint is unavailable", workspace.ErrRecovery)
+	}
+	actual, err := workspace.Fingerprint(vault, journal.OutputPath)
+	if err != nil {
+		return fmt.Errorf("%w: source-batch after fingerprint: %v", workspace.ErrRecovery, err)
+	}
+	if actual != journal.AfterFingerprint {
+		return fmt.Errorf("%w: source-batch input fingerprint does not match", workspace.ErrRecovery)
+	}
+	return nil
+}
+
+func validateSourceBatchAfter(vault string, journal workspace.Journal) error {
+	if !sourceBatchAfter(vault, journal) {
+		return fmt.Errorf("%w: source-batch after hash does not match", workspace.ErrRecovery)
+	}
+	if err := validateSourceBatchFingerprint(vault, journal); err != nil {
+		return err
+	}
+	if journal.OutputPath != "" && journal.OutputBeforeHash != "" && directoryHash(journal.OutputPath) != journal.OutputBeforeHash {
+		return fmt.Errorf("%w: source-batch output changed", workspace.ErrRecovery)
+	}
+	if journal.OutputPath != "" && journal.OutputIdentity != "" && outputIdentity(journal.OutputPath) != journal.OutputIdentity {
+		return fmt.Errorf("%w: source-batch output identity changed", workspace.ErrRecovery)
+	}
+	return nil
+}
+
 func sourceOnlyBefore(journal workspace.Journal) bool {
 	beforePath := journal.SourceBeforePath
 	if beforePath == "" {
@@ -314,17 +461,23 @@ func sourceOnlyBefore(journal workspace.Journal) bool {
 	return true
 }
 
-func recoveryAction(journal workspace.Journal) string {
+func recoveryAction(vault string, journal workspace.Journal) string {
 	switch journal.Phase {
 	case "prepared":
 		if journal.OutputAfterHash != "" && directoryHash(journal.TargetPath) == journal.OutputAfterHash {
 			return "cleanup-committed"
+		}
+		if journal.CommitKind == "source-batch" && sourceBatchAfter(vault, journal) {
+			return "confirm-source-batch"
 		}
 		if journal.CommitKind == "source-only" && sourceOnlyAfter(journal) {
 			return "confirm-source-only"
 		}
 		return "discard-prepared"
 	case "source-committed":
+		if journal.CommitKind == "source-batch" {
+			return "confirm-source-batch"
+		}
 		if journal.CommitKind == "source-only" {
 			return "confirm-source-only"
 		}
@@ -346,37 +499,59 @@ func inspectRecoveryJournal(vault string, journal workspace.Journal) error {
 	if strings.TrimSpace(journal.TargetPath) == "" {
 		return fmt.Errorf("%w: transaction target is empty", workspace.ErrRecovery)
 	}
-	if err := validateTransactionPath(vault, journal.TargetPath, journal.TemporaryPath); err != nil {
+	legacyConfigArtifact := journal.CommitKind == "source-only" && filepath.Clean(journal.SourcePath) == filepath.Join(filepath.Clean(vault), "oxpio.yaml") && filepath.Clean(journal.SourceBeforePath) == filepath.Join(filepath.Clean(vault), "oxpio.yaml")
+	if err := validateTransactionPath(vault, journal.TargetPath, journal.TemporaryPath, legacyConfigArtifact); err != nil {
 		return err
 	}
 	if err := validateTransactionPath(vault, journal.TargetPath, journal.BackupPath); err != nil {
 		return err
 	}
+	outputPath := ""
 	if journal.CommitKind == "source-only" {
 		if journal.OutputPath != "" {
 			boundary, boundaryErr := internalfsutil.ResolveVaultOutput(vault, journal.OutputPath)
-			if boundaryErr != nil || filepath.Clean(boundary.OutputPath) != filepath.Clean(journal.OutputPath) {
+			if boundaryErr != nil || filepath.Clean(boundary.OutputPath) != filepath.Clean(journal.OutputPath) || filepath.Clean(journal.TargetPath) != filepath.Clean(journal.OutputPath) {
 				return fmt.Errorf("%w: source-only output boundary is invalid", workspace.ErrRecovery)
 			}
+			outputPath = boundary.OutputPath
 		}
 	} else {
 		boundary, boundaryErr := internalfsutil.ResolveVaultOutput(vault, journal.TargetPath)
 		if boundaryErr != nil || filepath.Clean(boundary.OutputPath) != filepath.Clean(journal.TargetPath) {
 			return fmt.Errorf("%w: recovery output boundary is invalid", workspace.ErrRecovery)
 		}
+		if journal.CommitKind == "source-batch" && (journal.OutputPath == "" || filepath.Clean(journal.OutputPath) != filepath.Clean(journal.TargetPath)) {
+			return fmt.Errorf("%w: source-batch output boundary is invalid", workspace.ErrRecovery)
+		}
+		outputPath = boundary.OutputPath
 	}
-	if journal.SourcePath != "" && !internalfsutil.PathWithinRoot(vault, journal.SourcePath) {
-		return fmt.Errorf("%w: source path escapes vault", workspace.ErrRecovery)
+	allowConfigSource := journal.CommitKind == "source-only"
+	if journal.CommitKind == "source-only" && journal.OutputPath == "" {
+		if err := validateRecoverySourcePath(vault, outputPath, journal.TargetPath, allowConfigSource); err != nil {
+			return fmt.Errorf("%w: %v", workspace.ErrRecovery, err)
+		}
 	}
-	if journal.SourceBeforePath != "" && !internalfsutil.PathWithinRoot(vault, journal.SourceBeforePath) {
-		return fmt.Errorf("%w: source before path escapes vault", workspace.ErrRecovery)
+	if journal.SourcePath != "" {
+		if err := validateRecoverySourcePath(vault, outputPath, journal.SourcePath, allowConfigSource); err != nil {
+			return fmt.Errorf("%w: %v", workspace.ErrRecovery, err)
+		}
+	}
+	if journal.SourceBeforePath != "" {
+		if err := validateRecoverySourcePath(vault, outputPath, journal.SourceBeforePath, allowConfigSource); err != nil {
+			return fmt.Errorf("%w: %v", workspace.ErrRecovery, err)
+		}
+	}
+	for _, change := range journal.SourceChanges {
+		if err := validateSourceBatchPath(vault, journal.TargetPath, change); err != nil {
+			return err
+		}
 	}
 	for _, cleanupPath := range journal.CleanupPaths {
 		if err := validateTransactionPath(vault, journal.TargetPath, cleanupPath); err != nil {
 			return err
 		}
 	}
-	if journal.Phase == "prepared" && strings.TrimSpace(journal.TemporaryPath) == "" {
+	if journal.Phase == "prepared" && strings.TrimSpace(journal.TemporaryPath) == "" && journal.CommitKind != "source-batch" {
 		return fmt.Errorf("%w: prepared transaction has no temporary path", workspace.ErrRecovery)
 	}
 	if journal.Phase == "source-committed" && journal.CommitKind == "source+output" && strings.TrimSpace(journal.TemporaryPath) == "" {
@@ -408,6 +583,12 @@ func validateJournalCompleteness(journal workspace.Journal) error {
 	}
 	switch journal.Phase {
 	case "prepared":
+		if journal.CommitKind == "source-batch" && len(journal.SourceChanges) == 0 {
+			return fmt.Errorf("%w: source-batch journal has no source changes", workspace.ErrRecovery)
+		}
+		if journal.CommitKind == "source-batch" && !validDigest(journal.AfterFingerprint) {
+			return fmt.Errorf("%w: source-batch after fingerprint is unavailable", workspace.ErrRecovery)
+		}
 		for _, field := range []struct {
 			value string
 			name  string
@@ -418,10 +599,37 @@ func validateJournalCompleteness(journal workspace.Journal) error {
 			if err := require(field.value, field.name); err != nil {
 				return err
 			}
+			if field.name == "outputBeforeHash" && !validFileStateHash(field.value) {
+				return fmt.Errorf("%w: journal field %s is unavailable", workspace.ErrRecovery, field.name)
+			}
+		}
+		if (journal.OutputAfterHash == "") != (journal.OutputAfterIdentity == "") {
+			return fmt.Errorf("%w: journal has an incomplete output-after proof", workspace.ErrRecovery)
+		}
+		if journal.CommitKind != "source+output" && journal.OutputAfterHash != "" {
+			return fmt.Errorf("%w: journal has an output-after proof for a non-output transaction", workspace.ErrRecovery)
 		}
 		if journal.OutputAfterHash != "" {
-			if err := require(journal.OutputAfterIdentity, "outputAfterIdentity"); err != nil {
-				return err
+			if !validOutputProof(journal.OutputAfterHash, journal.OutputAfterIdentity) {
+				return fmt.Errorf("%w: prepared output proof is unavailable", workspace.ErrRecovery)
+			}
+		}
+		if journal.CommitKind == "source-only" {
+			for _, field := range []struct {
+				value string
+				name  string
+			}{
+				{journal.SourcePath, "sourcePath"},
+				{journal.SourceBeforePath, "sourceBeforePath"},
+				{journal.SourceBeforeHash, "sourceBeforeHash"},
+				{journal.SourceAfterHash, "sourceAfterHash"},
+			} {
+				if err := require(field.value, field.name); err != nil {
+					return err
+				}
+				if strings.HasSuffix(field.name, "Hash") && !validFileStateHash(field.value) {
+					return fmt.Errorf("%w: journal field %s is unavailable", workspace.ErrRecovery, field.name)
+				}
 			}
 		}
 		if journal.CommitKind == "source+output" && journal.SourcePath != "" {
@@ -436,15 +644,68 @@ func validateJournalCompleteness(journal workspace.Journal) error {
 				if err := require(field.value, field.name); err != nil {
 					return err
 				}
+				if strings.HasSuffix(field.name, "Hash") && !validFileStateHash(field.value) {
+					return fmt.Errorf("%w: journal field %s is unavailable", workspace.ErrRecovery, field.name)
+				}
 			}
 		}
 	case "source-committed":
+		if journal.CommitKind == "source-batch" {
+			if len(journal.SourceChanges) == 0 {
+				return fmt.Errorf("%w: source-batch journal has no source changes", workspace.ErrRecovery)
+			}
+			if !validDigest(journal.AfterFingerprint) {
+				return fmt.Errorf("%w: source-batch after fingerprint is unavailable", workspace.ErrRecovery)
+			}
+			if journal.OutputAfterHash != "" || journal.OutputAfterIdentity != "" {
+				return fmt.Errorf("%w: source-batch journal has an output-after proof", workspace.ErrRecovery)
+			}
+			for _, field := range []struct {
+				value string
+				name  string
+			}{
+				{journal.OutputBeforeHash, "outputBeforeHash"},
+				{journal.OutputIdentity, "outputIdentity"},
+			} {
+				if err := require(field.value, field.name); err != nil {
+					return err
+				}
+				if field.name == "outputBeforeHash" && !validFileStateHash(field.value) {
+					return fmt.Errorf("%w: journal field %s is unavailable", workspace.ErrRecovery, field.name)
+				}
+			}
+			return nil
+		}
 		if journal.CommitKind == "source-only" {
-			if journal.SourcePath == "" && journal.TargetPath == "" {
+			if journal.OutputAfterHash != "" || journal.OutputAfterIdentity != "" {
+				return fmt.Errorf("%w: source-only journal has an output-after proof", workspace.ErrRecovery)
+			}
+			if journal.SourcePath == "" && journal.OutputPath != "" {
 				return fmt.Errorf("%w: source-only journal has no source path", workspace.ErrRecovery)
 			}
-			if journal.SourceAfterHash == "" && journal.AfterHash == "" {
-				return fmt.Errorf("%w: source-only journal has no source after hash", workspace.ErrRecovery)
+			if journal.SourceBeforeHash != "" && !validFileStateHash(journal.SourceBeforeHash) {
+				return fmt.Errorf("%w: source-only source before hash is unavailable", workspace.ErrRecovery)
+			}
+			if journal.SourceAfterHash != "" && !validFileStateHash(journal.SourceAfterHash) {
+				return fmt.Errorf("%w: source-only source after hash is unavailable", workspace.ErrRecovery)
+			}
+			afterHash := journal.SourceAfterHash
+			if afterHash == "" {
+				afterHash = journal.AfterHash
+			}
+			if !validFileStateHash(afterHash) {
+				return fmt.Errorf("%w: source-only source after hash is unavailable", workspace.ErrRecovery)
+			}
+			if journal.OutputPath != "" {
+				if err := require(journal.OutputBeforeHash, "outputBeforeHash"); err != nil {
+					return err
+				}
+				if !validFileStateHash(journal.OutputBeforeHash) {
+					return fmt.Errorf("%w: journal field outputBeforeHash is unavailable", workspace.ErrRecovery)
+				}
+				if err := require(journal.OutputIdentity, "outputIdentity"); err != nil {
+					return err
+				}
 			}
 			return nil
 		}
@@ -464,6 +725,15 @@ func validateJournalCompleteness(journal workspace.Journal) error {
 			if err := require(field.value, field.name); err != nil {
 				return err
 			}
+			if field.name == "outputBeforeHash" && !validFileStateHash(field.value) {
+				return fmt.Errorf("%w: journal field %s is unavailable", workspace.ErrRecovery, field.name)
+			}
+		}
+		if !validFileStateHash(journal.SourceBeforeHash) || !validFileStateHash(journal.SourceAfterHash) {
+			return fmt.Errorf("%w: source proof is unavailable", workspace.ErrRecovery)
+		}
+		if !validOutputProof(journal.OutputAfterHash, journal.OutputAfterIdentity) {
+			return fmt.Errorf("%w: recovered output proof is unavailable", workspace.ErrRecovery)
 		}
 	case "output-committed", "completed":
 		for _, field := range []struct {
@@ -478,13 +748,101 @@ func validateJournalCompleteness(journal workspace.Journal) error {
 				return err
 			}
 		}
+		if !validOutputProof(journal.OutputAfterHash, journal.OutputAfterIdentity) {
+			return fmt.Errorf("%w: committed output proof is unavailable", workspace.ErrRecovery)
+		}
 	default:
 		return fmt.Errorf("%w: unsupported phase", workspace.ErrRecovery)
 	}
 	return nil
 }
 
-func validateTransactionPath(vault, target, path string) error {
+func validateContainedRecoveryPath(vault, name string) error {
+	if !internalfsutil.PathWithinRoot(vault, name) {
+		return fmt.Errorf("recovery source path escapes vault")
+	}
+	if err := internalfsutil.EnsureNoSymlinkComponents(filepath.Dir(name)); err != nil {
+		return fmt.Errorf("recovery source path has a symbolic-link parent: %v", err)
+	}
+	if _, err := os.Lstat(name); errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return fmt.Errorf("inspect recovery source path: %v", err)
+	}
+	_, file, _, err := internalfsutil.OpenContainedRegularFile(vault, name)
+	if err != nil {
+		return fmt.Errorf("recovery source path is not a contained regular file: %v", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close recovery source path: %v", err)
+	}
+	return nil
+}
+
+func validateRecoverySourcePath(vault, output, name string, allowConfig bool) error {
+	if err := validateContainedRecoveryPath(vault, name); err != nil {
+		return err
+	}
+	relative, err := filepath.Rel(vault, name)
+	if err != nil {
+		return fmt.Errorf("resolve recovery source path: %v", err)
+	}
+	if publishpath.IsReservedPath(filepath.ToSlash(relative)) && (!allowConfig || !strings.EqualFold(filepath.ToSlash(relative), "oxpio.yaml")) {
+		return fmt.Errorf("recovery source path overlaps a reserved path")
+	}
+	if output != "" && (internalfsutil.PathWithinRoot(output, name) || internalfsutil.PathWithinRoot(name, output)) {
+		return fmt.Errorf("recovery source path overlaps the formal output")
+	}
+	return nil
+}
+
+func validateSourceBatchPath(vault, target string, change workspace.SourceChange) error {
+	name := change.Path
+	if !strings.EqualFold(filepath.Ext(name), ".md") {
+		return fmt.Errorf("%w: source-batch path is not Markdown", workspace.ErrRecovery)
+	}
+	if change.BeforeHash != "absent" {
+		return fmt.Errorf("%w: source-batch path is not create-only", workspace.ErrRecovery)
+	}
+	if !validSourceBatchAfterHash(change.AfterHash) {
+		return fmt.Errorf("%w: source-batch after hash is unavailable", workspace.ErrRecovery)
+	}
+	relative, err := filepath.Rel(vault, name)
+	if err != nil || publishpath.IsReservedPath(filepath.ToSlash(relative)) {
+		return fmt.Errorf("%w: source-batch path overlaps a reserved or output boundary", workspace.ErrRecovery)
+	}
+	for _, root := range []string{target, filepath.Join(vault, ".oxpio"), filepath.Join(vault, ".obsidian")} {
+		if internalfsutil.PathWithinRoot(root, name) || internalfsutil.PathWithinRoot(name, root) {
+			return fmt.Errorf("%w: source-batch path overlaps a reserved or output boundary", workspace.ErrRecovery)
+		}
+	}
+	if err := validateContainedRecoveryPath(vault, name); err != nil {
+		return fmt.Errorf("%w: %v", workspace.ErrRecovery, err)
+	}
+	return nil
+}
+
+func validSourceBatchAfterHash(value string) bool {
+	return validDigest(value)
+}
+
+func validFileStateHash(value string) bool {
+	return value == "absent" || validDigest(value)
+}
+
+func validDigest(value string) bool {
+	if len(value) != sha256.Size*2 {
+		return false
+	}
+	for _, char := range value {
+		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
+			return false
+		}
+	}
+	return true
+}
+
+func validateTransactionPath(vault, target, path string, allowLegacyConfigArtifact ...bool) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
 	}
@@ -504,11 +862,44 @@ func validateTransactionPath(vault, target, path string) error {
 	if !recognized && nestedStage {
 		recognized = true
 	}
+	if internalfsutil.PathWithinRoot(cleanTarget, absolute) || internalfsutil.PathWithinRoot(absolute, cleanTarget) {
+		return fmt.Errorf("%w: transaction path overlaps its target", workspace.ErrRecovery)
+	}
+	if err := internalfsutil.EnsureNoSymlinkComponents(filepath.Dir(absolute)); err != nil {
+		return fmt.Errorf("%w: transaction path has a symbolic-link parent: %v", workspace.ErrRecovery, err)
+	}
 	if !internalfsutil.PathWithinRoot(vault, absolute) && filepath.Dir(absolute) != filepath.Dir(cleanTarget) && !nestedStage {
 		return fmt.Errorf("%w: transaction path escapes its coordination boundary", workspace.ErrRecovery)
 	}
+	allowLegacy := len(allowLegacyConfigArtifact) > 0 && allowLegacyConfigArtifact[0]
+	if err := validateTransactionReservedAncestors(vault, absolute, allowLegacy); err != nil {
+		return err
+	}
 	if !recognized {
 		return fmt.Errorf("%w: transaction path is not a recognized temporary object", workspace.ErrRecovery)
+	}
+	return nil
+}
+
+func validateTransactionReservedAncestors(vault, absolute string, allowLegacyConfigArtifact bool) error {
+	if !internalfsutil.PathWithinRoot(vault, absolute) {
+		return nil
+	}
+	relative, err := filepath.Rel(vault, absolute)
+	if err != nil {
+		return fmt.Errorf("%w: transaction path boundary: %v", workspace.ErrRecovery, err)
+	}
+	parts := strings.Split(relative, string(filepath.Separator))
+	if allowLegacyConfigArtifact && len(parts) == 2 && strings.EqualFold(parts[0], ".oxpio") && strings.HasPrefix(strings.ToLower(parts[1]), ".oxpio-config-only-") {
+		return nil
+	}
+	for _, component := range parts {
+		if component == "" || component == "." || strings.HasPrefix(component, "..") {
+			continue
+		}
+		if publishpath.IsReservedPath(component) && !strings.HasPrefix(strings.ToLower(component), ".oxpio-") {
+			return fmt.Errorf("%w: transaction path is under a reserved directory", workspace.ErrRecovery)
+		}
 	}
 	return nil
 }
@@ -557,6 +948,9 @@ func continueOutputCommit(vault string, journal workspace.Journal) error {
 			return fmt.Errorf("%w: persist recovered output postcondition: %v", workspace.ErrRecovery, err)
 		}
 		return fmt.Errorf("%w: recovered output postcondition mismatch: expected hash %s and identity %s, found hash %s and identity %s", workspace.ErrRecovery, expectedHash, expectedIdentity, committedHash, committedIdentity)
+	}
+	if err := validateRemovalArtifactPath(journal.TargetPath, journal.TemporaryPath, vault); err != nil {
+		return err
 	}
 	if err := removeTransactionPath(journal.TemporaryPath); err != nil {
 		return err
@@ -650,7 +1044,7 @@ func validateAlreadySwappedOutput(vault string, journal workspace.Journal) error
 }
 
 func validOutputProof(hash, identity string) bool {
-	return strings.TrimSpace(hash) != "" && hash != "unavailable" && strings.TrimSpace(identity) != "" && identity != "absent"
+	return validDigest(hash) && strings.TrimSpace(identity) != "" && identity != "absent"
 }
 
 func validateOutputContinuation(vault string, journal workspace.Journal) error {
@@ -701,11 +1095,17 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 			}
 			return nil
 		}
+		if journal.CommitKind == "source-batch" {
+			return validateSourceBatchPrepared(vault, journal)
+		}
 		if journal.CommitKind == "source+output" && journal.SourcePath != "" {
 			return validatePreparedSource(journal)
 		}
 		return nil
 	case "source-committed":
+		if journal.CommitKind == "source-batch" {
+			return validateSourceBatchAfter(vault, journal)
+		}
 		if journal.CommitKind == "source-only" {
 			if err := validateSourceAfter(journal); err != nil {
 				return err
@@ -765,7 +1165,7 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 	}
 }
 
-func removeJournalArtifacts(journal workspace.Journal) error {
+func removeJournalArtifacts(journal workspace.Journal, vault ...string) error {
 	paths := append([]string{journal.BackupPath, journal.TemporaryPath}, journal.CleanupPaths...)
 	seen := make(map[string]struct{}, len(paths))
 	var err error
@@ -778,14 +1178,62 @@ func removeJournalArtifacts(journal workspace.Journal) error {
 			continue
 		}
 		seen[clean] = struct{}{}
+		if pathErr := validateRemovalArtifactPath(journal.TargetPath, clean, vault...); pathErr != nil {
+			err = errors.Join(err, pathErr)
+			continue
+		}
 		err = errors.Join(err, removeTransactionPath(clean))
 	}
 	return err
 }
 
-func removeTransactionPath(path string) error {
+func validateRemovalArtifactPath(target, path string, vault ...string) error {
 	if strings.TrimSpace(path) == "" {
 		return nil
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return fmt.Errorf("%w: transaction path: %v", workspace.ErrRecovery, err)
+	}
+	cleanTarget, err := filepath.Abs(target)
+	if err != nil {
+		return fmt.Errorf("%w: transaction target: %v", workspace.ErrRecovery, err)
+	}
+	absolute = filepath.Clean(absolute)
+	cleanTarget = filepath.Clean(cleanTarget)
+	if internalfsutil.PathWithinRoot(cleanTarget, absolute) || internalfsutil.PathWithinRoot(absolute, cleanTarget) {
+		return fmt.Errorf("%w: transaction path overlaps its target", workspace.ErrRecovery)
+	}
+	if err := internalfsutil.EnsureNoSymlinkComponents(filepath.Dir(absolute)); err != nil {
+		return fmt.Errorf("%w: transaction path has a symbolic-link parent: %v", workspace.ErrRecovery, err)
+	}
+	if len(vault) > 0 && internalfsutil.PathWithinRoot(vault[0], absolute) {
+		relative, err := filepath.Rel(vault[0], absolute)
+		if err != nil {
+			return fmt.Errorf("%w: transaction path boundary: %v", workspace.ErrRecovery, err)
+		}
+		for _, component := range strings.Split(relative, string(filepath.Separator)) {
+			if component == "" || component == "." || strings.HasPrefix(component, "..") {
+				continue
+			}
+			if publishpath.IsReservedPath(component) && !strings.HasPrefix(strings.ToLower(component), ".oxpio-") {
+				return fmt.Errorf("%w: transaction path is under a reserved directory", workspace.ErrRecovery)
+			}
+		}
+	}
+	return nil
+}
+
+func removeTransactionPath(path string) error {
+	return removeTransactionPathWith(path, os.RemoveAll)
+}
+
+func removeTransactionPathWith(path string, remove func(string) error) error {
+	if strings.TrimSpace(path) == "" {
+		return nil
+	}
+	if err := internalfsutil.EnsureNoSymlinkComponents(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("%w: transaction path has a symbolic-link parent: %v", workspace.ErrRecovery, err)
 	}
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -797,7 +1245,23 @@ func removeTransactionPath(path string) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return fmt.Errorf("%w: transaction path is symbolic", workspace.ErrRecovery)
 	}
-	return os.RemoveAll(path)
+	if err := internalfsutil.EnsureNoSymlinkComponents(filepath.Dir(path)); err != nil {
+		return fmt.Errorf("%w: transaction path has a symbolic-link parent: %v", workspace.ErrRecovery, err)
+	}
+	current, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if current.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("%w: transaction path is symbolic", workspace.ErrRecovery)
+	}
+	if !os.SameFile(info, current) {
+		return fmt.Errorf("%w: transaction path changed before removal", workspace.ErrRecovery)
+	}
+	return remove(path)
 }
 
 func fileHash(path string) string {

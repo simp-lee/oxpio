@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/simp-lee/oxpio/internal/publishpath"
 )
 
 // ErrPathOutsideRoot indicates that a configured input does not belong to its vault.
@@ -63,6 +65,17 @@ func ResolveVaultPath(vaultPath string) (string, error) {
 // ResolveVaultOutput resolves a vault and every existing output ancestor once,
 // rejects a symlink final output, and validates their safe relationship.
 func ResolveVaultOutput(vaultPath string, outputPath string) (VaultOutputBoundary, error) {
+	return resolveVaultOutput(vaultPath, outputPath, false)
+}
+
+// ResolveVaultOutputForTransaction resolves an isolated internal staging output.
+// It permits only a .oxpio-* transaction root directly below the Vault; callers
+// must never use it for a public formal output boundary.
+func ResolveVaultOutputForTransaction(vaultPath string, outputPath string) (VaultOutputBoundary, error) {
+	return resolveVaultOutput(vaultPath, outputPath, true)
+}
+
+func resolveVaultOutput(vaultPath string, outputPath string, allowTransactionRoot bool) (VaultOutputBoundary, error) {
 	vaultRoot, err := ResolveVaultPath(vaultPath)
 	if err != nil {
 		return VaultOutputBoundary{}, err
@@ -112,16 +125,22 @@ func ResolveVaultOutput(vaultPath string, outputPath string) (VaultOutputBoundar
 		if relErr != nil {
 			return VaultOutputBoundary{}, fmt.Errorf("resolve output path %q: %w", absoluteOutput, relErr)
 		}
-		for _, segment := range strings.Split(relative, string(filepath.Separator)) {
-			if strings.EqualFold(segment, ".oxpio") || strings.EqualFold(segment, ".obsidian") {
-				return VaultOutputBoundary{}, fmt.Errorf("output path %q must not overlap reserved Vault directory %q", absoluteOutput, segment)
-			}
+		if publishpath.IsReservedPath(filepath.ToSlash(relative)) && (!allowTransactionRoot || !isInternalTransactionOutput(relative)) {
+			return VaultOutputBoundary{}, fmt.Errorf("output path %q must not overlap reserved Vault directory or control path", absoluteOutput)
 		}
 	}
 	return VaultOutputBoundary{
 		VaultPath:  vaultRoot,
 		OutputPath: resolvedOutput,
 	}, nil
+}
+
+func isInternalTransactionOutput(relative string) bool {
+	parts := strings.Split(filepath.ToSlash(relative), "/")
+	if len(parts) < 2 || !strings.HasPrefix(strings.ToLower(parts[0]), ".oxpio-") {
+		return false
+	}
+	return !publishpath.IsReservedPath(strings.Join(parts[1:], "/"))
 }
 
 // ValidateOutputParent requires the parent of an output boundary to be an

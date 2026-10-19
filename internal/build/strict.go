@@ -58,12 +58,18 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		return result, relationErr
 	}
 	result.Graph = graph
-	boundary, err := internalfsutil.ResolveVaultOutput(vaultPath, outputPath)
+	resolveOutput := internalfsutil.ResolveVaultOutput
+	prepareOutput := internalpublish.Prepare
+	if ephemeral {
+		resolveOutput = internalfsutil.ResolveVaultOutputForTransaction
+		prepareOutput = internalpublish.PrepareForTransaction
+	}
+	boundary, err := resolveOutput(vaultPath, outputPath)
 	if err != nil {
 		return result, err
 	}
 	result.OutputPath = boundary.OutputPath
-	publisher, err := internalpublish.Prepare(boundary.VaultPath, boundary.OutputPath, internalpublish.Options{
+	publisher, err := prepareOutput(boundary.VaultPath, boundary.OutputPath, internalpublish.Options{
 		Durable:              !ephemeral,
 		InputFingerprint:     inputFingerprint,
 		ValidateInput:        validateInput,

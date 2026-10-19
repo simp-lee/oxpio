@@ -14,6 +14,7 @@ import (
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	"github.com/simp-lee/oxpio/internal/publishpath"
 	"github.com/simp-lee/oxpio/internal/slug"
 )
 
@@ -438,12 +439,7 @@ func normalizeVaultPath(value string) (string, error) {
 }
 
 func managementPath(value string) bool {
-	for _, segment := range strings.Split(value, "/") {
-		if strings.EqualFold(segment, ".oxpio") || strings.EqualFold(segment, ".obsidian") {
-			return true
-		}
-	}
-	return false
+	return publishpath.IsReservedPath(value)
 }
 
 func NormalizeSourcePath(value string) (string, error) {

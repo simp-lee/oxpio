@@ -77,7 +77,7 @@ func mutateDirectoryLocked(boundary internalfsutil.VaultOutputBoundary, request 
 		return MutationResult{}, err
 	}
 	if request.Operation == MutationMkdir || request.Operation == MutationRenameDir {
-		if err := validateReservedDirectoryPath(boundary, pathValue); err != nil {
+		if err := validateReservedDirectoryPath(boundary, pathValue, request.Operation == MutationMkdir); err != nil {
 			return MutationResult{}, err
 		}
 	}
@@ -85,7 +85,7 @@ func mutateDirectoryLocked(boundary internalfsutil.VaultOutputBoundary, request 
 		if err := validateDirectoryBoundary(boundary, request.Destination); err != nil {
 			return MutationResult{}, err
 		}
-		if err := validateReservedDirectoryPath(boundary, request.Destination); err != nil {
+		if err := validateReservedDirectoryPath(boundary, request.Destination, false); err != nil {
 			return MutationResult{}, err
 		}
 	}
@@ -334,17 +334,36 @@ func validateDirectoryBoundary(boundary internalfsutil.VaultOutputBoundary, rel 
 	return nil
 }
 
-func validateReservedDirectoryPath(boundary internalfsutil.VaultOutputBoundary, rel string) error {
+func validateReservedDirectoryPath(boundary internalfsutil.VaultOutputBoundary, rel string, allowAttachmentDirectory bool) error {
 	if strings.EqualFold(rel, internalconfig.Filename) || strings.EqualFold(rel, internalconfig.CustomCSSFilename) {
 		return fmt.Errorf("directory path %q is a reserved file", rel)
 	}
 	config, err := internalconfig.LoadForThemePreview(boundary.VaultPath, boundary.OutputPath)
 	if err != nil {
+		if allowAttachmentDirectory {
+			attachment, attachmentErr := internalconfig.ConfiguredAttachmentDirectory(boundary.VaultPath)
+			if attachmentErr == nil && attachment != "" {
+				if caseVariantPathOverlaps(rel, attachment) {
+					return fmt.Errorf("directory path %q differs in case from attachments.directory %q", rel, attachment)
+				}
+				if portablePathWithin(rel, attachment) || portablePathWithin(attachment, rel) {
+					return nil
+				}
+			}
+		}
 		return err
 	}
 	attachment := filepath.ToSlash(config.AttachmentDirectory)
-	if attachment != "" && portablePathWithin(rel, attachment) {
-		return fmt.Errorf("directory path %q is inside attachments.directory", rel)
+	if attachment != "" {
+		if caseVariantPathOverlaps(rel, attachment) {
+			return fmt.Errorf("directory path %q differs in case from attachments.directory %q", rel, attachment)
+		}
+		if portablePathWithin(rel, attachment) {
+			if allowAttachmentDirectory {
+				return nil
+			}
+			return fmt.Errorf("directory path %q is inside attachments.directory", rel)
+		}
 	}
 	return nil
 }
@@ -352,7 +371,29 @@ func validateReservedDirectoryPath(boundary internalfsutil.VaultOutputBoundary, 
 func portablePathWithin(candidate, root string) bool {
 	candidate = path.Clean(filepath.ToSlash(candidate))
 	root = path.Clean(filepath.ToSlash(root))
-	return strings.EqualFold(candidate, root) || strings.HasPrefix(strings.ToLower(candidate), strings.ToLower(root)+"/")
+	return candidate == root || strings.HasPrefix(candidate, root+"/")
+}
+
+func caseVariantPathOverlaps(left, right string) bool {
+	return caseVariantPathWithin(left, right) || caseVariantPathWithin(right, left)
+}
+
+func caseVariantPathWithin(candidate, root string) bool {
+	candidateParts := strings.Split(path.Clean(filepath.ToSlash(candidate)), "/")
+	rootParts := strings.Split(path.Clean(filepath.ToSlash(root)), "/")
+	if len(candidateParts) < len(rootParts) {
+		return false
+	}
+	variant := false
+	for index, rootPart := range rootParts {
+		if !strings.EqualFold(candidateParts[index], rootPart) {
+			return false
+		}
+		if candidateParts[index] != rootPart {
+			variant = true
+		}
+	}
+	return variant
 }
 
 func requireDirectoryParent(vault, rel string) error {

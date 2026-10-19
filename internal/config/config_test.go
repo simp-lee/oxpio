@@ -237,7 +237,7 @@ func TestNormalizeSiteConfigRejectsUnsafeThemeAndAttachmentPaths(t *testing.T) {
 			t.Fatalf("theme %q was accepted", value)
 		}
 	}
-	for _, value := range []string{".oxpio", ".obsidian/assets", "../assets", `assets\\images`, "assets//images"} {
+	for _, value := range []string{".oxpio", ".oxpio-assets", ".obsidian/assets", "../assets", `assets\\images`, "assets//images"} {
 		if _, err := NormalizeSiteConfig(model.SiteConfig{Title: "Site", BaseURL: "https://example.test/", AttachmentDirectory: value}); err == nil {
 			t.Fatalf("attachments.directory %q was accepted", value)
 		}

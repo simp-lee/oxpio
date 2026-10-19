@@ -40,6 +40,21 @@ func TestCommandRegistryDocumentsGlobalAndBoundaryFlags(t *testing.T) {
 	}
 }
 
+func TestContextCapabilitiesIncludeEveryAgentMutation(t *testing.T) {
+	capabilities := map[string]bool{}
+	for _, capability := range contextCapabilities() {
+		capabilities[capability] = true
+	}
+	for _, name := range []string{"upload", "import", "mkdir", "rename-dir", "write", "edit"} {
+		if !capabilities[name] {
+			t.Fatalf("context capabilities omit %q", name)
+		}
+		if _, ok := FindCommand(name); !ok {
+			t.Fatalf("command registry omits %q", name)
+		}
+	}
+}
+
 func TestMutationCommandsDeclareOutputBoundary(t *testing.T) {
 	for _, name := range []string{"write", "edit", "move", "delete", "upload", "mkdir", "rename-dir", "config write", "config edit", "theme validate", "theme init", "theme write", "theme edit"} {
 		spec, ok := FindCommand(name)
@@ -81,6 +96,27 @@ func TestGrepRegistryDeclaresBoundsRepeatabilityAndAgentHelp(t *testing.T) {
 	}
 }
 
+func TestAgentHelpDocumentsSafeInputAndInitializationExamples(t *testing.T) {
+	help := HelpText("write", false)
+	for _, want := range []string{"--content-file FILE|-", "use - for stdin", "Vault-relative POSIX"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("write help = %q, want %q", help, want)
+		}
+	}
+	themeHelp := HelpText("theme write", false)
+	for _, want := range []string{".oxpio/themes/minimal/layouts/example.html", "--content-file -"} {
+		if !strings.Contains(themeHelp, want) {
+			t.Fatalf("theme write help = %q, want %q", themeHelp, want)
+		}
+	}
+	agentHelp := HelpText("", true)
+	for _, want := range []string{"Input files:", "Import order:", "write navigation after all target sections exist"} {
+		if !strings.Contains(agentHelp, want) {
+			t.Fatalf("agent help = %q, want %q", agentHelp, want)
+		}
+	}
+}
+
 func TestHelpJSONIsStableAndDocumentsAgentWorkflow(t *testing.T) {
 	first, err := HelpJSON(true)
 	if err != nil {
@@ -105,6 +141,12 @@ func TestHelpJSONIsStableAndDocumentsAgentWorkflow(t *testing.T) {
 	}
 	if document.Schema != "oxpio.agent/help/v1" || len(document.Commands) == 0 || len(document.Workflow) != 3 {
 		t.Fatalf("help document = %#v", document)
+	}
+	workflow := strings.Join(document.Workflow, "\n")
+	for _, want := range []string{"write or edit", "publish --dry-run", "attachments.directory"} {
+		if !strings.Contains(workflow, want) {
+			t.Fatalf("help workflow = %q, want %q", workflow, want)
+		}
 	}
 	for _, command := range document.Commands {
 		if command.Name == "build" {

@@ -510,6 +510,8 @@ func commandForSpec(spec internalapplication.CommandSpec, deps commandDependenci
 		return newDeleteCommand()
 	case "upload":
 		return newUploadCommand()
+	case "import":
+		return newImportCommand()
 	case "mkdir":
 		return newMkdirCommand()
 	case "rename-dir":

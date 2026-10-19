@@ -79,7 +79,21 @@ func CheckOutputBoundary(vault, output string) error {
 // Prepare validates the output boundary, creates same-filesystem staging, and
 // records a prepared journal for formal transactions.
 func Prepare(vault, output string, options Options) (*Transaction, error) {
-	boundary, err := internalfsutil.ResolveVaultOutput(vault, output)
+	return prepare(vault, output, options, false)
+}
+
+// PrepareForTransaction prepares an isolated internal staging output. It is
+// used only by ephemeral candidate builds and never by public publish flows.
+func PrepareForTransaction(vault, output string, options Options) (*Transaction, error) {
+	return prepare(vault, output, options, true)
+}
+
+func prepare(vault, output string, options Options, allowTransactionRoot bool) (*Transaction, error) {
+	resolve := internalfsutil.ResolveVaultOutput
+	if allowTransactionRoot {
+		resolve = internalfsutil.ResolveVaultOutputForTransaction
+	}
+	boundary, err := resolve(vault, output)
 	if err != nil {
 		return nil, err
 	}
@@ -108,6 +122,9 @@ func Prepare(vault, output string, options Options) (*Transaction, error) {
 
 func initializeTransaction(boundary internalfsutil.VaultOutputBoundary, state outputState, parent, staging string, options Options) (*Transaction, error) {
 	transaction := &Transaction{vault: boundary.VaultPath, output: boundary.OutputPath, staging: staging, outputState: state, options: options, validateInput: options.ValidateInput, outputBeforeHash: directoryHash(boundary.OutputPath)}
+	if options.Durable && !validFileStateHash(transaction.outputBeforeHash) {
+		return nil, errors.New("publish output hash is unavailable")
+	}
 	if options.Durable {
 		lease, lockPath, lockErr := acquireOutputLease(boundary.VaultPath, boundary.OutputPath)
 		if lockErr != nil {
@@ -200,7 +217,8 @@ func (t *Transaction) MarkStagingReady() error {
 		return errors.New("publish staging is unavailable")
 	}
 	hash := directoryHash(t.staging)
-	if hash == "unavailable" {
+	identity := outputIdentity(t.staging)
+	if !validOutputProof(hash, identity) {
 		return errors.New("inspect staged output before journaling")
 	}
 	t.stagingHash = hash
@@ -208,7 +226,7 @@ func (t *Transaction) MarkStagingReady() error {
 		return nil
 	}
 	t.journal.OutputAfterHash = hash
-	t.journal.OutputAfterIdentity = outputIdentity(t.staging)
+	t.journal.OutputAfterIdentity = identity
 	t.journal.AfterHash = hash
 	return workspace.WriteJournal(t.vault, t.journal)
 }
@@ -233,6 +251,9 @@ func AdoptStaging(vault, output, staging string, options Options) (*Transaction,
 	if err != nil {
 		return nil, err
 	}
+	if err := internalfsutil.EnsureNoSymlinkComponents(filepath.Dir(staging)); err != nil {
+		return nil, fmt.Errorf("publish staging parent must not contain symbolic links: %w", err)
+	}
 	if stagingInfo.Mode()&os.ModeSymlink != 0 || !stagingInfo.IsDir() || !internalfsutil.PathWithinRoot(parent, staging) || filepath.Clean(staging) == parent || filepath.Clean(staging) == boundary.OutputPath {
 		return nil, fmt.Errorf("publish staging must be a private regular directory below output parent")
 	}
@@ -242,8 +263,12 @@ func AdoptStaging(vault, output, staging string, options Options) (*Transaction,
 	}
 	if transaction.options.Durable {
 		transaction.stagingHash = directoryHash(transaction.staging)
-		transaction.journal.OutputAfterHash = transaction.stagingHash
 		transaction.journal.OutputAfterIdentity = outputIdentity(transaction.staging)
+		if !validOutputProof(transaction.stagingHash, transaction.journal.OutputAfterIdentity) {
+			_ = transaction.Abort()
+			return nil, fmt.Errorf("publish staging proof is unavailable")
+		}
+		transaction.journal.OutputAfterHash = transaction.stagingHash
 		if err := workspace.WriteJournal(transaction.vault, transaction.journal); err != nil {
 			_ = transaction.Abort()
 			return nil, fmt.Errorf("persist staged output hash: %w", err)
@@ -338,14 +363,18 @@ func (t *Transaction) Commit() (result CommitResult, err error) {
 	if !t.options.Durable || journalCleanupAllowed {
 		if removeErr := t.removeAll(oldRoot); removeErr != nil {
 			result.CleanupError = errors.Join(result.CleanupError, fmt.Errorf("cleanup previous output: %w", removeErr))
+			journalCleanupAllowed = false
 		}
 	}
 	if t.options.Durable && journalCleanupAllowed {
-		if cleanupErr := removeJournalArtifacts(t.journal); cleanupErr != nil {
+		if cleanupErr := removeJournalArtifacts(t.journal, t.vault); cleanupErr != nil {
 			result.CleanupError = errors.Join(result.CleanupError, cleanupErr)
+			journalCleanupAllowed = false
 		}
-		if clearErr := workspace.ClearJournal(t.vault); clearErr != nil {
-			result.CleanupError = errors.Join(result.CleanupError, clearErr)
+		if journalCleanupAllowed {
+			if clearErr := workspace.ClearJournal(t.vault); clearErr != nil {
+				result.CleanupError = errors.Join(result.CleanupError, clearErr)
+			}
 		}
 	}
 	result.CleanupError = errors.Join(result.CleanupError, t.releaseOutputLock())
@@ -373,17 +402,28 @@ func (t *Transaction) Abort() error {
 		err = t.removeAll(t.staging)
 	}
 	if t.options.Durable {
-		err = errors.Join(err, removeJournalArtifacts(t.journal), workspace.ClearJournal(t.vault))
+		if cleanupErr := removeJournalArtifacts(t.journal, t.vault); cleanupErr != nil {
+			err = errors.Join(err, cleanupErr)
+		} else if clearErr := workspace.ClearJournal(t.vault); clearErr != nil {
+			err = errors.Join(err, clearErr)
+		}
 	}
 	err = errors.Join(err, t.releaseOutputLock())
 	return err
 }
 
 func (t *Transaction) removeAll(path string) error {
-	if t != nil && t.options.RemoveAll != nil {
-		return t.options.RemoveAll(path)
+	if t == nil {
+		return nil
 	}
-	return os.RemoveAll(path)
+	if err := validateRemovalArtifactPath(t.output, path, t.vault); err != nil {
+		return err
+	}
+	remove := os.RemoveAll
+	if t.options.RemoveAll != nil {
+		remove = t.options.RemoveAll
+	}
+	return removeTransactionPathWith(path, remove)
 }
 
 // CheckExternalOutputLock performs a read-only probe of the short-lived

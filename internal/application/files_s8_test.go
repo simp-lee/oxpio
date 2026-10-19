@@ -32,6 +32,75 @@ func TestMutateDirectoryAllowsPublicOutsideCustomOutput(t *testing.T) {
 	}
 }
 
+func TestMutateUploadBatchValidatesMutualReferencesBeforeCommit(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "public")
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	writePublishTestFile(t, vault, "docs/_index.md", "---\ntitle: Docs\npublish: true\n---\nDocs\n")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := MutateUploadBatch(vault, output, UploadBatchMutationRequest{Items: []UploadBatchItem{
+		{Path: "docs/one.md", Kind: UploadArticle, Content: []byte("---\ntitle: One\npublish: true\ntype: doc\n---\n[Two](two.md)\n")},
+		{Path: "docs/two.md", Kind: UploadArticle, Content: []byte("---\ntitle: Two\npublish: true\ntype: doc\n---\n[One](one.md)\n")},
+	}})
+	if err != nil {
+		t.Fatalf("mutual-reference batch import = %v", err)
+	}
+	for _, name := range []string{"docs/one.md", "docs/two.md"} {
+		if _, statErr := os.Stat(filepath.Join(vault, filepath.FromSlash(name))); statErr != nil {
+			t.Fatalf("imported %s: %v", name, statErr)
+		}
+	}
+}
+
+func TestMutateUploadExplainsMissingAttachmentDirectory(t *testing.T) {
+	vault := t.TempDir()
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nattachments:\n  directory: attachments\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	_, err := MutateUpload(vault, "", UploadMutationRequest{Directory: "attachments", Name: "file.bin", Kind: UploadAttachment, ExpectedHash: AbsentHash, Content: []byte("data")})
+	if err == nil || !strings.Contains(err.Error(), "oxpio mkdir attachments") {
+		t.Fatalf("missing attachment directory error = %v, want initialization command", err)
+	}
+}
+
+func TestMutateUploadExplainsMissingAttachmentConfiguration(t *testing.T) {
+	vault := t.TempDir()
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	_, err := MutateUpload(vault, "", UploadMutationRequest{Directory: "attachments", Name: "file.bin", Kind: UploadAttachment, ExpectedHash: AbsentHash, Content: []byte("data")})
+	if err == nil || !strings.Contains(err.Error(), "attachments.directory is not configured") {
+		t.Fatalf("missing attachment configuration error = %v", err)
+	}
+}
+
+func TestMutateUploadRejectsCaseVariantAttachmentRoot(t *testing.T) {
+	vault := t.TempDir()
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nattachments:\n  directory: attachments\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	if err := os.MkdirAll(filepath.Join(vault, "attachments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := MutateUpload(vault, "", UploadMutationRequest{Directory: "ATTACHMENTS", Name: "file.bin", Kind: UploadAttachment, ExpectedHash: AbsentHash, Content: []byte("data")})
+	if err == nil || !strings.Contains(err.Error(), "inside attachments.directory") {
+		t.Fatalf("case-variant attachment root error = %v", err)
+	}
+}
+
+func TestMutateDirectoryRejectsCaseVariantAttachmentRoot(t *testing.T) {
+	vault := t.TempDir()
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nattachments:\n  directory: attachments\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	if err := os.MkdirAll(filepath.Join(vault, "attachments"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := MutateDirectory(vault, "", DirectoryMutationRequest{Operation: MutationMkdir, Path: "ATTACHMENTS", ExpectedHash: AbsentHash})
+	if err == nil || !strings.Contains(err.Error(), "differs in case") {
+		t.Fatalf("case-variant attachment root error = %v", err)
+	}
+}
+
 func TestMutateUploadRejectsNestedReservedManagementPaths(t *testing.T) {
 	vault := t.TempDir()
 	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nattachments:\n  directory: attachments\n")
@@ -67,6 +136,30 @@ func TestMutateUploadRejectsPortableIdentityCollisionBeforeCommit(t *testing.T) 
 	}
 	if _, statErr := os.Stat(filepath.Join(vault, "attachments", "photo.bin")); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("colliding upload target exists: %v", statErr)
+	}
+}
+
+func TestMutateDirectoryInitializesNestedAttachmentRoot(t *testing.T) {
+	vault := t.TempDir()
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nattachments:\n  directory: media/assets\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	for _, rel := range []string{"media", "media/assets"} {
+		if _, err := MutateDirectory(vault, "", DirectoryMutationRequest{Operation: MutationMkdir, Path: rel, ExpectedHash: AbsentHash}); err != nil {
+			t.Fatalf("mkdir %s = %v", rel, err)
+		}
+	}
+}
+
+func TestMutateDirectoryRejectsCaseVariantNestedAttachmentAncestor(t *testing.T) {
+	vault := t.TempDir()
+	writePublishTestFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\nattachments:\n  directory: media/assets\n")
+	writePublishTestFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	if err := os.MkdirAll(filepath.Join(vault, "media", "assets"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := MutateDirectory(vault, "", DirectoryMutationRequest{Operation: MutationMkdir, Path: "MEDIA", ExpectedHash: AbsentHash})
+	if err == nil || !strings.Contains(err.Error(), "differs in case") {
+		t.Fatalf("case-variant attachment ancestor error = %v", err)
 	}
 }
 
@@ -146,10 +239,14 @@ func TestMutateDirectoryRequiresSameParentAndAbsentMkdirCAS(t *testing.T) {
 	if _, err := MutateDirectory(vault, "", DirectoryMutationRequest{Operation: MutationMkdir, Path: "new"}); err == nil {
 		t.Fatal("mkdir without absent CAS succeeded")
 	}
-	for _, rel := range []string{"custom.css", "attachments/new"} {
-		if _, err := MutateDirectory(vault, "", DirectoryMutationRequest{Operation: MutationMkdir, Path: rel, ExpectedHash: AbsentHash}); err == nil {
-			t.Fatalf("reserved mkdir %q succeeded", rel)
-		}
+	if _, err := MutateDirectory(vault, "", DirectoryMutationRequest{Operation: MutationMkdir, Path: "custom.css", ExpectedHash: AbsentHash}); err == nil {
+		t.Fatal("reserved mkdir custom.css succeeded")
+	}
+	if _, err := MutateDirectory(vault, "", DirectoryMutationRequest{Operation: MutationMkdir, Path: "attachments", ExpectedHash: AbsentHash}); err != nil {
+		t.Fatalf("attachment root mkdir = %v", err)
+	}
+	if _, err := MutateDirectory(vault, "", DirectoryMutationRequest{Operation: MutationMkdir, Path: "attachments/new", ExpectedHash: AbsentHash}); err != nil {
+		t.Fatalf("attachment subdirectory mkdir = %v", err)
 	}
 	before, err := directoryHash(filepath.Join(vault, "left", "empty"))
 	if err != nil {

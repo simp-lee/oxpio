@@ -59,27 +59,36 @@ type CompletedPath struct {
 	AfterHash string `json:"afterHash"`
 }
 
+// SourceChange records one create-only source path in a batch mutation.
+type SourceChange struct {
+	Path       string `json:"path"`
+	BeforeHash string `json:"beforeHash"`
+	AfterHash  string `json:"afterHash"`
+}
+
 type Journal struct {
-	Version             int      `json:"version"`
-	CommitKind          string   `json:"commitKind"`
-	Phase               string   `json:"phase"`
-	InputFingerprint    string   `json:"inputFingerprint"`
-	TargetPath          string   `json:"targetPath"`
-	SourcePath          string   `json:"sourcePath,omitempty"`
-	SourceBeforePath    string   `json:"sourceBeforePath,omitempty"`
-	OutputPath          string   `json:"outputPath,omitempty"`
-	TemporaryPath       string   `json:"temporaryPath"`
-	BackupPath          string   `json:"backupPath,omitempty"`
-	CleanupPaths        []string `json:"cleanupPaths,omitempty"`
-	BeforeHash          string   `json:"beforeHash,omitempty"`
-	AfterHash           string   `json:"afterHash,omitempty"`
-	SourceBeforeHash    string   `json:"sourceBeforeHash,omitempty"`
-	SourceAfterHash     string   `json:"sourceAfterHash,omitempty"`
-	OutputIdentity      string   `json:"outputIdentity,omitempty"`
-	OutputAfterIdentity string   `json:"outputAfterIdentity,omitempty"`
-	OutputBeforeHash    string   `json:"outputBeforeHash,omitempty"`
-	OutputAfterHash     string   `json:"outputAfterHash,omitempty"`
-	Integrity           string   `json:"integrity"`
+	Version             int            `json:"version"`
+	CommitKind          string         `json:"commitKind"`
+	Phase               string         `json:"phase"`
+	InputFingerprint    string         `json:"inputFingerprint"`
+	TargetPath          string         `json:"targetPath"`
+	SourcePath          string         `json:"sourcePath,omitempty"`
+	SourceBeforePath    string         `json:"sourceBeforePath,omitempty"`
+	OutputPath          string         `json:"outputPath,omitempty"`
+	TemporaryPath       string         `json:"temporaryPath"`
+	BackupPath          string         `json:"backupPath,omitempty"`
+	CleanupPaths        []string       `json:"cleanupPaths,omitempty"`
+	BeforeHash          string         `json:"beforeHash,omitempty"`
+	AfterHash           string         `json:"afterHash,omitempty"`
+	SourceBeforeHash    string         `json:"sourceBeforeHash,omitempty"`
+	SourceAfterHash     string         `json:"sourceAfterHash,omitempty"`
+	SourceChanges       []SourceChange `json:"sourceChanges,omitempty"`
+	OutputIdentity      string         `json:"outputIdentity,omitempty"`
+	OutputAfterIdentity string         `json:"outputAfterIdentity,omitempty"`
+	OutputBeforeHash    string         `json:"outputBeforeHash,omitempty"`
+	OutputAfterHash     string         `json:"outputAfterHash,omitempty"`
+	AfterFingerprint    string         `json:"afterFingerprint,omitempty"`
+	Integrity           string         `json:"integrity"`
 }
 
 // Lease is an exclusive workspace lock. Release is idempotent.
@@ -143,6 +152,9 @@ func AcquireForRecovery(vault string) (*Lease, error) {
 	}
 	if err := ensureControlDir(resolved); err != nil {
 		return nil, err
+	}
+	if err := inspectTransactionDir(resolved); err != nil {
+		return nil, &codedError{Code: "RECOVERY_ERROR", Err: err}
 	}
 	release, err := acquireFileLock(filepath.Join(resolved, ".oxpio", "lock"), true)
 	if err != nil {
@@ -294,8 +306,7 @@ func WriteJournal(vault string, journal Journal) error {
 	if err := ensureControlDir(vault); err != nil {
 		return err
 	}
-	transactions := filepath.Dir(journalPath(vault))
-	if err := os.MkdirAll(transactions, 0o700); err != nil {
+	if err := ensureTransactionDir(vault); err != nil {
 		return fmt.Errorf("create transaction directory: %w", err)
 	}
 	data, err := json.Marshal(journal)
@@ -308,6 +319,9 @@ func WriteJournal(vault string, journal Journal) error {
 // ClearJournal removes the active journal without touching any other product
 // file. It is used only after a transaction has reached a known state.
 func ClearJournal(vault string) error {
+	if err := inspectTransactionDir(vault); err != nil {
+		return err
+	}
 	path := journalPath(vault)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -557,7 +571,7 @@ func completedSuppressionReady(vault string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if journal.CommitKind == "source-only" {
+	if journal.CommitKind == "source-only" || journal.CommitKind == "source-batch" {
 		// Source-only commits never publish output. A matching after-hash marker
 		// is therefore safe to consume even while its journal is being finalized.
 		return true, nil
@@ -580,7 +594,7 @@ func completedClearBlocked(vault string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if journal.CommitKind == "source-only" {
+	if journal.CommitKind == "source-only" || journal.CommitKind == "source-batch" {
 		return journal.Phase == "prepared", nil
 	}
 	return journal.Phase != "output-committed" && journal.Phase != "completed", nil
@@ -642,6 +656,9 @@ func hashBytes(data []byte) string {
 
 // LoadJournal reads the sole active journal while refusing symlinked state.
 func LoadJournal(vault string) (Journal, error) {
+	if err := inspectTransactionDir(vault); err != nil {
+		return Journal{}, &codedError{Code: "RECOVERY_ERROR", Err: err}
+	}
 	path := journalPath(vault)
 	if _, err := os.Lstat(path); err != nil {
 		return Journal{}, err
@@ -679,7 +696,7 @@ func validateJournal(journal Journal, requireIntegrity bool) error {
 	if journal.Version != JournalVersion || journal.CommitKind == "" || !validJournalPhases[journal.Phase] {
 		return errors.New("unsupported transaction journal")
 	}
-	if journal.CommitKind != "source-only" && journal.CommitKind != "source+output" {
+	if journal.CommitKind != "source-only" && journal.CommitKind != "source-batch" && journal.CommitKind != "source+output" {
 		return errors.New("unsupported transaction commit kind")
 	}
 	if requireIntegrity && journal.Integrity != journalDigest(journal) {
@@ -693,6 +710,42 @@ func journalDigest(journal Journal) string {
 	data, _ := json.Marshal(journal)
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
+}
+
+func inspectTransactionDir(vault string) error {
+	transactions := filepath.Join(vault, ".oxpio", "transactions")
+	if err := internalfsutil.EnsureNoSymlinkComponents(transactions); err != nil {
+		return err
+	}
+	info, err := os.Lstat(transactions)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return errors.New("transaction directory is not a regular directory")
+	}
+	return nil
+}
+
+func ensureTransactionDir(vault string) error {
+	transactions := filepath.Join(vault, ".oxpio", "transactions")
+	info, err := os.Lstat(transactions)
+	if err == nil {
+		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return errors.New("transaction directory is not a regular directory")
+		}
+		return nil
+	}
+	if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	if err := os.Mkdir(transactions, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	return inspectTransactionDir(vault)
 }
 
 func inspectControlDir(vault string) error {

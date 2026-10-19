@@ -29,13 +29,17 @@ func IsReservedPath(relPath string) bool {
 		return true
 	}
 	base := strings.ToLower(path.Base(normalized))
-	if strings.HasPrefix(base, ".oxpio-") || (strings.HasPrefix(base, ".") && strings.Contains(base, "-oxpio-")) {
+	if strings.HasPrefix(base, ".oxpio-") {
 		return true
 	}
 
 	for _, segment := range strings.Split(normalized, "/") {
-		switch strings.ToLower(segment) {
+		segment = strings.ToLower(segment)
+		switch segment {
 		case "node_modules", ".git", ".obsidian", ".oxpio":
+			return true
+		}
+		if strings.HasPrefix(segment, ".oxpio-") {
 			return true
 		}
 	}
