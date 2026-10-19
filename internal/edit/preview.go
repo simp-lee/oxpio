@@ -59,6 +59,17 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	token := parts[0]
+	if len(parts) == 1 && r.Method == http.MethodDelete {
+		if !s.authorizeMutation(w, r) {
+			return
+		}
+		if err := s.discardPublishedPreview(token); err != nil {
+			http.Error(w, fmt.Sprintf("preview cleanup failed: %v", err), http.StatusInternalServerError)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
 	preview, cleanupErr := s.lookupPreview(token)
 	if cleanupErr != nil {
 		http.Error(w, fmt.Sprintf("preview cleanup failed: %v", cleanupErr), http.StatusInternalServerError)
@@ -182,6 +193,8 @@ func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 	previewDocument := &xhtml.Node{Type: xhtml.DocumentNode}
 	previewDocument.AppendChild(&xhtml.Node{Type: xhtml.DoctypeNode, Data: "html"})
 	previewHTML := &xhtml.Node{Type: xhtml.ElementNode, Data: "html", Attr: append([]xhtml.Attribute(nil), htmlRoot.Attr...)}
+	removePreviewRuntimeMarker(previewHTML, "data-oxpio-sidebar")
+	removePreviewRuntimeMarker(previewHTML, "data-oxpio-popover")
 	previewDocument.AppendChild(previewHTML)
 	previewHead := &xhtml.Node{Type: xhtml.ElementNode, Data: "head", Attr: append([]xhtml.Attribute(nil), headRoot.Attr...)}
 	for child := headRoot.FirstChild; child != nil; child = child.NextSibling {
@@ -207,6 +220,17 @@ func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 		return nil, err
 	}
 	return rendered.Bytes(), nil
+}
+
+func removePreviewRuntimeMarker(node *xhtml.Node, key string) {
+	if node == nil {
+		return
+	}
+	for index := len(node.Attr) - 1; index >= 0; index-- {
+		if node.Attr[index].Key == key {
+			node.Attr = append(node.Attr[:index], node.Attr[index+1:]...)
+		}
+	}
 }
 
 func previewNodeFollows(start, end *xhtml.Node) bool {
@@ -408,11 +432,19 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if r.Context().Err() != nil {
+		_ = s.discardUnpublishedPreview(nil, root)
+		return
+	}
 	previewCatalog := internalapplication.NewCatalog(built.Catalog)
 	previewEntry, previewEntryErr := previewCatalog.EntryByRelPath(previewPath, true)
 	if previewEntryErr != nil || previewEntry.Route == "" {
 		cleanupErr := s.discardUnpublishedPreview(nil, root)
 		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": previewFailureMessage("source has no preview route; publish its parent section or repair its frontmatter", cleanupErr)})
+		return
+	}
+	if r.Context().Err() != nil {
+		_ = s.discardUnpublishedPreview(nil, root)
 		return
 	}
 	s.previewMu.Lock()
@@ -456,7 +488,16 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	contentHTML := rewritePreviewHTMLAt(contentPage, s.controlPrefix()+"preview/"+token, previewSitePath(basePath, previewEntry.Route))
+	if r.Context().Err() != nil {
+		_ = s.discardUnpublishedPreview(static, root)
+		return
+	}
 	s.previewMu.Lock()
+	if r.Context().Err() != nil {
+		s.previewMu.Unlock()
+		_ = s.discardUnpublishedPreview(static, root)
+		return
+	}
 	if s.closed {
 		s.previewMu.Unlock()
 		cleanupErr := s.discardUnpublishedPreview(static, root)
@@ -470,8 +511,18 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, previewFailureMessage("could not clean up expired preview", cleanupErr), http.StatusInternalServerError)
 		return
 	}
+	if r.Context().Err() != nil {
+		s.previewMu.Unlock()
+		_ = s.discardUnpublishedPreview(static, root)
+		return
+	}
 	delete(s.previewRoots, root)
 	s.previews[token] = &editorPreview{static: static, root: root, contentHTML: contentHTML, expires: now.Add(previewLifetime)}
+	if r.Context().Err() != nil {
+		s.previewMu.Unlock()
+		_ = s.discardPublishedPreview(token)
+		return
+	}
 	s.previewMu.Unlock()
 	response := map[string]any{
 		"url":          fullURL,
@@ -481,6 +532,26 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		"diagnostics":  s.editorDiagnostics(built.Diagnostics),
 	}
 	writeJSON(w, response)
+	if oldToken := strings.TrimSpace(r.Header.Get("X-OXPIO-Preview-Token")); oldToken != "" && oldToken != token {
+		_ = s.discardPublishedPreview(oldToken)
+	}
+	if r.Context().Err() != nil {
+		_ = s.discardPublishedPreview(token)
+	}
+}
+
+func (s *Server) discardPublishedPreview(token string) error {
+	s.previewMu.Lock()
+	defer s.previewMu.Unlock()
+	preview := s.previews[token]
+	if preview == nil {
+		return nil
+	}
+	if err := discardPreview(preview.static, preview.root); err != nil {
+		return err
+	}
+	delete(s.previews, token)
+	return nil
 }
 
 func (s *Server) previewOverlay(relPath string, source []byte) (map[string][]byte, error) {

@@ -34,6 +34,34 @@ func TestThemeRejectsPortablePathCollisions(t *testing.T) {
 	}
 }
 
+func TestThemeRuntimeContractRequiresEnabledMounts(t *testing.T) {
+	source, err := BaseSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ValidateRuntimeContract(source, ValidationAssets(source), "https://example.test/", true, true); err != nil {
+		t.Fatalf("base runtime contract = %v", err)
+	}
+	if err := ValidateRuntimeContract(source, ValidationAssets(source), "https://example.test/", false, false); err != nil {
+		t.Fatalf("base optional theme toggle contract = %v", err)
+	}
+	files, err := InitFiles("minimal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files["layouts/base.html"] = []byte(`{{define "base"}}<html></html>{{end}}`)
+	minimal := sourceFromFiles("minimal", files, false)
+	if err := ValidateRuntimeContract(minimal, ValidationAssets(minimal), "https://example.test/", false, false); err != nil {
+		t.Fatalf("disabled runtime contract = %v", err)
+	}
+	if err := ValidateRuntimeContract(minimal, ValidationAssets(minimal), "https://example.test/", true, false); err == nil || !strings.Contains(err.Error(), "data-oxpio-sidebar") {
+		t.Fatalf("missing Sidebar mount error = %v", err)
+	}
+	if err := ValidateRuntimeContract(minimal, ValidationAssets(minimal), "https://example.test/", false, true); err == nil || !strings.Contains(err.Error(), "data-oxpio-popover") {
+		t.Fatalf("missing Popover mount error = %v", err)
+	}
+}
+
 func TestBaseThemeHasStableContractAndRendersAllPageKinds(t *testing.T) {
 	source, err := BaseSource()
 	if err != nil {
@@ -58,6 +86,10 @@ func TestBaseThemeHasStableContractAndRendersAllPageKinds(t *testing.T) {
 		if !strings.Contains(string(output), "<!doctype html>") {
 			t.Fatalf("render %s = %q", kind, output)
 		}
+	}
+	emptySidebar, err := renderer.Render("article", viewmodel.Page{Schema: viewmodel.SchemaVersion, Kind: "article", Site: viewmodel.Site{Title: "Site", Language: "en"}, Title: "Article"})
+	if err != nil || strings.Contains(string(emptySidebar), "data-sidebar-toggle") || strings.Contains(string(emptySidebar), "data-oxpio-sidebar") {
+		t.Fatalf("empty Sidebar render = %q, %v", emptySidebar, err)
 	}
 }
 

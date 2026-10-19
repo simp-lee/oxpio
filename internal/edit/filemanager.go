@@ -62,7 +62,7 @@ func (s *Server) serveFileFolder(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid folder request", http.StatusBadRequest)
 		return
 	}
-	result, err := s.coordinator.CreateFolder(request.Path, fileHashHeader(r))
+	result, err := s.coordinator.CreateFolderContext(r.Context(), request.Path, fileHashHeader(r))
 	if err != nil {
 		s.writeMutationError(w, err)
 		return
@@ -117,7 +117,7 @@ func (s *Server) serveFileMarkdown(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	result, err := s.coordinator.CreateMarkdown(request.Path, fileHashHeader(r), content)
+	result, err := s.coordinator.CreateMarkdownContext(r.Context(), request.Path, fileHashHeader(r), content)
 	if err != nil {
 		s.writeMutationError(w, err)
 		return
@@ -137,7 +137,7 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "a destination path is required", http.StatusBadRequest)
 			return
 		}
-		result, err := s.coordinator.RenamePath(r.URL.Query().Get("path"), request.Destination, fileHashHeader(r))
+		result, err := s.coordinator.RenamePathContext(r.Context(), r.URL.Query().Get("path"), request.Destination, fileHashHeader(r))
 		if err != nil {
 			s.writeMutationError(w, err)
 			return
@@ -151,7 +151,7 @@ func (s *Server) serveFile(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "delete confirmation is required", http.StatusBadRequest)
 			return
 		}
-		result, err := s.coordinator.DeletePath(r.URL.Query().Get("path"), fileHashHeader(r))
+		result, err := s.coordinator.DeletePathContext(r.Context(), r.URL.Query().Get("path"), fileHashHeader(r))
 		if err != nil {
 			s.writeMutationError(w, err)
 			return

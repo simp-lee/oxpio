@@ -10,10 +10,27 @@ theme has no partials or static assets.
 Page kinds are `section`, `article`, `tag`, `timeline`, and `404`. Main fields
 include `.Site`, `.Kind`, `.Title`, `.Description`, `.URL`, `.Href`,
 `.Canonical`, `.BasePath`, `.Content`, `.Section`, `.Article`, `.Entries`,
-`.Navigation`, `.Sidebar`, `.Breadcrumbs`, `.Versions`, `.Source`,
-`.Pagination`, and `.SEO`. `.Content` is core-rendered controlled HTML; Markdown remains the only content
-source. Optional values are
-empty or nil rather than inferred.
+`.Navigation`, `.Sidebar`, `.SidebarEnabled`, `.Breadcrumbs`, `.Versions`, `.Source`,
+`.Pagination`, `.SEO`, `.VersionID`, `.HasMath`, `.HasMermaid`, `.NotFound`, and
+`.Popover`.
+`.Content` is core-rendered controlled HTML; Markdown remains the only content
+source. Optional values are empty or nil rather than inferred.
+
+## Runtime mount contract
+
+When Sidebar is enabled, the rendered shell must include `data-site-body`,
+`data-sidebar-shell`, `data-sidebar-root`, `data-sidebar-toggle`,
+`data-sidebar-close`, and `data-sidebar-overlay`. When Popover is enabled it
+must include one `<div id="..." data-popover-card>`. These markers are consumed by the shared
+offline runtime and are checked by `theme validate`; the mobile toggle and
+close/overlay controls must remain visible and usable at narrow widths.
+
+`data-theme-toggle` is an optional visible control. If present, the shared
+runtime reveals it and updates its `data-theme-toggle-value` child; themes that
+provide manual color mode switching must also style `[data-theme="dark"]` and
+`[data-theme="light"]`, not only `prefers-color-scheme`. Content previews keep
+math and diagram markers but remove Sidebar and Popover markers because their
+shell mount points are intentionally cropped.
 
 The pure template functions are `siteURL(path)`, `routeURL(route)`,
 `assetURL(themePath)`, `formatDate(value, layout)`, and

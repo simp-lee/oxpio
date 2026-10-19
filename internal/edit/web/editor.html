@@ -93,6 +93,7 @@
 
     <section class="workspace" aria-label="Editor workspace">
       <p id="status" class="status" role="status">Loading content…</p>
+      <div id="busy-indicator" class="busy-indicator" role="status" aria-live="polite" hidden><span id="busy-message">Working… controls are temporarily disabled.</span><button id="cancel-operation" type="button" class="cancel-operation" hidden>Cancel</button></div>
 
       <form id="metadata" class="metadata" autocomplete="off">
         <div class="metadata-card-heading"><div><span class="eyebrow">Metadata</span><strong id="metadata-title">Current source</strong></div><span id="publish-badge" class="state-badge draft">Draft</span><span id="type-badge" class="type-badge">Document</span><button id="metadata-toggle" type="button" class="icon-button metadata-toggle" aria-expanded="true" aria-controls="metadata-fields" aria-label="Hide metadata" title="Hide metadata"><svg aria-hidden="true"><use id="metadata-toggle-icon" href="#icon-chevron-up"></use></svg></button></div>
@@ -166,7 +167,7 @@
           <div id="preview-empty" class="preview-empty">Select Preview to render a complete preview.</div>
         </div>
       </div>
-      <div id="diagnostics" class="diagnostics" hidden></div>
+      <div id="diagnostics" class="diagnostics" role="alert" aria-live="assertive" hidden></div>
     </section>
   </main>
 

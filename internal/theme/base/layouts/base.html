@@ -1,5 +1,5 @@
 {{define "base"}}<!doctype html>
-<html lang="{{.Site.Language}}" data-oxpio-kind="{{.Kind}}" data-oxpio-base-path="{{.BasePath}}"{{if .Sidebar}} data-oxpio-sidebar{{end}}{{if .VersionID}} data-oxpio-version="{{.VersionID}}"{{end}}{{if .Popover}} data-oxpio-popover{{end}}{{if .HasMath}} data-oxpio-math{{end}}{{if .HasMermaid}} data-oxpio-mermaid{{end}}>
+<html lang="{{.Site.Language}}" data-oxpio-kind="{{.Kind}}" data-oxpio-base-path="{{.BasePath}}"{{if .SidebarEnabled}} data-oxpio-sidebar{{end}}{{if .VersionID}} data-oxpio-version="{{.VersionID}}"{{end}}{{if .Popover}} data-oxpio-popover{{end}}{{if .HasMath}} data-oxpio-math{{end}}{{if .HasMermaid}} data-oxpio-mermaid{{end}}>
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -12,10 +12,10 @@
     <nav aria-label="Global navigation">
       {{range .Navigation}}<a href="{{.Href}}"{{if .Current}} aria-current="{{.Current}}"{{end}}>{{.Name}}</a>{{end}}
     </nav>
-    <button type="button" data-theme-toggle hidden aria-pressed="false"><span data-theme-toggle-value>Theme</span><span data-theme-toggle-state class="sr-only"></span><span data-theme-toggle-source class="sr-only"></span></button>
+    <button type="button" class="theme-toggle" data-theme-toggle hidden aria-pressed="false"><span class="theme-toggle-caption">Theme</span><span class="theme-toggle-value" data-theme-toggle-value>Theme</span><span data-theme-toggle-state class="sr-only"></span><span data-theme-toggle-source class="sr-only"></span></button>
   </header>
   <main class="site-main" data-oxpio-main>
-    {{if .Sidebar}}<button type="button" class="sidebar-launch" data-sidebar-toggle hidden aria-expanded="false">Open navigation</button><aside class="sidebar-shell" data-sidebar-shell><nav class="sidebar" aria-label="Sidebar" data-sidebar-root><ul class="sidebar-list sidebar-list-root">{{template "sidebar" .Sidebar}}</ul></nav></aside>{{end}}
+    {{if .SidebarEnabled}}<button type="button" class="sidebar-launch" data-sidebar-toggle hidden aria-expanded="false"><span class="sidebar-launch-icon" aria-hidden="true"></span>Open navigation</button><div class="sidebar-overlay" data-sidebar-overlay hidden></div><aside class="sidebar-shell" data-sidebar-shell><button type="button" class="sidebar-close" data-sidebar-close>Close navigation</button><nav class="sidebar" aria-label="Sidebar" data-sidebar-root><ul class="sidebar-list sidebar-list-root">{{template "sidebar" .Sidebar}}</ul></nav></aside>{{end}}
     <div class="site-content">
       <nav class="breadcrumbs" aria-label="Breadcrumb"><ol>{{range .Breadcrumbs}}<li><a href="{{.Href}}">{{.Name}}</a></li>{{end}}</ol></nav>
       {{if .NotFound}}

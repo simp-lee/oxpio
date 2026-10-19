@@ -2,6 +2,7 @@ package edit
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
@@ -51,35 +52,63 @@ type fileManagerState struct {
 // CreateFolder creates one empty vault directory after a CAS check without
 // building or publishing formal output.
 func (coordinator *Coordinator) CreateFolder(relPath, expectedHash string) (TransactionResult, error) {
-	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationFolder, path: relPath, expected: expectedHash})
+	return coordinator.CreateFolderContext(context.Background(), relPath, expectedHash)
+}
+
+// CreateFolderContext creates a folder unless the caller's request is cancelled.
+func (coordinator *Coordinator) CreateFolderContext(ctx context.Context, relPath, expectedHash string) (TransactionResult, error) {
+	return coordinator.mutateFile(ctx, fileManagerMutation{operation: fileMutationFolder, path: relPath, expected: expectedHash})
 }
 
 // CreateMarkdown creates an editor-supported Markdown file after a CAS check
 // and a successful candidate build. The caller chooses the source template.
 func (coordinator *Coordinator) CreateMarkdown(relPath, expectedHash string, content []byte) (TransactionResult, error) {
-	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationMarkdown, path: relPath, expected: expectedHash, content: content})
+	return coordinator.CreateMarkdownContext(context.Background(), relPath, expectedHash, content)
+}
+
+// CreateMarkdownContext creates a Markdown file unless the caller's request is cancelled.
+func (coordinator *Coordinator) CreateMarkdownContext(ctx context.Context, relPath, expectedHash string, content []byte) (TransactionResult, error) {
+	return coordinator.mutateFile(ctx, fileManagerMutation{operation: fileMutationMarkdown, path: relPath, expected: expectedHash, content: content})
 }
 
 // UploadFile creates one new Markdown or supported image file through the
 // same candidate build and publication transaction as other file operations.
 // Uploads are create-only and therefore require AbsentSourceHash.
 func (coordinator *Coordinator) UploadFile(relPath, expectedHash string, content []byte) (TransactionResult, error) {
-	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationUpload, path: relPath, expected: expectedHash, content: content})
+	return coordinator.UploadFileContext(context.Background(), relPath, expectedHash, content)
+}
+
+// UploadFileContext uploads a file unless the caller's request is cancelled.
+func (coordinator *Coordinator) UploadFileContext(ctx context.Context, relPath, expectedHash string, content []byte) (TransactionResult, error) {
+	return coordinator.mutateFile(ctx, fileManagerMutation{operation: fileMutationUpload, path: relPath, expected: expectedHash, content: content})
 }
 
 // RenamePath atomically renames one managed file or directory after checking
 // both the source hash and destination absence.
 func (coordinator *Coordinator) RenamePath(relPath, destination, expectedHash string) (TransactionResult, error) {
-	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationRename, path: relPath, destination: destination, expected: expectedHash})
+	return coordinator.RenamePathContext(context.Background(), relPath, destination, expectedHash)
+}
+
+// RenamePathContext renames a path unless the caller's request is cancelled.
+func (coordinator *Coordinator) RenamePathContext(ctx context.Context, relPath, destination, expectedHash string) (TransactionResult, error) {
+	return coordinator.mutateFile(ctx, fileManagerMutation{operation: fileMutationRename, path: relPath, destination: destination, expected: expectedHash})
 }
 
 // DeletePath removes one managed article or empty directory after a CAS check;
 // the mutation remains reversible until candidate output publication succeeds.
 func (coordinator *Coordinator) DeletePath(relPath, expectedHash string) (TransactionResult, error) {
-	return coordinator.mutateFile(fileManagerMutation{operation: fileMutationDelete, path: relPath, expected: expectedHash})
+	return coordinator.DeletePathContext(context.Background(), relPath, expectedHash)
 }
 
-func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (TransactionResult, error) {
+// DeletePathContext deletes a path unless the caller's request is cancelled.
+func (coordinator *Coordinator) DeletePathContext(ctx context.Context, relPath, expectedHash string) (TransactionResult, error) {
+	return coordinator.mutateFile(ctx, fileManagerMutation{operation: fileMutationDelete, path: relPath, expected: expectedHash})
+}
+
+func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileManagerMutation) (TransactionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if coordinator == nil {
 		return TransactionResult{}, errors.New("source coordinator is nil")
 	}
@@ -93,6 +122,9 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		return TransactionResult{}, err
 	}
 	defer func() { _ = lease.Release() }()
+	if err := ctx.Err(); err != nil {
+		return TransactionResult{}, err
+	}
 
 	if err := validateManagedRelPath(mutation.path); err != nil {
 		return TransactionResult{}, err
@@ -225,6 +257,9 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	}
 
 	if mutation.operation == fileMutationFolder || (current.isDir && (mutation.operation == fileMutationRename || mutation.operation == fileMutationDelete)) {
+		if err := ctx.Err(); err != nil {
+			return TransactionResult{}, err
+		}
 		rollback, finalize, expectedAfter, applyErr := applyFileManagerMutation(coordinator.vault, mutation, current, "")
 		if applyErr != nil {
 			return TransactionResult{}, applyErr
@@ -277,6 +312,9 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 	built, buildErr := buildCandidate(candidateRoot, stageOutput)
 	if buildErr != nil {
 		return TransactionResult{}, &CandidateBuildError{Path: mutation.path, Result: built, Err: buildErr}
+	}
+	if err := ctx.Err(); err != nil {
+		return TransactionResult{}, err
 	}
 	if err := verifyFileManagerPrecondition(coordinator.vault, mutation, current); err != nil {
 		return TransactionResult{}, err
@@ -334,7 +372,13 @@ func (coordinator *Coordinator) mutateFile(mutation fileManagerMutation) (Transa
 		}
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return TransactionResult{}, errors.Join(err, transaction.Abort())
+	}
 	if err := transaction.PrepareSourceCommit(expectedAfterFingerprint, validateInput); err != nil {
+		return TransactionResult{}, errors.Join(err, transaction.Abort())
+	}
+	if err := ctx.Err(); err != nil {
 		return TransactionResult{}, errors.Join(err, transaction.Abort())
 	}
 	rollback, finalize, expectedAfter, err := applyFileManagerMutation(coordinator.vault, mutation, current, artifactRoot)

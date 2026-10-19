@@ -116,7 +116,7 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 		Schema: viewmodel.SchemaVersion, Kind: kind, Site: viewmodel.Site{Title: plan.Config.Title, BaseURL: plan.Config.BaseURL, Author: plan.Config.Author, Description: plan.Config.Description, Language: plan.Config.Language},
 		Title: title, Description: description, URL: currentRoute, Href: strictSitePath(plan, currentRoute), Canonical: canonical,
 		Content: template.HTML(contentPreviewStartMarker + body + contentPreviewEndMarker), HeadHTML: template.HTML(head),
-		Navigation: themedNavigation(plan, currentRoute, canonical), Breadcrumbs: themedBreadcrumbs(plan, breadcrumbs), Sidebar: themedSidebar(plan, sidebarNodes, currentRoute),
+		Navigation: themedNavigation(plan, currentRoute, canonical), Breadcrumbs: themedBreadcrumbs(plan, breadcrumbs), Sidebar: themedSidebar(plan, sidebarNodes, currentRoute), SidebarEnabled: plan.Config.Sidebar.Enabled && len(sidebarNodes) > 0,
 		Versions: themedVersions(plan, versionID, versionRoutes), VersionID: versionID, HasMath: strings.Contains(body, "data-oxpio-math-source"), HasMermaid: strings.Contains(body, `class="mermaid"`), Popover: plan.Config.Popover.Enabled, BasePath: strictBasePath(plan),
 		SEO: pageSEO,
 	}

@@ -30,6 +30,7 @@ import (
 	"github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/render/viewmodel"
 	_ "golang.org/x/image/webp"
+	xhtml "golang.org/x/net/html"
 	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
 )
@@ -260,6 +261,267 @@ func Validate(source Source) error {
 	}
 	_, err := Compile(source, nil, "https://theme.invalid/")
 	return err
+}
+
+// ValidateRuntimeContract checks the mount points required by enabled site
+// runtime features. The checks are intentionally conditional: a theme may
+// replace the shell completely when the corresponding feature is disabled.
+func ValidateRuntimeContract(source Source, assets map[string]string, baseURL string, sidebarEnabled, popoverEnabled bool) error {
+	themeToggleDeclared := false
+	for name, data := range source.Files {
+		if (strings.HasPrefix(name, "layouts/") || strings.HasPrefix(name, "partials/")) && bytes.Contains(data, []byte("data-theme-toggle")) {
+			themeToggleDeclared = true
+			break
+		}
+	}
+	if !sidebarEnabled && !popoverEnabled && !themeToggleDeclared {
+		return nil
+	}
+	renderer, err := Compile(source, assets, baseURL)
+	if err != nil {
+		return fmt.Errorf("theme runtime contract: compile sample page: %w", err)
+	}
+	for _, kind := range requiredLayouts[1:] {
+		page := samplePage(kind)
+		page.Sidebar = nil
+		page.SidebarEnabled = sidebarEnabled
+		page.Popover = popoverEnabled
+		if sidebarEnabled {
+			page.Sidebar = samplePage(kind).Sidebar
+		}
+		output, renderErr := renderer.Render(kind, page)
+		if renderErr != nil {
+			return fmt.Errorf("theme runtime contract: render %s sample page: %w", kind, renderErr)
+		}
+		document, parseErr := xhtml.Parse(bytes.NewReader(output))
+		if parseErr != nil {
+			return fmt.Errorf("theme runtime contract: parse %s sample page: %w", kind, parseErr)
+		}
+		if sidebarEnabled {
+			if !runtimeHTMLAttributePresent(document, "data-oxpio-sidebar") {
+				return fmt.Errorf("theme runtime contract: %s page with Sidebar enabled requires rendered data-oxpio-sidebar", kind)
+			}
+			for _, marker := range []struct {
+				key     string
+				tag     string
+				control bool
+			}{
+				{key: "data-site-body", tag: "body"},
+				{key: "data-sidebar-shell", tag: "aside"},
+				{key: "data-sidebar-root", tag: "nav"},
+				{key: "data-sidebar-toggle", tag: "button", control: true},
+				{key: "data-sidebar-close", tag: "button", control: true},
+				{key: "data-sidebar-overlay", tag: "div"},
+			} {
+				valid := runtimeElementWithAttribute(document, marker.tag, marker.key)
+				if marker.control {
+					valid = runtimeControlValid(document, marker.key)
+				}
+				if !valid {
+					return fmt.Errorf("theme runtime contract: %s page with Sidebar enabled requires rendered accessible <%s %s>", kind, marker.tag, marker.key)
+				}
+			}
+		}
+		if popoverEnabled {
+			if !runtimeHTMLAttributePresent(document, "data-oxpio-popover") {
+				return fmt.Errorf("theme runtime contract: %s page with Popover enabled requires rendered data-oxpio-popover", kind)
+			}
+			cards, cardID := runtimePopoverCardInfo(document)
+			if cards != 1 || cardID == "" || runtimeIDCount(document, cardID) != 1 {
+				return fmt.Errorf("theme runtime contract: %s page with Popover enabled requires exactly one rendered <div id=... data-popover-card> with a unique id", kind)
+			}
+		}
+		toggleCount := runtimeAttributeCount(document, "data-theme-toggle")
+		if toggleCount > 0 && (toggleCount != 1 || !runtimeThemeToggleValid(document)) {
+			return fmt.Errorf("theme runtime contract: %s page with data-theme-toggle requires one accessible button with data-theme-toggle-value", kind)
+		}
+	}
+	return nil
+}
+
+func runtimeHTMLAttributePresent(root *xhtml.Node, key string) bool {
+	if root == nil {
+		return false
+	}
+	if root.Type == xhtml.ElementNode && root.Data == "html" {
+		for _, attribute := range root.Attr {
+			if attribute.Key == key {
+				return true
+			}
+		}
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if runtimeHTMLAttributePresent(child, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeAttributeCount(root *xhtml.Node, key string) int {
+	if root == nil {
+		return 0
+	}
+	count := 0
+	if root.Type == xhtml.ElementNode {
+		for _, attribute := range root.Attr {
+			if attribute.Key == key {
+				count++
+				break
+			}
+		}
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		count += runtimeAttributeCount(child, key)
+	}
+	return count
+}
+
+func runtimeThemeToggleValid(root *xhtml.Node) bool {
+	if root == nil {
+		return false
+	}
+	if root.Type == xhtml.ElementNode && root.Data == "button" {
+		for _, attribute := range root.Attr {
+			if attribute.Key == "data-theme-toggle" && runtimeControlValid(root, "data-theme-toggle") && runtimeAttributeCount(root, "data-theme-toggle-value") == 1 {
+				return true
+			}
+		}
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if runtimeThemeToggleValid(child) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeElementWithAttribute(root *xhtml.Node, tag, key string) bool {
+	if root == nil {
+		return false
+	}
+	if root.Type == xhtml.ElementNode && root.Data == tag {
+		for _, attribute := range root.Attr {
+			if attribute.Key == key {
+				return true
+			}
+		}
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if runtimeElementWithAttribute(child, tag, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeControlValid(root *xhtml.Node, key string) bool {
+	if root == nil {
+		return false
+	}
+	if root.Type == xhtml.ElementNode && root.Data == "button" {
+		found, buttonType, hidden, disabled, accessibleName := false, false, false, false, ""
+		for _, attribute := range root.Attr {
+			switch attribute.Key {
+			case key:
+				found = true
+			case "type":
+				buttonType = strings.EqualFold(strings.TrimSpace(attribute.Val), "button")
+			case "hidden":
+				hidden = true
+			case "disabled":
+				disabled = true
+			case "aria-label":
+				accessibleName = strings.TrimSpace(attribute.Val)
+			}
+		}
+		if accessibleName == "" {
+			accessibleName = strings.TrimSpace(runtimeTextContent(root))
+		}
+		if found && buttonType && accessibleName != "" && !disabled && (key != "data-sidebar-close" || !hidden) {
+			return true
+		}
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		if runtimeControlValid(child, key) {
+			return true
+		}
+	}
+	return false
+}
+
+func runtimeTextContent(root *xhtml.Node) string {
+	if root == nil {
+		return ""
+	}
+	if root.Type == xhtml.TextNode {
+		return root.Data
+	}
+	if root.Type == xhtml.ElementNode {
+		for _, attribute := range root.Attr {
+			if attribute.Key == "aria-hidden" && strings.EqualFold(strings.TrimSpace(attribute.Val), "true") {
+				return ""
+			}
+		}
+	}
+	var builder strings.Builder
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		builder.WriteString(runtimeTextContent(child))
+	}
+	return builder.String()
+}
+
+func runtimePopoverCardInfo(root *xhtml.Node) (int, string) {
+	if root == nil {
+		return 0, ""
+	}
+	count := 0
+	cardID := ""
+	if root.Type == xhtml.ElementNode {
+		isDiv, hasCard := root.Data == "div", false
+		id := ""
+		for _, attribute := range root.Attr {
+			if attribute.Key == "data-popover-card" {
+				hasCard = true
+			}
+			if attribute.Key == "id" {
+				id = strings.TrimSpace(attribute.Val)
+			}
+		}
+		if hasCard {
+			count++
+			if isDiv && id != "" && len(strings.Fields(id)) == 1 {
+				cardID = id
+			}
+		}
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		childCount, childID := runtimePopoverCardInfo(child)
+		count += childCount
+		if childID != "" {
+			cardID = childID
+		}
+	}
+	return count, cardID
+}
+
+func runtimeIDCount(root *xhtml.Node, id string) int {
+	if root == nil {
+		return 0
+	}
+	count := 0
+	if root.Type == xhtml.ElementNode {
+		for _, attribute := range root.Attr {
+			if attribute.Key == "id" && attribute.Val == id {
+				count++
+				break
+			}
+		}
+	}
+	for child := root.FirstChild; child != nil; child = child.NextSibling {
+		count += runtimeIDCount(child, id)
+	}
+	return count
 }
 
 // ValidateWithAssets additionally executes every public page entry against a

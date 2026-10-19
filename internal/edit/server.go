@@ -426,7 +426,7 @@ func (s *Server) serveSourceSave(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
 		return
 	}
-	result, err := s.coordinator.Save(entry.RelPath, r.Header.Get("X-OXPIO-Source-Hash"), content)
+	result, err := s.coordinator.SaveContext(r.Context(), entry.RelPath, r.Header.Get("X-OXPIO-Source-Hash"), content)
 	if err != nil {
 		s.writeMutationError(w, err)
 		return
@@ -449,7 +449,7 @@ func (s *Server) serveSourceCreate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	result, err := s.coordinator.Create(pathValue, r.Header.Get("X-OXPIO-Source-Hash"), content)
+	result, err := s.coordinator.CreateContext(r.Context(), pathValue, r.Header.Get("X-OXPIO-Source-Hash"), content)
 	if err != nil {
 		s.writeMutationError(w, err)
 		return
@@ -466,7 +466,7 @@ func (s *Server) serveSourceDelete(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete confirmation is required", http.StatusBadRequest)
 		return
 	}
-	result, err := s.coordinator.Delete(r.URL.Query().Get("path"), r.Header.Get("X-OXPIO-Source-Hash"))
+	result, err := s.coordinator.DeleteContext(r.Context(), r.URL.Query().Get("path"), r.Header.Get("X-OXPIO-Source-Hash"))
 	if err != nil {
 		s.writeMutationError(w, err)
 		return

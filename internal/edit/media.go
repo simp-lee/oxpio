@@ -186,7 +186,7 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 	if expected == "" {
 		expected = AbsentSourceHash
 	}
-	result, err := s.coordinator.UploadFile(relPath, expected, data)
+	result, err := s.coordinator.UploadFileContext(r.Context(), relPath, expected, data)
 	if err != nil {
 		s.writeMutationError(w, err)
 		return

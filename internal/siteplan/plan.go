@@ -959,6 +959,10 @@ func validateThemeAssets(plan *model.SitePlan, collector *diag.Collector) {
 		return
 	}
 	selected := internaltheme.Source{ID: plan.Config.Theme, Name: plan.Config.Theme, APIVersion: internaltheme.APIVersion, Files: plan.ThemeFiles, Dirs: map[string]bool{"layouts": true, "partials": true, "assets": true}}
+	if err := internaltheme.ValidateRuntimeContract(selected, plan.ThemeAssetURLs, plan.Config.BaseURL, plan.Config.Sidebar.Enabled, plan.Config.Popover.Enabled); err != nil {
+		record(collector, diag.KindMetadata, filepath.Join(plan.Config.ThemeDir, "theme.yaml"), "theme validation: %v", err)
+		return
+	}
 	if err := internaltheme.ValidateWithAssets(selected, plan.ThemeAssetURLs, plan.Config.BaseURL); err != nil {
 		record(collector, diag.KindMetadata, filepath.Join(plan.Config.ThemeDir, "theme.yaml"), "theme validation: %v", err)
 	}

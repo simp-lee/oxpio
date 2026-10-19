@@ -111,6 +111,32 @@
     });
   }
 
+  function fetchWithTimeout(url, options) {
+    options = options || {};
+    var controller = new AbortController();
+    var timer = window.setTimeout(function () { controller.abort(); }, 15000);
+    var cleanup = function () { window.clearTimeout(timer); };
+    var cancel = function () { controller.abort(); cleanup(); };
+    return window.fetch(url, Object.assign({}, options, {signal: controller.signal})).then(function (response) {
+      response.__oxpioCleanup = cleanup;
+      response.__oxpioCancel = cancel;
+      return response;
+    }, function (error) {
+      cleanup();
+      throw error;
+    });
+  }
+
+  function runtimeJSON(response) {
+    return response.json().then(function (payload) {
+      if (response.__oxpioCleanup) response.__oxpioCleanup();
+      return payload;
+    }, function (error) {
+      if (response.__oxpioCancel) response.__oxpioCancel();
+      throw error;
+    });
+  }
+
   function initSidebar() {
     if (!root.hasAttribute("data-oxpio-sidebar") || !runtimeScript || !runtimeScript.src) {
       return;
@@ -127,20 +153,28 @@
     var expanded = {};
     var currentPath = currentSitePath();
     var popoverEnabled = root.hasAttribute("data-oxpio-popover");
+    var lastFocusedElement = null;
 
     if (!shell || !sidebarRoot || !siteBody) {
       report("error", "Sidebar mount points are unavailable.");
       return;
     }
+    if (!shell.id) {
+      shell.id = "oxpio-sidebar";
+    }
+    if (toggle) {
+      toggle.setAttribute("aria-controls", shell.id);
+    }
 
-    window.fetch(new URL("sidebar.json", runtimeScript.src).href, {
+    fetchWithTimeout(new URL("sidebar.json", runtimeScript.src).href, {
       cache: "no-cache",
       headers: {Accept: "application/json"}
     }).then(function (response) {
       if (!response.ok) {
+        if (response.__oxpioCleanup) response.__oxpioCleanup();
         throw new Error("Sidebar data returned HTTP " + response.status);
       }
-      return response.json();
+      return runtimeJSON(response);
     }).then(function (payload) {
       var nodes = payload;
       if (payload && !Array.isArray(payload) && typeof payload === "object") {
@@ -151,10 +185,17 @@
         throw new Error("Sidebar data is not an array or versioned sidebar payload");
       }
       if (!nodes.length) {
+        shell.hidden = true;
+        if (toggle) toggle.hidden = true;
+        if (overlay) overlay.hidden = true;
         return;
       }
 
       expanded = readExpandedState();
+      if (closeButton) {
+        closeButton.hidden = false;
+        closeButton.disabled = false;
+      }
       sidebarRoot.textContent = "";
       sidebarRoot.appendChild(renderList(nodes, true));
       shell.hidden = false;
@@ -162,6 +203,7 @@
 
       if (toggle) {
         toggle.hidden = false;
+        toggle.disabled = false;
         toggle.addEventListener("click", function () {
           setMobileSidebarOpen(!isMobileSidebarOpen());
         });
@@ -182,9 +224,42 @@
           setMobileSidebarOpen(false);
         }
       });
+      document.addEventListener("focusin", function (event) {
+        if (isMobileViewport() && isMobileSidebarOpen() && !shell.contains(event.target)) {
+          if (closeButton) closeButton.focus();
+          else if (toggle) toggle.focus();
+        }
+      });
       document.addEventListener("keydown", function (event) {
         if (event.key === "Escape") {
           setMobileSidebarOpen(false);
+          return;
+        }
+        if (event.key !== "Tab" || !isMobileViewport() || !isMobileSidebarOpen()) {
+          return;
+        }
+        var focusable = Array.prototype.slice.call(shell.querySelectorAll("a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])")).filter(function (element) {
+          for (var current = element; current && current !== shell; current = current.parentElement) {
+            if (current.hidden || current.getAttribute("aria-hidden") === "true") return false;
+          }
+          return true;
+        });
+        if (!focusable.length) {
+          event.preventDefault();
+          return;
+        }
+        var active = document.activeElement;
+        var first = focusable[0];
+        var last = focusable[focusable.length - 1];
+        if (!shell.contains(active)) {
+          event.preventDefault();
+          first.focus();
+        } else if (event.shiftKey && active === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && active === last) {
+          event.preventDefault();
+          first.focus();
         }
       });
       if (media && typeof media.addEventListener === "function") {
@@ -410,21 +485,46 @@
       }
     }
 
+    function focusViewportTarget() {
+      var target = document.querySelector("[data-oxpio-main]") || document.body;
+      var temporaryTabIndex = !target.hasAttribute("tabindex");
+      if (temporaryTabIndex) {
+        target.setAttribute("tabindex", "-1");
+      }
+      target.focus({preventScroll: true});
+      if (temporaryTabIndex) {
+        target.removeAttribute("tabindex");
+      }
+    }
+
     function setMobileSidebarOpen(open) {
+      var wasOpen = isMobileSidebarOpen();
       if (!isMobileViewport()) {
         open = false;
       }
       if (open) {
+        lastFocusedElement = toggle && document.activeElement === toggle ? toggle : lastFocusedElement;
         document.body.setAttribute("data-sidebar-open", "true");
       } else {
         document.body.removeAttribute("data-sidebar-open");
       }
       syncSidebarAccessibility(open);
+      if (open && isMobileViewport() && closeButton) {
+        closeButton.focus();
+      } else if (!open && wasOpen && !isMobileViewport() && shell.contains(document.activeElement)) {
+        focusViewportTarget();
+      }
       if (overlay) {
         overlay.hidden = !open;
       }
       if (toggle) {
         toggle.setAttribute("aria-expanded", String(open));
+      }
+      var focusInsideShell = !open && shell.contains(document.activeElement);
+      if (!open && isMobileViewport() && focusInsideShell && toggle) {
+        toggle.focus();
+      } else if (!open && wasOpen && isMobileViewport() && lastFocusedElement && typeof lastFocusedElement.focus === "function" && document.contains(lastFocusedElement)) {
+        lastFocusedElement.focus();
       }
     }
 
@@ -541,13 +641,14 @@
       if (cache.has(popoverURL)) {
         return cache.get(popoverURL);
       }
-      var pending = window.fetch(popoverURL, {
+      var pending = fetchWithTimeout(popoverURL, {
         headers: {Accept: "application/json"}
       }).then(function (response) {
         if (!response.ok) {
+          if (response.__oxpioCleanup) response.__oxpioCleanup();
           throw new Error("Popover data returned HTTP " + response.status);
         }
-        return response.json();
+        return runtimeJSON(response);
       }).then(function (payload) {
         if (!payload || typeof payload.title !== "string" || typeof payload.summary !== "string" || !Array.isArray(payload.tags)) {
           throw new Error("Popover data has an invalid shape");

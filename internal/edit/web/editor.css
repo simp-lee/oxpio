@@ -53,7 +53,11 @@ button.danger { color: #9e2a2b; }
 .sidebar-help { margin-top: 1rem; font-size: .85rem; color: #687687; }
 .sidebar-help p { margin-top: .35rem; line-height: 1.45; }
 .workspace { min-width: 0; padding: 1rem; }
-.status { min-height: 1.5rem; margin: 0 0 .7rem; color: #495665; }
+.status { min-height: 1.5rem; margin: 0 0 .2rem; color: #495665; }
+.busy-indicator { display: flex; align-items: center; gap: .45rem; min-height: 1.25rem; margin: 0 0 .55rem; color: #1769aa; font-size: .8rem; font-weight: 700; }
+.busy-indicator::before { content: ""; width: .75rem; height: .75rem; flex: 0 0 .75rem; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: oxpio-spin .75s linear infinite; }
+.cancel-operation { margin-left: auto; padding: .2rem .5rem; color: inherit; font-size: .75rem; }
+@keyframes oxpio-spin { to { transform: rotate(360deg); } }
 .metadata { padding: .8rem; background: #fff; border: 1px solid #dce1e6; border-radius: .45rem; }
 .metadata-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .65rem; }
 .metadata label, .new-form label { display: grid; gap: .25rem; font-size: .82rem; color: #495665; }
@@ -109,6 +113,8 @@ body.editor-fullscreen .editor-preview-grid { min-height: calc(100vh - 4.25rem);
 .live-image { padding: .15rem .4rem; border: 1px solid #c7cdd4; border-radius: .25rem; background: #f8fafb; }
 .preview-pane iframe { display: block; width: 100%; height: auto; min-height: 0; flex: 0 0 auto; border: 0; background: #fff; }
 .preview-empty { display: grid; place-items: center; min-height: 36rem; padding: 2rem; color: #687687; text-align: center; }
+.preview-empty.is-loading { color: #1769aa; font-weight: 700; }
+.preview-empty.is-loading::before { content: ""; width: 1.1rem; height: 1.1rem; margin-right: .55rem; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: oxpio-spin .75s linear infinite; }
 .diagnostics { margin-top: .75rem; padding: .7rem .9rem; border: 1px solid #e2a4a4; border-radius: .4rem; background: #fff6f6; color: #7d2626; }
 .diagnostics ul { margin: .35rem 0 0; padding-left: 1.2rem; }
 .media-panel { position: fixed; right: 1rem; top: 5rem; z-index: 10; width: min(28rem, calc(100vw - 2rem)); max-height: calc(100vh - 6rem); overflow: auto; padding: .8rem; background: #fff; border: 1px solid #aeb7c2; border-radius: .5rem; box-shadow: 0 .8rem 2.5rem #0003; }
@@ -270,6 +276,8 @@ dialog::backdrop { background: #0006; }
   .sidebar-help, .search-status, .status, .toolbar-hint, .metadata label, .new-form label, .metadata-advanced summary { color: #c8d4df; }
   .help-tooltip { background: #282f37; border-color: #4d5966; color: #c8d4df; }
   .preview-empty { color: #aeb7c2; }
+  .busy-indicator { color: #8fc7ef; }
+  .cancel-operation { background: #303943; color: #e7ebef; border-color: #4d5966; }
   .media-item { border-color: #3b444e; background: #252c33; }
 }
 html[data-theme="dark"] body, html[data-theme="dark"] dialog { background: #171a1e; color: #e7ebef; }

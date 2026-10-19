@@ -1,6 +1,7 @@
 package edit
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -96,20 +97,41 @@ func (coordinator *Coordinator) CatalogSnapshot() *model.SourceCatalog {
 
 // Save replaces an existing article or section source after full-byte CAS.
 func (coordinator *Coordinator) Save(relPath, expectedHash string, content []byte) (TransactionResult, error) {
-	return coordinator.mutate(relPath, expectedHash, content, false, false)
+	return coordinator.SaveContext(context.Background(), relPath, expectedHash, content)
+}
+
+// SaveContext replaces an existing article or section source and stops before
+// source commit when the caller's request context is cancelled.
+func (coordinator *Coordinator) SaveContext(ctx context.Context, relPath, expectedHash string, content []byte) (TransactionResult, error) {
+	return coordinator.mutate(ctx, relPath, expectedHash, content, false, false)
 }
 
 // Create creates a new article source. expectedHash must be AbsentSourceHash.
 func (coordinator *Coordinator) Create(relPath, expectedHash string, content []byte) (TransactionResult, error) {
-	return coordinator.mutate(relPath, expectedHash, content, false, true)
+	return coordinator.CreateContext(context.Background(), relPath, expectedHash, content)
+}
+
+// CreateContext creates a new article source and stops before source commit
+// when the caller's request context is cancelled.
+func (coordinator *Coordinator) CreateContext(ctx context.Context, relPath, expectedHash string, content []byte) (TransactionResult, error) {
+	return coordinator.mutate(ctx, relPath, expectedHash, content, false, true)
 }
 
 // Delete removes an existing article source after full-byte CAS.
 func (coordinator *Coordinator) Delete(relPath, expectedHash string) (TransactionResult, error) {
-	return coordinator.mutate(relPath, expectedHash, nil, true, false)
+	return coordinator.DeleteContext(context.Background(), relPath, expectedHash)
 }
 
-func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []byte, deleting, creating bool) (TransactionResult, error) {
+// DeleteContext removes an existing article source and stops before source
+// commit when the caller's request context is cancelled.
+func (coordinator *Coordinator) DeleteContext(ctx context.Context, relPath, expectedHash string) (TransactionResult, error) {
+	return coordinator.mutate(ctx, relPath, expectedHash, nil, true, false)
+}
+
+func (coordinator *Coordinator) mutate(ctx context.Context, relPath, expectedHash string, content []byte, deleting, creating bool) (TransactionResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	if coordinator == nil {
 		return TransactionResult{}, errors.New("source coordinator is nil")
 	}
@@ -123,6 +145,9 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 		return TransactionResult{}, err
 	}
 	defer func() { _ = lease.Release() }()
+	if err := ctx.Err(); err != nil {
+		return TransactionResult{}, err
+	}
 
 	if err := validateSourceRelPath(relPath); err != nil {
 		return TransactionResult{}, err
@@ -204,6 +229,9 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 	})
 	if err != nil {
 		return TransactionResult{}, &CandidateBuildError{Path: relPath, Result: built, Err: err}
+	}
+	if err := ctx.Err(); err != nil {
+		return TransactionResult{}, err
 	}
 	if currentFingerprint, fingerprintErr := workspace.Fingerprint(coordinator.vault, coordinator.output); fingerprintErr != nil {
 		return TransactionResult{}, fingerprintErr
@@ -294,7 +322,13 @@ func (coordinator *Coordinator) mutate(relPath, expectedHash string, content []b
 		}
 		return nil
 	}
+	if err := ctx.Err(); err != nil {
+		return abortBeforeOutput(err)
+	}
 	if err := transaction.PrepareSourceCommit(expectedAfterFingerprint, validateInput); err != nil {
+		return abortBeforeOutput(err)
+	}
+	if err := ctx.Err(); err != nil {
 		return abortBeforeOutput(err)
 	}
 	if err := commitSource(coordinator.vault, relPath, expectedHash, content, deleting, creating, artifactRoot); err != nil {

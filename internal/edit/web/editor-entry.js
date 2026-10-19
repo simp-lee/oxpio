@@ -14,16 +14,25 @@ const state = {
   kind: "article", mode: "visual", surface: "write", source: "", baselineSource: "", hash: "",
   bodyBaseline: "", formBaseline: {}, sourceChanged: false,
   filePath: "", fileHash: "", fileKind: "", fileSourceKind: "",
-  fileDialogMode: "", dirty: false, busy: false, busyCount: 0, livePreviewController: null, loadToken: 0,
-  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
+  fileDialogMode: "", dirty: false, busy: false, busyCount: 0, busyReason: "", operationController: null, operationOwned: false, operationCommitted: false, operationCancelled: false, livePreviewBusy: false, livePreviewBusyRequest: 0, livePreviewController: null, livePreviewFrameCancel: null, loadToken: 0,
+  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", livePreviewAfterCommit: false, livePreviewAfterCommitRequest: 0, previewToken: "", catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
 };
 const editable = new Compartment();
 let editor;
 let suppressChanges = false;
 let livePreviewTimer = 0;
 let livePreviewRequest = 0;
+const requestTimeout = 30000;
 
 function status(message) { $("#status").textContent = message; }
+function isAbortError(error) { return error && error.name === "AbortError"; }
+function markOperationCommitted(label = "Operation") {
+  state.operationCommitted = true;
+  state.operationController = new AbortController();
+  state.operationOwned = true;
+  state.busyReason = `${label} committed; refreshing…`;
+  syncBusyIndicator();
+}
 function saveState(value, label = "") {
   const target = $("#save-state");
   if (target) { target.dataset.state = value; target.textContent = label || value; }
@@ -43,7 +52,7 @@ function dirty(value = true) {
   saveState(value ? "unsaved" : "saved", value ? "Unsaved" : "Saved");
   if (value) scheduleDraft();
 }
-function cancelLivePreview() {
+function cancelLivePreview(notify = false) {
   clearTimeout(livePreviewTimer);
   livePreviewTimer = 0;
   livePreviewRequest++;
@@ -51,65 +60,195 @@ function cancelLivePreview() {
     state.livePreviewController.abort();
     state.livePreviewController = null;
   }
+  if (state.livePreviewFrameCancel) {
+    state.livePreviewFrameCancel();
+    state.livePreviewFrameCancel = null;
+    const frame = $("#preview-frame");
+    frame.onload = null;
+    frame.src = "about:blank";
+    frame.hidden = true;
+  }
+  state.livePreviewBusy = false;
+  state.livePreviewBusyRequest = 0;
+  syncBusyIndicator();
+  if (notify) status("Live preview cancelled.");
 }
 function scheduleLivePreview(delay = 350) {
+  const afterCommit = state.livePreviewAfterCommit;
   if (state.surface !== "write" || state.mode !== "visual" || !editor) {
     cancelLivePreview();
     return;
   }
   cancelLivePreview();
+  state.livePreviewAfterCommit = false;
+  if (!afterCommit) diagnostics();
   const request = ++livePreviewRequest;
+  state.livePreviewAfterCommitRequest = afterCommit ? request : 0;
   editor.dispatch({effects: [livePreviewLine.of(null), livePreviewRender.of({body: "", blocks: [], styles: ""})]});
   livePreviewTimer = setTimeout(() => refreshLivePreview(request).catch(error => diagnostics(error.diagnostics, `Live preview failed: ${error.message}`)), delay);
+}
+function previewTokenFromURL(url) {
+  return String(url || "").match(/\/[_a-z0-9-]*oxpio\/preview\/([^/]+)/iu)?.[1] || "";
+}
+function previewRequestHeaders() {
+  return state.previewToken ? {"X-OXPIO-Preview-Token": state.previewToken} : {};
 }
 function previewURLFor(kind) {
   return kind === "page" ? state.previewPageURL || state.previewContentURL : state.previewContentURL || state.previewPageURL;
 }
-function applyPreviewResult(result, kind = "content") {
+function resetPreviewFrame() {
+  state.previewResizeObserver?.disconnect();
+  state.previewResizeObserver = null;
+  state.previewOpen = false;
+  state.previewURL = "";
+  state.previewContentURL = "";
+  state.previewPageURL = "";
+  const frame = $("#preview-frame");
+  frame.onload = null;
+  frame.hidden = true;
+  frame.removeAttribute("src");
+  frame.style.height = "";
+}
+function loadPreviewFrame(url, signal) {
+  const frame = $("#preview-frame");
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const finish = error => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timeout);
+      frame.removeEventListener("load", onload);
+      frame.removeEventListener("error", onerror);
+      signal?.removeEventListener("abort", onabort);
+      if (error) reject(error); else resolve();
+    };
+    const onload = () => {
+      bindPreviewFrame();
+      const documentRoot = frame.contentDocument?.documentElement;
+      const invalid = !documentRoot || documentRoot.getAttribute("data-oxpio-kind") === "404";
+      finish(invalid ? new Error("Preview frame did not contain a rendered page") : null);
+    };
+    const onerror = () => finish(new Error("Preview frame failed to load"));
+    const onabort = () => { frame.src = "about:blank"; finish(new DOMException("Preview cancelled", "AbortError")); };
+    const timeout = setTimeout(() => {
+      const error = new Error("Preview frame timed out");
+      error.name = "TimeoutError";
+      finish(error);
+    }, requestTimeout);
+    if (signal?.aborted) {
+      onabort();
+      return;
+    }
+    if (signal) signal.addEventListener("abort", onabort, {once: true});
+    frame.addEventListener("load", onload, {once: true});
+    frame.addEventListener("error", onerror, {once: true});
+    frame.hidden = false;
+    frame.src = url;
+  });
+}
+async function applyPreviewResult(result, kind = "content") {
   state.previewContentURL = result.contentURL || result.url || "";
   state.previewPageURL = result.fullURL || result.url || "";
+  state.previewToken = previewTokenFromURL(state.previewContentURL || state.previewPageURL);
   state.previewKind = kind;
   state.previewURL = previewURLFor(kind);
   state.previewOpen = true;
-  const frame = $("#preview-frame");
-  frame.hidden = false;
-  frame.src = state.previewURL;
-  frame.onload = bindPreviewFrame;
-  $("#preview-empty").hidden = true;
+  const empty = $("#preview-empty");
+  empty.hidden = false;
+  empty.classList.add("is-loading");
+  empty.textContent = "Loading preview…";
   updateMode();
+  await loadPreviewFrame(state.previewURL, state.operationController?.signal);
+  empty.hidden = true;
+  empty.classList.remove("is-loading");
 }
 async function refreshLivePreview(request) {
   if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || !state.path || state.busy) return;
-  const source = await compose();
-  if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
+  state.livePreviewBusy = true;
+  state.livePreviewBusyRequest = request;
   const controller = new AbortController();
+  let cancelFrameWait;
+  let livePreviewDiagnostics = [];
+  let generatedPreviewToken = "";
   state.livePreviewController = controller;
+  syncBusyIndicator();
   try {
-    const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source}, {}, controller.signal);
-    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
+    const source = await compose(controller.signal);
+    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || state.busy) return;
+    const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source}, previewRequestHeaders(), controller.signal);
+    livePreviewDiagnostics = result.diagnostics || [];
+    const resultToken = previewTokenFromURL(result.contentURL || result.url || result.fullURL);
+    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || state.busy) {
+      await cleanupPreviewToken(resultToken);
+      return;
+    }
+    diagnostics(livePreviewDiagnostics);
     const frame = $("#preview-frame");
     state.previewContentURL = result.contentURL || result.url || "";
     state.previewPageURL = result.fullURL || result.url || "";
+    state.previewToken = resultToken;
+    generatedPreviewToken = resultToken;
     state.previewKind = "content";
     state.previewURL = state.previewContentURL;
     state.previewOpen = true;
-    const loaded = new Promise(resolve => {
-      frame.addEventListener("load", resolve, {once: true});
+    const loaded = new Promise((resolve, reject) => {
+      let settled = false;
+      const finish = (error = null) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timeout);
+        frame.removeEventListener("load", onload);
+        frame.removeEventListener("error", onerror);
+        if (error) reject(error); else resolve();
+      };
+      const onload = () => finish();
+      const onerror = () => finish(new Error("Live preview frame failed to load"));
+      cancelFrameWait = () => finish(new DOMException("Live preview cancelled", "AbortError"));
+      state.livePreviewFrameCancel = cancelFrameWait;
+      const timeout = window.setTimeout(() => {
+        const error = new Error("Live preview frame timed out");
+        error.name = "TimeoutError";
+        finish(error);
+      }, requestTimeout);
+      frame.addEventListener("load", onload, {once: true});
+      frame.addEventListener("error", onerror, {once: true});
       frame.src = state.previewURL;
     });
     frame.hidden = false;
     await loaded;
-    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual") return;
+    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || state.busy) return;
     const documentRoot = frame.contentDocument?.querySelector("[data-page-content]");
-    if (!documentRoot) return;
+    if (!documentRoot) throw new Error("Live preview page did not contain rendered content");
     const blocks = [...documentRoot.children].map(child => serializeLivePreviewBlock(child, frame.contentDocument));
     const styles = livePreviewStyles(frame.contentDocument);
     editor.dispatch({effects: livePreviewRender.of({body: text(), blocks, styles})});
-    diagnostics(result.diagnostics);
+    if (state.livePreviewAfterCommitRequest === request) state.livePreviewAfterCommitRequest = 0;
   } catch (error) {
-    if (error.name !== "AbortError") throw error;
+    const currentRequest = request === livePreviewRequest && state.surface === "write" && state.mode === "visual" && !state.busy;
+    if (generatedPreviewToken) {
+      await cleanupPreviewToken(generatedPreviewToken);
+      if (state.previewToken === generatedPreviewToken) state.previewToken = "";
+    }
+    if (!currentRequest) return;
+    resetPreviewFrame();
+    const afterCommit = state.livePreviewAfterCommitRequest === request;
+    if (afterCommit) {
+      saveState("saved", "Saved with warnings");
+      status(isAbortError(error) ? "Saved; live preview cancelled." : "Saved; live preview failed; see diagnostics.");
+      state.livePreviewAfterCommitRequest = 0;
+    }
+    if (livePreviewDiagnostics.length && !error.diagnostics) error.diagnostics = livePreviewDiagnostics;
+    if (error.name !== "AbortError") {
+      if (!afterCommit) status("Live preview failed; see diagnostics.");
+      throw error;
+    }
   } finally {
-    if (state.livePreviewController === controller) state.livePreviewController = null;
+    if (state.livePreviewFrameCancel === cancelFrameWait) state.livePreviewFrameCancel = null;
+    if (state.livePreviewBusyRequest === request) {
+      if (state.livePreviewController === controller) state.livePreviewController = null;
+      state.livePreviewBusy = false;
+      syncBusyIndicator();
+    }
   }
 }
 function scheduleDraft() {
@@ -118,11 +257,40 @@ function scheduleDraft() {
   saveState("unsaved", "Unsaved");
   state.draftTimer = setTimeout(() => saveDraft().catch(() => status("Local draft could not be saved; check browser storage.")), 1500);
 }
-function busy(value) {
+function syncBusyIndicator() {
+  const indicator = $("#busy-indicator");
+  if (!indicator) return;
+  const active = state.busy || state.livePreviewBusy;
+  indicator.hidden = !active;
+  if (active) {
+    $("#busy-message").textContent = state.busy ? state.busyReason : "Updating live preview…";
+    $("#cancel-operation").hidden = !(state.operationController || state.livePreviewBusy);
+  } else {
+    $("#cancel-operation").hidden = true;
+  }
+}
+function busy(value, reason = "Working… controls are temporarily disabled.") {
+  if (value && !state.busy) {
+    cancelLivePreview();
+    if (!state.operationController) {
+      state.operationController = new AbortController();
+      state.operationOwned = true;
+    }
+  }
   state.busyCount = Math.max(0, state.busyCount + (value ? 1 : -1));
   state.busy = state.busyCount > 0;
+  if (value) state.busyReason = reason;
+  else if (!state.busy) {
+    state.busyReason = "";
+    if (state.operationOwned) {
+      state.operationController = null;
+      state.operationOwned = false;
+    }
+    state.operationCommitted = false;
+  }
   document.querySelectorAll(".header-actions button, #source, #refresh, #file-refresh, .file-actions button, .toolbar button, .editor-tabs button, .preview-actions button, .source-tree-entry, .file-entry, .workspace-search input, .new-form input, .new-form select, .new-form button, #metadata input, #metadata select, #media-panel button, #media-panel input, #media-panel select").forEach(input => { input.disabled = state.busy; });
   $("#content-editor").setAttribute("aria-busy", String(state.busy));
+  syncBusyIndicator();
   $("#delete").disabled = state.busy || state.kind !== "article";
   updateFileActions();
   editor.dispatch({effects: editable.reconfigure(EditorView.editable.of(!state.busy))});
@@ -327,7 +495,24 @@ function diagnostics(items = [], message = "") {
   root.append(list);
 }
 async function responseJSON(response) {
-  const body = await response.text();
+  let timer;
+  let body;
+  try {
+    body = await Promise.race([
+      response.text(),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(() => {
+          response.__oxpioCancel?.();
+          const timeoutError = new Error("Response body timed out");
+          timeoutError.name = "TimeoutError";
+          reject(timeoutError);
+        }, requestTimeout);
+      }),
+    ]);
+  } finally {
+    window.clearTimeout(timer);
+    response.__oxpioCleanup?.();
+  }
   const data = response.headers.get("Content-Type")?.includes("application/json") ? JSON.parse(body) : {};
   if (!response.ok) {
     const error = new Error(data.error || body || `Request failed (${response.status})`);
@@ -341,14 +526,57 @@ function postCommitWarning(result) {
   if (result?.sourceCleanupWarning) warning += " Temporary source/backup cleanup needs attention.";
   return warning;
 }
+function fetchWithTimeout(url, options = {}) {
+  const controller = new AbortController();
+  const sourceSignal = options.signal || state.operationController?.signal;
+  const abort = () => controller.abort();
+  if (sourceSignal) {
+    if (sourceSignal.aborted) controller.abort();
+    else sourceSignal.addEventListener("abort", abort, {once: true});
+  }
+  let timedOut = false;
+  const timer = window.setTimeout(() => { timedOut = true; controller.abort(); }, requestTimeout);
+  const clearTimer = () => window.clearTimeout(timer);
+  const cleanup = () => {
+    clearTimer();
+    sourceSignal?.removeEventListener("abort", abort);
+  };
+  const cancel = () => {
+    controller.abort();
+    cleanup();
+  };
+  return fetch(url, {...options, signal: controller.signal}).then(response => {
+    clearTimer();
+    response.__oxpioCleanup = cleanup;
+    response.__oxpioCancel = cancel;
+    return response;
+  }, error => {
+    cleanup();
+    if (timedOut) {
+      const timeoutError = new Error("Request timed out");
+      timeoutError.name = "TimeoutError";
+      throw timeoutError;
+    }
+    throw error;
+  });
+}
 async function mutation(method, url, body, headers = {}, signal) {
-  const session = await responseJSON(await fetch("/_oxpio/csrf"));
+  signal = signal || state.operationController?.signal;
+  const session = await responseJSON(await fetchWithTimeout("/_oxpio/csrf", {signal}));
   headers = {...headers, "X-OXPIO-CSRF": session.csrf};
   if (body && !(body instanceof FormData) && !(body instanceof URLSearchParams) && typeof body !== "string") {
     headers["Content-Type"] = "application/json";
     body = JSON.stringify(body);
   }
-  return responseJSON(await fetch(url, {method, headers, body, signal}));
+  return responseJSON(await fetchWithTimeout(url, {method, headers, body, signal}));
+}
+async function cleanupPreviewToken(token) {
+  if (!token) return;
+  try {
+    await mutation("DELETE", `/_oxpio/preview/${encodeURIComponent(token)}`, null, {}, new AbortController().signal);
+  } catch {
+    // Preview cleanup is best effort; the server retries tracked cleanup failures.
+  }
 }
 function renderSourceTree() {
   const tree = $("#source-tree");
@@ -384,7 +612,7 @@ function renderSourceTree() {
     meta.textContent = `${source.kind === "section" ? "Section" : "Article"} · ${source.effectivePublish ? "Published" : "Draft"}`;
     item.append(icon, label, meta);
     item.title = source.relPath;
-    item.onclick = () => { if (!confirmDiscard()) return; $("#source").value = source.relPath; loadSource(source.relPath).catch(error => status(`Load failed: ${error.message}`)); };
+    item.onclick = () => { if (!confirmDiscard()) return; $("#source").value = source.relPath; loadSource(source.relPath).catch(error => { if (!isAbortError(error)) status(`Load failed: ${error.message}`); }); };
     parent.append(item);
   };
   const appendFolder = (folder, depth, parent) => {
@@ -451,7 +679,7 @@ function expandSourceAncestors(path) {
   }
 }
 async function loadCatalog(preferred = state.path) {
-  const data = await responseJSON(await fetch("/_oxpio/sources"));
+  const data = await responseJSON(await fetchWithTimeout("/_oxpio/sources"));
   state.catalogSources = data.sources;
   if (!state.sourceTreeInitialized) {
     state.collapsedSourceFolders = defaultCollapsedSourceFolders(data.sources, preferred);
@@ -487,7 +715,7 @@ async function refreshCatalogFromUI() {
   try {
     await loadCatalog();
   } catch (error) {
-    status(`Document list failed: ${error.message}`);
+    if (!error.loadSourceCancelled) status(isAbortError(error) ? "Document refresh cancelled." : `Document list failed: ${error.message}`);
   } finally {
     stopProgress();
     busy(false);
@@ -500,7 +728,7 @@ async function refreshFilesFromUI() {
   try {
     await refreshFiles();
   } catch (error) {
-    status(`File list failed: ${error.message}`);
+    status(isAbortError(error) ? "File refresh cancelled." : `File list failed: ${error.message}`);
   } finally {
     stopProgress();
     busy(false);
@@ -508,7 +736,7 @@ async function refreshFilesFromUI() {
 }
 
 async function refreshFiles(preferred = state.filePath) {
-  const data = await responseJSON(await fetch("/_oxpio/files"));
+  const data = await responseJSON(await fetchWithTimeout("/_oxpio/files"));
   const tree = $("#file-tree");
   tree.replaceChildren();
   const selectionPath = preferred;
@@ -538,7 +766,8 @@ async function refreshFiles(preferred = state.filePath) {
         if (state.collapsedFolders.has(entry.path)) state.collapsedFolders.delete(entry.path);
         else state.collapsedFolders.add(entry.path);
         selectFileEntry(entry);
-        refreshFiles(entry.path).catch(error => status(`File list failed: ${error.message}`));
+        busy(true, "Loading folder…");
+        refreshFiles(entry.path).catch(error => status(isAbortError(error) ? "Folder loading cancelled." : `File list failed: ${error.message}`)).finally(() => busy(false));
         return;
       }
       selectFileEntry(entry);
@@ -563,8 +792,25 @@ async function refreshFiles(preferred = state.filePath) {
   }
   updateFileActions();
 }
+function fileSelectionSnapshot() {
+  return {
+    filePath: state.filePath,
+    fileHash: state.fileHash,
+    fileKind: state.fileKind,
+    fileSourceKind: state.fileSourceKind,
+    fileEditable: state.fileEditable,
+    uploadFolder: $("#upload-folder").value,
+  };
+}
+function restoreFileSelection(selection) {
+  Object.assign(state, selection);
+  $("#upload-folder").value = selection.uploadFolder;
+  document.querySelectorAll(".file-entry").forEach(item => item.setAttribute("aria-selected", String(item.dataset.path === state.filePath)));
+  updateFileActions();
+}
 function selectFileEntry(entry) {
   if (entry.sourceKind && entry.path !== state.path && !confirmDiscard()) return;
+  const previousSelection = fileSelectionSnapshot();
   state.filePath = entry.path;
   state.fileHash = entry.hash;
   state.fileKind = entry.kind;
@@ -573,7 +819,10 @@ function selectFileEntry(entry) {
   $("#upload-folder").value = entry.kind === "folder" ? entry.path : (entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : "");
   document.querySelectorAll(".file-entry").forEach(item => item.setAttribute("aria-selected", String(item.dataset.path === entry.path)));
   updateFileActions();
-  if (entry.sourceKind) loadSource(entry.path);
+  if (entry.sourceKind) loadSource(entry.path).catch(error => {
+    restoreFileSelection(previousSelection);
+    if (!isAbortError(error)) status(`Load failed: ${error.message}`);
+  });
   else status(`Selected ${entry.path}`);
 }
 function updateFileActions() {
@@ -603,6 +852,12 @@ function clearEditor() {
   updateMode();
   dirty(false);
   diagnostics();
+  if (state.diffView) {
+    state.diffView.destroy();
+    state.diffView = null;
+  }
+  $("#diff-editor").hidden = true;
+  $("#diff-wrap").hidden = true;
   state.previewResizeObserver?.disconnect();
   state.previewResizeObserver = null;
   $("#preview-frame").hidden = true;
@@ -615,9 +870,11 @@ async function loadSource(path) {
   cancelLivePreview();
   state.previewPending = "";
   const token = ++state.loadToken;
+  let loadCancelled = false;
+  let loadSucceeded = false;
   busy(true);
   try {
-    const data = await responseJSON(await fetch(`/_oxpio/source-meta?path=${encodeURIComponent(path)}`));
+    const data = await responseJSON(await fetchWithTimeout(`/_oxpio/source-meta?path=${encodeURIComponent(path)}`));
     if (token !== state.loadToken) return;
     state.path = path;
     expandSourceAncestors(path);
@@ -643,6 +900,12 @@ async function loadSource(path) {
     updateMode();
     dirty(false);
     diagnostics();
+    if (state.diffView) {
+      state.diffView.destroy();
+      state.diffView = null;
+    }
+    $("#diff-editor").hidden = true;
+    $("#diff-wrap").hidden = true;
     state.previewResizeObserver?.disconnect();
     state.previewResizeObserver = null;
     $("#preview-frame").hidden = true;
@@ -652,9 +915,23 @@ async function loadSource(path) {
     status(data.parseError ? `Fix this in source mode: ${data.parseError}` : `Loaded ${path}`);
     await offerDraft(path, state.hash, token);
     if (token !== state.loadToken) return;
-  } catch (error) { status(`Load failed: ${error.message}`); }
+    loadSucceeded = true;
+  } catch (error) {
+    if (isAbortError(error)) {
+      loadCancelled = true;
+      error.loadSourceCancelled = true;
+      if (token === state.loadToken) {
+        $("#source").value = state.path;
+        renderSourceTree();
+      }
+      status("Document load cancelled.");
+    } else {
+      status(`Load failed: ${error.message}`);
+    }
+    throw error;
+  }
   finally {
-    if (token === state.loadToken) {
+    if (token === state.loadToken && loadSucceeded && !loadCancelled) {
       if (state.surface === "write" && !state.suppressPreview) state.previewPending = "live";
       else if (state.keepPreview && state.previewOpen && !state.suppressPreview) state.previewPending = "full";
     }
@@ -721,7 +998,8 @@ function applySourceChanges(update) {
   }
   return source;
 }
-async function compose() {
+async function compose(signal) {
+  signal = signal || state.operationController?.signal;
   if (state.mode === "source") return state.source;
   const changed = changes();
   const bodyChanged = text() !== state.bodyBaseline;
@@ -729,19 +1007,41 @@ async function compose() {
   const request = {path: state.path, source: state.source};
   if (bodyChanged) request.body = text();
   if (changed.length) { request.fields = formValues(); request.changed = changed; }
-  const result = await mutation("POST", "/_oxpio/frontmatter", request);
+  const result = await mutation("POST", "/_oxpio/frontmatter", request, {}, signal);
   return result.source;
 }
 async function operation(label, action) {
-  if (state.busy || !state.path) return;
-  busy(true);
-  try { await action(); }
-  catch (error) {
-    diagnostics(error.diagnostics, `${label} failed: ${error.message}`);
-    saveState("failed", label === "Save" ? "Build failed" : `${label} failed`);
-    status(label === "Save" ? "Save failed; see diagnostics." : `${label} failed; see diagnostics.`);
+  if (state.busy || !state.path) return false;
+  const controller = new AbortController();
+  state.operationController = controller;
+  state.operationOwned = false;
+  state.operationCommitted = false;
+  state.operationCancelled = false;
+  busy(true, `${label} in progress… controls are temporarily disabled.`);
+  try {
+    await action();
+    return true;
+  } catch (error) {
+    state.operationCancelled = error.name === "AbortError";
+    if (state.operationCommitted) {
+      if (label === "Save") saveState("saved", "Saved with warnings");
+      diagnostics(error.diagnostics, `${label} committed, but refresh failed: ${error.message}`);
+      status(isAbortError(error) ? `${label} committed; refresh cancelled.` : `${label} committed; refresh failed.`);
+      return true;
+    }
+    if (state.operationCancelled) {
+      if (label === "Save") saveState(state.dirty ? "unsaved" : "saved", "Save cancelled");
+      status(`${label} cancelled.`);
+    } else {
+      diagnostics(error.diagnostics, `${label} failed: ${error.message}`);
+      saveState("failed", label === "Save" ? "Build failed" : `${label} failed`);
+      status(label === "Save" ? "Save failed; see diagnostics." : `${label} failed; see diagnostics.`);
+    }
+    return false;
+  } finally {
+    if (state.operationController === controller) state.operationController = null;
+    busy(false);
   }
-  finally { busy(false); }
 }
 async function save() {
   await operation("Save", async () => {
@@ -756,39 +1056,103 @@ async function save() {
       const reopenLivePreview = state.surface === "write" && state.mode === "visual";
       const reopenPreview = state.keepPreview && state.surface !== "write" && state.previewOpen;
       const reopenPreviewKind = state.previewKind;
+      let previewRefreshWarning = "";
+      let previewRefreshError = null;
       const source = await compose();
       const result = await mutation("PUT", `/_oxpio/source?path=${encodeURIComponent(path)}`, source, {"X-OXPIO-Source-Hash": state.hash});
+      markOperationCommitted("Save");
       await clearDraft(path);
       dirty(false);
       state.suppressPreview = true;
       try { await loadCatalog(path); } finally { state.suppressPreview = false; }
       if (mode === "source") { state.mode = "source"; setText(state.source); updateMode(); }
       if (reopenLivePreview) {
+        state.livePreviewAfterCommit = true;
         state.previewPending = "live";
       } else if (reopenPreview) {
+        let previewResult;
+        let generatedPreviewToken = "";
         try {
-          const previewResult = await mutation("POST", "/_oxpio/preview", {path: state.path, source: state.source});
-          applyPreviewResult(previewResult, reopenPreviewKind);
-        } catch (error) { diagnostics(error.diagnostics, `Preview refresh failed: ${error.message}`); }
+          previewResult = await mutation("POST", "/_oxpio/preview", {path: state.path, source: state.source}, previewRequestHeaders());
+          generatedPreviewToken = previewTokenFromURL(previewResult.contentURL || previewResult.url || previewResult.fullURL);
+          diagnostics(previewResult.diagnostics);
+          await applyPreviewResult(previewResult, reopenPreviewKind);
+        } catch (error) {
+          if (generatedPreviewToken) {
+            await cleanupPreviewToken(generatedPreviewToken);
+            if (state.previewToken === generatedPreviewToken) state.previewToken = "";
+          }
+          if (previewResult?.diagnostics && !error.diagnostics) error.diagnostics = previewResult.diagnostics;
+          resetPreviewFrame();
+          const empty = $("#preview-empty");
+          empty.hidden = false;
+          empty.classList.remove("is-loading");
+          empty.textContent = isAbortError(error) ? "Preview refresh cancelled." : "Preview refresh failed; see diagnostics.";
+          previewRefreshError = error;
+          previewRefreshWarning = isAbortError(error) ? " Preview refresh cancelled." : " Preview refresh failed.";
+        }
       }
-      diagnostics(result.diagnostics);
+      if (previewRefreshError) diagnostics([...(result.diagnostics || []), ...(previewRefreshError.diagnostics || [])], `Preview refresh failed: ${previewRefreshError.message}`);
+      else diagnostics(result.diagnostics);
       const cleanupWarning = postCommitWarning(result);
-      saveState("saved", result.warningCount || cleanupWarning ? "Saved with warnings" : "Saved");
-      status(result.warningCount ? `Saved and rebuilt with warnings.${cleanupWarning}` : `Saved and rebuilt.${cleanupWarning}`);
+      const saveWarning = result.warningCount || cleanupWarning || previewRefreshWarning;
+      saveState("saved", saveWarning ? "Saved with warnings" : "Saved");
+      status(saveWarning ? `Saved and rebuilt with warnings.${cleanupWarning}${previewRefreshWarning}` : "Saved and rebuilt.");
     } finally {
       stopProgress();
     }
   });
 }
+function showPreviewLoading(kind) {
+  $("#diff-editor").hidden = true;
+  $("#diff-wrap").hidden = true;
+  $("#preview-frame").hidden = true;
+  const empty = $("#preview-empty");
+  empty.hidden = false;
+  empty.classList.add("is-loading");
+  empty.textContent = kind === "page" ? "Generating complete page preview…" : "Generating focused content preview…";
+  $("#preview-title").textContent = kind === "page" ? "Page preview" : "Content preview";
+  $("#preview-title-icon").setAttribute("href", "#icon-eye");
+}
+
 async function preview(kind = "content") {
-  await operation(kind === "page" ? "Page preview" : "Preview", async () => {
+  let generatedPreviewToken = "";
+  if (!state.path) {
+    $("#diff-editor").hidden = true;
+    $("#preview-frame").hidden = true;
+    const empty = $("#preview-empty");
+    empty.hidden = false;
+    empty.classList.remove("is-loading");
+    empty.textContent = "No Markdown sources.";
+    status("No Markdown sources");
+    return;
+  }
+  showPreviewLoading(kind);
+  const completed = await operation(kind === "page" ? "Page preview" : "Preview", async () => {
     status(kind === "page" ? "Generating complete page preview…" : "Generating focused content preview…");
-    const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source: await compose()});
-    applyPreviewResult(result, kind);
+    const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source: await compose()}, previewRequestHeaders());
+    generatedPreviewToken = previewTokenFromURL(result.contentURL || result.url || result.fullURL);
     diagnostics(result.diagnostics);
+    try { await applyPreviewResult(result, kind); }
+    catch (error) {
+      error.diagnostics = [...(result.diagnostics || []), ...(error.diagnostics || [])];
+      throw error;
+    }
     const label = kind === "page" ? "Page preview" : "Content preview";
     status(result.warningCount ? `${label} generated with warnings.` : `${label} generated; source and public output were not changed.`);
   });
+  if (!completed) {
+    if (generatedPreviewToken) {
+      await cleanupPreviewToken(generatedPreviewToken);
+      if (state.previewToken === generatedPreviewToken) state.previewToken = "";
+    }
+    resetPreviewFrame();
+    const empty = $("#preview-empty");
+    empty.hidden = false;
+    empty.classList.remove("is-loading");
+    empty.textContent = state.operationCancelled ? "Preview cancelled." : "Preview failed; see diagnostics.";
+    $("#preview-frame").hidden = true;
+  }
 }
 async function pagePreview() { return preview("page"); }
 function diffExtensions() {
@@ -847,38 +1211,76 @@ function updateDiffControl() {
   button.hidden = state.surface !== "diff" || !state.diffView;
   button.setAttribute("aria-pressed", String(state.diffWrap));
 }
-async function showDiff() {
-  if (!state.path) return;
-  const candidate = await compose();
+function showDiffLoading() {
   const host = $("#diff-editor");
   host.hidden = false;
-  state.previewOpen = false;
-  state.previewResizeObserver?.disconnect();
-  state.previewResizeObserver = null;
+  host.replaceChildren();
+  const message = document.createElement("p");
+  message.className = "preview-empty is-loading";
+  message.textContent = "Generating diff…";
+  host.append(message);
   $("#preview-frame").hidden = true;
   $("#preview-empty").hidden = true;
   $("#preview-title").textContent = "Diff";
   $("#preview-title-icon").setAttribute("href", "#icon-diff");
-  host.replaceChildren();
-  if (state.diffView) state.diffView.destroy();
-  if (candidate === state.baselineSource) {
-    host.textContent = "No changes";
-    updateDiffControl();
+  $("#diff-wrap").hidden = true;
+  if (state.diffView) {
+    state.diffView.destroy();
+    state.diffView = null;
+  }
+  updateDiffControl();
+}
+
+async function showDiff() {
+  if (!state.path) {
+    $("#diff-editor").hidden = true;
+    $("#preview-frame").hidden = true;
+    const empty = $("#preview-empty");
+    empty.hidden = false;
+    empty.classList.remove("is-loading");
+    empty.textContent = "No Markdown sources.";
+    status("No Markdown sources");
     return;
   }
-  const heading = document.createElement("p");
-  heading.className = "diff-summary";
-  heading.append(`Frontmatter and body changes for ${state.path}`);
-  const hint = document.createElement("span");
-  hint.className = "diff-scroll-hint";
-  hint.textContent = "Use horizontal scroll for long lines.";
-  heading.append(hint);
-  host.append(heading);
-  const mergeHost = document.createElement("div");
-  mergeHost.className = "merge-host";
-  host.append(mergeHost);
-  mountDiffView(mergeHost, state.baselineSource, candidate);
-  updateDiffControl();
+  showDiffLoading();
+  const completed = await operation("Diff", async () => {
+    const candidate = await compose();
+    const host = $("#diff-editor");
+    state.previewOpen = false;
+    state.previewResizeObserver?.disconnect();
+    state.previewResizeObserver = null;
+    host.replaceChildren();
+    if (candidate === state.baselineSource) {
+      host.textContent = "No changes";
+      updateDiffControl();
+      status("Diff generated; no changes.");
+      return;
+    }
+    const heading = document.createElement("p");
+    heading.className = "diff-summary";
+    heading.append(`Frontmatter and body changes for ${state.path}`);
+    const hint = document.createElement("span");
+    hint.className = "diff-scroll-hint";
+    hint.textContent = "Use horizontal scroll for long lines.";
+    heading.append(hint);
+    host.append(heading);
+    const mergeHost = document.createElement("div");
+    mergeHost.className = "merge-host";
+    host.append(mergeHost);
+    mountDiffView(mergeHost, state.baselineSource, candidate);
+    updateDiffControl();
+    status("Diff generated.");
+  });
+  if (!completed) {
+    const host = $("#diff-editor");
+    host.hidden = false;
+    host.replaceChildren();
+    const message = document.createElement("p");
+    message.className = "preview-empty";
+    message.textContent = state.operationCancelled ? "Diff cancelled." : "Diff failed; see diagnostics.";
+    host.append(message);
+    updateDiffControl();
+  }
 }
 function resizePreviewFrame() {
   const frame = $("#preview-frame");
@@ -899,6 +1301,14 @@ function bindPreviewFrame() {
     state.previewResizeObserver.observe(frame.contentDocument.documentElement);
   }
 }
+function destroyDiffView() {
+  if (state.diffView) {
+    state.diffView.destroy();
+    state.diffView = null;
+  }
+  $("#diff-editor").hidden = true;
+  $("#diff-wrap").hidden = true;
+}
 function showPreviewSurface() {
   $("#diff-editor").hidden = true;
   $("#diff-wrap").hidden = true;
@@ -908,11 +1318,13 @@ function showPreviewSurface() {
   else $("#preview-frame").hidden = false;
 }
 async function setWorkspaceMode(surface) {
+  const wasDiff = state.surface === "diff";
   if (surface !== "write") {
     $("#media-panel").hidden = true;
   }
-  if (surface === "source" && state.mode !== "source") await toggleMode();
-  if (surface === "write" && state.mode !== "visual") await toggleMode();
+  if (surface === "source" && state.mode !== "source" && !(await toggleMode())) return;
+  if (surface === "write" && state.mode !== "visual" && !(await toggleMode())) return;
+  if (wasDiff && surface !== "diff") destroyDiffView();
   state.surface = surface;
   updateMode();
   if (surface === "read") {
@@ -938,7 +1350,7 @@ function rebuildDiffView() {
 }
 
 async function toggleMode(sourcePosition = null) {
-  await operation("Switch mode", async () => {
+  return operation("Switch mode", async () => {
     const source = await compose();
     if (state.mode === "visual") {
       state.source = source;
@@ -1206,12 +1618,19 @@ function insertMedia(path, allowBusy = false) {
   editor.dispatch({changes: {from, to, insert: value}, selection: {anchor: from + value.length}});
   editor.focus();
 }
-async function openMedia() { $("#media-panel").hidden = false; await loadMedia(); }
-async function loadMedia() {
+async function openMedia() {
+  $("#media-panel").hidden = false;
+  if (state.busy) return loadMedia(true);
+  busy(true, "Loading media library…");
+  try { await loadMedia(true); }
+  catch (error) { status(isAbortError(error) ? "Media loading cancelled." : `Media library failed to load: ${error.message}`); }
+  finally { busy(false); }
+}
+async function loadMedia(throwOnError = false) {
   const list = $("#media-list");
   list.textContent = "Loading…";
   try {
-    const data = await responseJSON(await fetch("/_oxpio/media"));
+    const data = await responseJSON(await fetchWithTimeout("/_oxpio/media"));
     list.replaceChildren();
     if (!data.items.length) list.textContent = "No images yet.";
     for (const media of data.items) {
@@ -1225,7 +1644,10 @@ async function loadMedia() {
       }
       list.append(item);
     }
-  } catch (error) { list.textContent = `Media library failed to load: ${error.message}`; }
+  } catch (error) {
+    list.textContent = `Media library failed to load: ${error.message}`;
+    if (throwOnError) throw error;
+  }
 }
 async function uploadMedia(file) {
   if (!file || state.busy) return;
@@ -1244,7 +1666,8 @@ async function uploadMedia(file) {
       form.append("kind", kind);
     }
     const result = await mutation("POST", "/_oxpio/media", form, {"X-OXPIO-File-Hash": "absent"});
-    await loadMedia();
+    markOperationCommitted("Upload");
+    await loadMedia(true);
     await refreshFiles(result.path);
     if (/\.md$/iu.test(file.name)) await loadCatalog(result.path);
     else {
@@ -1252,7 +1675,13 @@ async function uploadMedia(file) {
       if (state.surface === "write" && state.mode === "visual") state.previewPending = "live";
     }
     status(`Uploaded ${result.path} and rebuilt successfully.${postCommitWarning(result)}`);
-  } catch (error) { diagnostics(error.diagnostics, `Upload failed: ${error.message}`); saveState("failed", "Build failed"); status(`Upload failed: ${error.message}`); }
+  } catch (error) {
+    if (state.operationCommitted) {
+      diagnostics(error.diagnostics, `Upload committed, but refresh failed: ${error.message}`);
+      status(isAbortError(error) ? "Upload committed; refresh cancelled." : "Upload committed; refresh failed.");
+    } else if (isAbortError(error)) status("Upload cancelled.");
+    else { diagnostics(error.diagnostics, `Upload failed: ${error.message}`); saveState("failed", "Build failed"); status(`Upload failed: ${error.message}`); }
+  }
   finally { stopProgress(); busy(false); $("#media-upload").value = ""; }
 }
 function openFileDialog(mode) {
@@ -1282,18 +1711,26 @@ async function runFileMutation(label, action, preferred = state.filePath, reload
   const stopProgress = progressStatus(`${label}: validating, building, and saving…`);
   try {
     const result = await action();
+    markOperationCommitted(label);
     if (reloadSource) {
       dirty(false);
       await loadCatalog(preferred);
     } else {
       await refreshFiles(preferred);
     }
-    status(`${label} completed and rebuilt.${postCommitWarning(result)}`);
+    const rebuilt = result.warningCount !== undefined;
+    status(`${label} completed${rebuilt ? " and rebuilt" : ""}.${postCommitWarning(result)}`);
   } catch (error) {
-    diagnostics(error.diagnostics, `${label} failed: ${error.message}`);
-    saveState("failed", `${label} failed`);
-    status(`${label} failed; see diagnostics.`);
-    throw error;
+    if (state.operationCommitted) {
+      diagnostics(error.diagnostics, `${label} committed, but refresh failed: ${error.message}`);
+      status(isAbortError(error) ? `${label} committed; refresh cancelled.` : `${label} committed; refresh failed.`);
+    } else if (isAbortError(error)) status(`${label} cancelled.`);
+    else {
+      diagnostics(error.diagnostics, `${label} failed: ${error.message}`);
+      saveState("failed", `${label} failed`);
+      status(`${label} failed; see diagnostics.`);
+    }
+    if (!isAbortError(error) && !state.operationCommitted) throw error;
   } finally {
     stopProgress();
     busy(false);
@@ -1316,6 +1753,7 @@ $("#document-search").oninput = filterDocuments;
 $("#sidebar-toggle").onclick = event => { const open = $(".source-sidebar").classList.toggle("drawer-open"); event.currentTarget.setAttribute("aria-expanded", String(open)); event.currentTarget.setAttribute("aria-label", open ? "Close documents" : "Open documents"); };
 document.addEventListener("keydown", event => { if (event.key === "Escape" && $(".source-sidebar").classList.contains("drawer-open")) { $(".source-sidebar").classList.remove("drawer-open"); $("#sidebar-toggle").setAttribute("aria-expanded", "false"); $("#sidebar-toggle").setAttribute("aria-label", "Open documents"); } });
 $("#settings").onclick = () => $("#settings-dialog").showModal();
+$("#cancel-operation").onclick = () => state.operationController ? state.operationController.abort() : cancelLivePreview(true);
 $("#settings-save").onclick = storePreferences;
 $("#metadata-toggle").onclick = event => {
   const collapsed = $("#metadata").classList.toggle("metadata-collapsed");
@@ -1360,7 +1798,7 @@ $(".editor-tabs").onkeydown = event => {
 $("#preview-refresh").onclick = () => preview("content");
 $("#page-preview").onclick = pagePreview;
 $("#source").onchange = event => {
-  if (confirmDiscard()) loadSource(event.target.value);
+  if (confirmDiscard()) loadSource(event.target.value).catch(error => { if (!isAbortError(error)) status(`Load failed: ${error.message}`); });
   else event.target.value = state.path;
 };
 $("#refresh").onclick = refreshCatalogFromUI;
@@ -1412,9 +1850,12 @@ $("#file-form").onsubmit = async event => {
     }
     dialog.close();
   } catch (error) {
-    diagnostics(error.diagnostics, error.message);
-    saveState("failed", "Build failed");
-    status(`${mode === "rename" ? "Rename" : "File operation"} failed: ${error.message}`);
+    if (isAbortError(error)) status(`${mode === "rename" ? "Rename" : "File operation"} cancelled.`);
+    else {
+      diagnostics(error.diagnostics, error.message);
+      saveState("failed", "Build failed");
+      status(`${mode === "rename" ? "Rename" : "File operation"} failed: ${error.message}`);
+    }
   }
 };
 $("#new").onclick = () => { if (confirmDiscard()) $("#new-dialog").showModal(); };
@@ -1427,10 +1868,18 @@ $("#new-form").onsubmit = async event => {
   const stopProgress = progressStatus("Create: validating, building, and saving…");
   try {
     const result = await mutation("POST", "/_oxpio/source", form, {"X-OXPIO-Source-Hash": "absent"});
+    markOperationCommitted("Create");
     $("#new-dialog").close(); dirty(false);
     await loadCatalog(form.get("path"));
     status(`Created and rebuilt.${postCommitWarning(result)}`);
-  } catch (error) { diagnostics(error.diagnostics, error.message); saveState("failed", "Build failed"); $("#new-dialog").close(); status(`Create failed: ${error.message}`); }
+  } catch (error) {
+    if (state.operationCommitted) {
+      diagnostics(error.diagnostics, `Create committed, but refresh failed: ${error.message}`);
+      status(isAbortError(error) ? "Create committed; refresh cancelled." : "Create committed; refresh failed.");
+    } else if (isAbortError(error)) status("Create cancelled.");
+    else { diagnostics(error.diagnostics, error.message); saveState("failed", "Build failed"); status(`Create failed: ${error.message}`); }
+    $("#new-dialog").close();
+  }
   finally { stopProgress(); busy(false); }
 };
 $("#delete").onclick = () => {
@@ -1440,6 +1889,7 @@ $("#delete").onclick = () => {
     try {
       const deletedPath = state.path;
       const result = await mutation("DELETE", `/_oxpio/source?path=${encodeURIComponent(deletedPath)}&confirm=true`, null, {"X-OXPIO-Source-Hash": state.hash});
+      markOperationCommitted("Delete");
       await clearDraft(deletedPath);
       dirty(false); await loadCatalog(""); status(`Deleted and rebuilt.${postCommitWarning(result)}`);
     } finally {
@@ -1463,4 +1913,4 @@ document.querySelectorAll("[data-command]").forEach(button => {
   button.onclick = () => command(button.dataset.command);
 });
 window.addEventListener("beforeunload", event => { if (state.dirty) { event.preventDefault(); event.returnValue = ""; } });
-loadCatalog().catch(error => status(`Editor unavailable: ${error.message}`));
+loadCatalog().catch(error => { if (!error.loadSourceCancelled) status(isAbortError(error) ? "Document load cancelled." : `Editor unavailable: ${error.message}`); });
