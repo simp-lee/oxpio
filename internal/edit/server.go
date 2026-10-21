@@ -54,6 +54,7 @@ type Server struct {
 	coordinator *Coordinator
 	username    string
 	hash        string
+	baseURL     string
 
 	mu       sync.Mutex
 	sessions map[string]session
@@ -161,6 +162,7 @@ func NewWithListenAndDependencies(vaultPath, outputPath string, port int, listen
 		coordinator:  coordinator,
 		username:     cfg.Editor.Username,
 		hash:         cfg.Editor.PasswordHash,
+		baseURL:      cfg.BaseURL,
 		sessions:     make(map[string]session),
 		previews:     make(map[string]*editorPreview),
 		previewRoots: make(map[string]*internalserver.Server),

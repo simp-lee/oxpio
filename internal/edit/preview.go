@@ -15,6 +15,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
@@ -79,31 +81,62 @@ func (s *Server) servePreview(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
 	if len(parts) == 2 && parts[1] == "content" {
 		servePreviewBytes(w, r, preview.contentHTML, "text/html; charset=utf-8")
 		return
 	}
-	relPath := "/"
+	escapedRelPath := "/"
 	if len(parts) == 2 && parts[1] != "" {
-		relPath = "/" + parts[1]
+		escapedRelPath = "/" + parts[1]
+	}
+	relPath, err := url.PathUnescape(escapedRelPath)
+	if err != nil {
+		http.NotFound(w, r)
+		return
 	}
 	clone := r.Clone(r.Context())
+	if clone.Method == http.MethodHead {
+		clone.Method = http.MethodGet
+	}
 	clone.URL.Path = relPath
-	clone.URL.RawPath = ""
+	clone.URL.RawPath = escapedRelPath
 	recorder := httptest.NewRecorder()
 	preview.static.ServeHTTP(recorder, clone)
 	body := append([]byte(nil), recorder.Body.Bytes()...)
 	contentType := strings.ToLower(recorder.Header().Get("Content-Type"))
-	if strings.Contains(contentType, "text/html") && recorder.Code >= 200 && recorder.Code < 300 {
-		body = rewritePreviewHTML(body, s.controlPrefix()+"preview/"+token)
+	prefix := s.controlPrefix() + "preview/" + token
+	rewritten := false
+	if recorder.Code >= 200 && recorder.Code < 300 && recorder.Code != http.StatusPartialContent {
+		switch {
+		case strings.Contains(contentType, "text/html"):
+			body = rewritePreviewHTMLAtWithBase(body, prefix, previewDocumentBasePath(escapedRelPath), s.baseURL)
+			rewritten = true
+		case strings.Contains(contentType, "text/css"):
+			body = rewritePreviewCSSURLs(body, prefix, s.baseURL)
+			rewritten = true
+		}
 	}
 	for name, values := range recorder.Header() {
 		w.Header()[name] = append([]string(nil), values...)
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	if r.Method != http.MethodHead {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	if rewritten {
+		w.Header().Del("Accept-Ranges")
+		w.Header().Del("Content-Range")
 	}
+	if location := recorder.Header().Get("Location"); location != "" {
+		if rewritten, ok := rewritePreviewLocation(location, prefix, s.baseURL); ok {
+			w.Header().Set("Location", rewritten)
+		} else {
+			w.Header().Del("Location")
+		}
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	w.WriteHeader(recorder.Code)
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(body)
@@ -164,7 +197,7 @@ func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 			})
 		}
 		if contentStart == nil || contentEnd == nil || contentStart.Parent != contentEnd.Parent || !previewNodeFollows(contentStart, contentEnd) {
-			return fullPage, nil
+			return nil, errors.New("content preview marker not found")
 		}
 	}
 	contentRoot := content
@@ -187,7 +220,7 @@ func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 	headRoot := findPreviewElement(document, func(node *xhtml.Node) bool { return node.Type == xhtml.ElementNode && node.Data == "head" })
 	bodyRoot := findPreviewElement(document, func(node *xhtml.Node) bool { return node.Type == xhtml.ElementNode && node.Data == "body" })
 	if htmlRoot == nil || headRoot == nil || bodyRoot == nil {
-		return fullPage, nil
+		return nil, errors.New("content preview document is incomplete")
 	}
 
 	previewDocument := &xhtml.Node{Type: xhtml.DocumentNode}
@@ -487,7 +520,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, previewFailureMessage("could not render content preview", cleanupErr), http.StatusInternalServerError)
 		return
 	}
-	contentHTML := rewritePreviewHTMLAt(contentPage, s.controlPrefix()+"preview/"+token, previewSitePath(basePath, previewEntry.Route))
+	contentHTML := rewritePreviewHTMLAtWithBase(contentPage, s.controlPrefix()+"preview/"+token, previewSitePath(basePath, previewEntry.Route), s.baseURL)
 	if r.Context().Err() != nil {
 		_ = s.discardUnpublishedPreview(static, root)
 		return
@@ -654,59 +687,822 @@ func previewFailureMessage(message string, cleanupErr error) string {
 }
 
 var (
-	previewURLAttributePattern                    = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data|data-src)\s*=\s*)(["'])(/[^"']*)`)
-	previewUnquotedURLAttributePattern            = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data|data-src)\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
-	previewRelativeURLAttributePattern            = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data|data-src)\s*=\s*)(["'])([^"']*)`)
-	previewUnquotedRelativeURLAttributePattern    = regexp.MustCompile(`(?i)(\b(?:href|src|action|poster|data|data-src)\s*=\s*)([^\s"'=<>` + "`" + `]+)`)
-	previewSrcsetAttributePattern                 = regexp.MustCompile(`(?i)(\b(?:srcset|imagesrcset)\s*=\s*)(["'])(/[^"']*)`)
-	previewUnquotedSrcsetAttributePattern         = regexp.MustCompile(`(?i)(\b(?:srcset|imagesrcset)\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
-	previewRelativeSrcsetAttributePattern         = regexp.MustCompile(`(?i)(\b(?:srcset|imagesrcset)\s*=\s*)(["'])([^"']*)`)
-	previewUnquotedRelativeSrcsetAttributePattern = regexp.MustCompile(`(?i)(\b(?:srcset|imagesrcset)\s*=\s*)([^\s"'=<>` + "`" + `]+)`)
+	previewAbsoluteURLAttributePattern            = regexp.MustCompile(`(?i)((?:xlink:href|href|src|action|poster|data|data-src)\s*=\s*)(["'])(https?://[^"']*)`)
+	previewUnquotedAbsoluteURLAttributePattern    = regexp.MustCompile(`(?i)((?:xlink:href|href|src|action|poster|data|data-src)\s*=\s*)(https?://[^\s"'=<>` + "`" + `]+)`)
+	previewAbsoluteSrcsetAttributePattern         = regexp.MustCompile(`(?i)((?:srcset|imagesrcset)\s*=\s*)(["'])([^"']*)`)
+	previewUnquotedAbsoluteSrcsetAttributePattern = regexp.MustCompile(`(?i)((?:srcset|imagesrcset)\s*=\s*)([^\s"'=<>` + "`" + `]+)`)
+	previewStyleDoubleAttributePattern            = regexp.MustCompile(`(?is)(style\s*=\s*")(.*?)"`)
+	previewStyleSingleAttributePattern            = regexp.MustCompile(`(?is)(style\s*=\s*')(.*?)'`)
+	previewStyleUnquotedAttributePattern          = regexp.MustCompile(`(?is)(style\s*=\s*)([^\s"'=<>` + "`" + `]+)`)
+	previewURLAttributePattern                    = regexp.MustCompile(`(?i)((?:xlink:href|href|src|action|poster|data|data-src)\s*=\s*)(["'])(/[^"']*)`)
+	previewUnquotedURLAttributePattern            = regexp.MustCompile(`(?i)((?:xlink:href|href|src|action|poster|data|data-src)\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
+	previewRelativeURLAttributePattern            = regexp.MustCompile(`(?i)((?:xlink:href|href|src|action|poster|data|data-src)\s*=\s*)(["'])([^"']*)`)
+	previewUnquotedRelativeURLAttributePattern    = regexp.MustCompile(`(?i)((?:xlink:href|href|src|action|poster|data|data-src)\s*=\s*)([^\s"'=<>` + "`" + `]+)`)
+	previewSrcsetAttributePattern                 = regexp.MustCompile(`(?i)((?:srcset|imagesrcset)\s*=\s*)(["'])(/[^"']*)`)
+	previewUnquotedSrcsetAttributePattern         = regexp.MustCompile(`(?i)((?:srcset|imagesrcset)\s*=\s*)(/[^\s"'=<>` + "`" + `]+)`)
+	previewRelativeSrcsetAttributePattern         = regexp.MustCompile(`(?i)((?:srcset|imagesrcset)\s*=\s*)(["'])([^"']*)`)
+	previewUnquotedRelativeSrcsetAttributePattern = regexp.MustCompile(`(?i)((?:srcset|imagesrcset)\s*=\s*)([^\s"'=<>` + "`" + `]+)`)
 )
 
+func previewDocumentBasePath(relPath string) string {
+	if strings.HasSuffix(relPath, "/") {
+		return relPath
+	}
+	dir := path.Dir(relPath)
+	if dir == "/" {
+		return dir
+	}
+	return dir + "/"
+}
+
 func rewritePreviewHTMLAt(body []byte, prefix, pagePath string) []byte {
-	text := previewRelativeURLAttributePattern.ReplaceAllStringFunc(string(body), func(match string) string {
-		parts := previewRelativeURLAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 4 {
-			return match
+	return rewritePreviewHTMLAtWithBase(body, prefix, pagePath, "")
+}
+
+func rewritePreviewHTMLAtWithBase(body []byte, prefix, pagePath, configuredBaseURL string) []byte {
+	text, restored := protectPreviewCSSContexts(string(body), prefix, configuredBaseURL, pagePath)
+	text = rewritePreviewConfiguredURLs(text, prefix, configuredBaseURL)
+	text = rewritePreviewHTMLTags(text, func(attrName, tag string) string {
+		if !isPreviewURLAttributeName(attrName) {
+			return tag
 		}
-		return parts[1] + parts[2] + rewritePreviewRelativeURL(parts[3], prefix, pagePath)
+		tag = previewRelativeURLAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewRelativeURLAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 4 {
+				return match
+			}
+			return parts[1] + parts[2] + rewritePreviewRelativeURL(parts[3], prefix, pagePath)
+		})
+		tag = previewUnquotedRelativeURLAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewUnquotedRelativeURLAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			return parts[1] + rewritePreviewRelativeURL(parts[2], prefix, pagePath)
+		})
+		tag = previewRelativeSrcsetAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewRelativeSrcsetAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 4 {
+				return match
+			}
+			return parts[1] + parts[2] + rewritePreviewRelativeSrcset(parts[3], prefix, pagePath)
+		})
+		return previewUnquotedRelativeSrcsetAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewUnquotedRelativeSrcsetAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			return parts[1] + rewritePreviewRelativeSrcset(parts[2], prefix, pagePath)
+		})
 	})
-	text = previewUnquotedRelativeURLAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
-		parts := previewUnquotedRelativeURLAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 3 {
-			return match
+	text = string(rewritePreviewHTMLUnprotectedAt([]byte(text), prefix, configuredBaseURL))
+	for marker, value := range restored {
+		text = strings.ReplaceAll(text, marker, value)
+	}
+	return []byte(text)
+}
+
+func rewritePreviewHTMLTags(body string, rewrite func(string, string) string) string {
+	var output strings.Builder
+	output.Grow(len(body))
+	for index := 0; index < len(body); {
+		relativeStart := strings.IndexByte(body[index:], '<')
+		if relativeStart < 0 {
+			output.WriteString(body[index:])
+			break
 		}
-		return parts[1] + rewritePreviewRelativeURL(parts[2], prefix, pagePath)
-	})
-	text = previewRelativeSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
-		parts := previewRelativeSrcsetAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 4 {
-			return match
+		start := index + relativeStart
+		output.WriteString(body[index:start])
+		if strings.HasPrefix(body[start:], "<!--") {
+			end := strings.Index(body[start+len("<!--"):], "-->")
+			if end < 0 {
+				output.WriteString(body[start:])
+				break
+			}
+			end += start + len("<!--") + len("-->")
+			output.WriteString(body[start:end])
+			index = end
+			continue
 		}
-		return parts[1] + parts[2] + rewritePreviewRelativeSrcset(parts[3], prefix, pagePath)
-	})
-	text = previewUnquotedRelativeSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
-		parts := previewUnquotedRelativeSrcsetAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 3 {
-			return match
+		end := htmlTagEnd(body, start)
+		if end < 0 {
+			output.WriteString(body[start:])
+			break
 		}
-		return parts[1] + rewritePreviewRelativeSrcset(parts[2], prefix, pagePath)
+		for _, rawName := range []string{"textarea", "title"} {
+			if !htmlOpeningTagIs(body[start:end], rawName) {
+				continue
+			}
+			closingRelative := indexFold(body[end:], "</"+rawName)
+			if closingRelative < 0 {
+				output.WriteString(body[start:])
+				return output.String()
+			}
+			closingStart := end + closingRelative
+			closingEnd := htmlTagEnd(body, closingStart)
+			if closingEnd < 0 {
+				output.WriteString(body[start:])
+				return output.String()
+			}
+			output.WriteString(body[start:closingEnd])
+			index = closingEnd
+			goto next
+		}
+		output.WriteString(rewritePreviewHTMLTagAttributes(body[start:end], rewrite))
+		index = end
+		goto next
+	next:
+	}
+	return output.String()
+}
+
+func rewritePreviewHTMLTagAttributes(tag string, rewrite func(string, string) string) string {
+	if len(tag) < 3 || tag[0] != '<' || tag[1] == '/' {
+		return tag
+	}
+	end := len(tag) - 1
+	index := 1
+	for index < end && tag[index] != '>' && tag[index] != ' ' && tag[index] != '\t' && tag[index] != '\r' && tag[index] != '\n' && tag[index] != '\f' {
+		index++
+	}
+	var output strings.Builder
+	output.Grow(len(tag))
+	output.WriteString(tag[:index])
+	for index < end {
+		spaceStart := index
+		for index < end && (tag[index] == ' ' || tag[index] == '\t' || tag[index] == '\r' || tag[index] == '\n' || tag[index] == '\f') {
+			index++
+		}
+		output.WriteString(tag[spaceStart:index])
+		if index >= end || tag[index] == '/' {
+			output.WriteString(tag[index:])
+			return output.String()
+		}
+		attributeStart := index
+		for index < end && tag[index] != '=' && tag[index] != ' ' && tag[index] != '\t' && tag[index] != '\r' && tag[index] != '\n' && tag[index] != '\f' && tag[index] != '>' {
+			index++
+		}
+		attributeNameEnd := index
+		for index < end && (tag[index] == ' ' || tag[index] == '\t' || tag[index] == '\r' || tag[index] == '\n' || tag[index] == '\f') {
+			index++
+		}
+		if index >= end || tag[index] != '=' {
+			output.WriteString(tag[attributeStart:index])
+			continue
+		}
+		index++
+		for index < end && (tag[index] == ' ' || tag[index] == '\t' || tag[index] == '\r' || tag[index] == '\n' || tag[index] == '\f') {
+			index++
+		}
+		if index < end && (tag[index] == '\'' || tag[index] == '"') {
+			quote := tag[index]
+			index++
+			for index < end && tag[index] != quote {
+				index++
+			}
+			if index < end {
+				index++
+			}
+		} else {
+			for index < end && tag[index] != ' ' && tag[index] != '\t' && tag[index] != '\r' && tag[index] != '\n' && tag[index] != '\f' && tag[index] != '>' {
+				index++
+			}
+		}
+		output.WriteString(rewrite(tag[attributeStart:attributeNameEnd], tag[attributeStart:index]))
+	}
+	output.WriteString(tag[end:])
+	return output.String()
+}
+
+func isPreviewURLAttributeName(name string) bool {
+	switch strings.ToLower(name) {
+	case "xlink:href", "href", "src", "action", "poster", "data", "data-src", "srcset", "imagesrcset":
+		return true
+	default:
+		return false
+	}
+}
+
+func protectPreviewHTMLRawElements(body string, preserve, protect func(string) string) string {
+	var output strings.Builder
+	output.Grow(len(body))
+	for index := 0; index < len(body); {
+		relativeStart := strings.IndexByte(body[index:], '<')
+		if relativeStart < 0 {
+			output.WriteString(body[index:])
+			break
+		}
+		start := index + relativeStart
+		output.WriteString(body[index:start])
+		if strings.HasPrefix(body[start:], "<!--") {
+			end := strings.Index(body[start+len("<!--"):], "-->")
+			if end < 0 {
+				output.WriteString(body[start:])
+				break
+			}
+			end += start + len("<!--") + len("-->")
+			output.WriteString(body[start:end])
+			index = end
+			continue
+		}
+		openingEnd := htmlTagEnd(body, start)
+		if openingEnd < 0 {
+			output.WriteString(body[start:])
+			break
+		}
+		name := ""
+		for _, candidate := range []string{"textarea", "title", "script", "style"} {
+			if htmlOpeningTagIs(body[start:openingEnd], candidate) {
+				name = candidate
+				break
+			}
+		}
+		if name == "" {
+			output.WriteString(body[start:openingEnd])
+			index = openingEnd
+			continue
+		}
+		closingRelative := indexFold(body[openingEnd:], "</"+name)
+		if closingRelative < 0 {
+			output.WriteString(body[start:openingEnd])
+			output.WriteString(preserve(body[openingEnd:]))
+			return output.String()
+		}
+		closingStart := openingEnd + closingRelative
+		closingEnd := htmlTagEnd(body, closingStart)
+		if closingEnd < 0 {
+			output.WriteString(body[start:openingEnd])
+			output.WriteString(preserve(body[openingEnd:]))
+			return output.String()
+		}
+		output.WriteString(body[start:openingEnd])
+		if name == "style" {
+			output.WriteString(protect(body[openingEnd:closingStart]))
+		} else {
+			output.WriteString(preserve(body[openingEnd:closingStart]))
+		}
+		output.WriteString(body[closingStart:closingEnd])
+		index = closingEnd
+	}
+	return output.String()
+}
+
+func htmlOpeningTagIs(tag, name string) bool {
+	if len(tag) <= len(name)+1 || tag[0] != '<' || tag[1] == '/' || !strings.EqualFold(tag[1:1+len(name)], name) {
+		return false
+	}
+	boundary := tag[1+len(name)]
+	return boundary == ' ' || boundary == '\t' || boundary == '\r' || boundary == '\n' || boundary == '\f' || boundary == '>'
+}
+
+func indexFold(value, needle string) int {
+	for index := 0; index+len(needle) <= len(value); index++ {
+		if !strings.EqualFold(value[index:index+len(needle)], needle) {
+			continue
+		}
+		end := index + len(needle)
+		if end == len(value) || value[end] == ' ' || value[end] == '\t' || value[end] == '\r' || value[end] == '\n' || value[end] == '\f' || value[end] == '>' {
+			return index
+		}
+	}
+	return -1
+}
+
+func htmlTagEnd(body string, start int) int {
+	quote := byte(0)
+	for index := start + 1; index < len(body); index++ {
+		if quote != 0 {
+			if body[index] == quote {
+				quote = 0
+			}
+			continue
+		}
+		switch body[index] {
+		case '\'', '"':
+			quote = body[index]
+		case '>':
+			return index + 1
+		}
+	}
+	return -1
+}
+
+func rewritePreviewConfiguredURLs(text, prefix, configuredBaseURL string) string {
+	if strings.TrimSpace(configuredBaseURL) == "" {
+		return text
+	}
+	return rewritePreviewHTMLTags(text, func(attrName, tag string) string {
+		if !isPreviewURLAttributeName(attrName) {
+			return tag
+		}
+		tag = previewAbsoluteURLAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewAbsoluteURLAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 4 {
+				return match
+			}
+			return parts[1] + parts[2] + rewritePreviewConfiguredURL(parts[3], prefix, configuredBaseURL)
+		})
+		tag = previewUnquotedAbsoluteURLAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewUnquotedAbsoluteURLAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			return parts[1] + rewritePreviewConfiguredURL(parts[2], prefix, configuredBaseURL)
+		})
+		tag = previewAbsoluteSrcsetAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewAbsoluteSrcsetAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 4 {
+				return match
+			}
+			return parts[1] + parts[2] + rewritePreviewConfiguredSrcset(parts[3], prefix, configuredBaseURL)
+		})
+		return previewUnquotedAbsoluteSrcsetAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewUnquotedAbsoluteSrcsetAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			return parts[1] + rewritePreviewConfiguredSrcset(parts[2], prefix, configuredBaseURL)
+		})
 	})
-	return rewritePreviewHTML([]byte(text), prefix)
+}
+
+func protectPreviewCSSContexts(text, prefix, configuredBaseURL, pagePath string) (string, map[string]string) {
+	restored := make(map[string]string)
+	reserved := text
+	nextMarker := 0
+	markerFor := func(value string) string {
+		for {
+			marker := fmt.Sprintf("__oxpio_preview_css_%d__", nextMarker)
+			nextMarker++
+			if !strings.Contains(reserved, marker) {
+				restored[marker] = value
+				return marker
+			}
+		}
+	}
+	protect := func(css string) string {
+		return markerFor(string(rewritePreviewCSSURLsAt([]byte(css), prefix, configuredBaseURL, pagePath)))
+	}
+	preserve := func(content string) string {
+		return markerFor(content)
+	}
+	text = protectPreviewHTMLRawElements(text, preserve, protect)
+	text = rewritePreviewHTMLTags(text, func(attrName, tag string) string {
+		if !strings.EqualFold(attrName, "style") {
+			return tag
+		}
+		tag = previewStyleDoubleAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewStyleDoubleAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			return parts[1] + protect(parts[2]) + `"`
+		})
+		tag = previewStyleSingleAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewStyleSingleAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			return parts[1] + protect(parts[2]) + "'"
+		})
+		return previewStyleUnquotedAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewStyleUnquotedAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			return parts[1] + protect(parts[2])
+		})
+	})
+	return text, restored
+}
+
+func rewritePreviewCSSURLs(body []byte, prefix, configuredBaseURL string) []byte {
+	return rewritePreviewCSSURLsAt(body, prefix, configuredBaseURL, "")
+}
+
+func rewritePreviewCSSURLsAt(body []byte, prefix, configuredBaseURL, pagePath string) []byte {
+	if strings.TrimSpace(configuredBaseURL) == "" && pagePath == "" {
+		return body
+	}
+	input := string(body)
+	var output strings.Builder
+	for index := 0; index < len(input); {
+		if strings.HasPrefix(input[index:], "/*") {
+			end := strings.Index(input[index+2:], "*/")
+			if end < 0 {
+				output.WriteString(input[index:])
+				break
+			}
+			end += index + 4
+			output.WriteString(input[index:end])
+			index = end
+			continue
+		}
+		if input[index] == '\'' || input[index] == '"' {
+			end := cssStringEnd(input, index)
+			output.WriteString(input[index:end])
+			index = end
+			continue
+		}
+		if strings.HasPrefix(input[index:], "&#39;") || strings.HasPrefix(input[index:], "&#34;") {
+			entity := input[index : index+5]
+			end := strings.Index(input[index+5:], entity)
+			if end >= 0 {
+				end += index + 10
+				output.WriteString(input[index:end])
+				index = end
+				continue
+			}
+		}
+		if cssTokenAt(input, index, "@import") {
+			valueStart := skipCSSWhitespaceAndComments(input, index+len("@import"))
+			if valueStart < len(input) && (input[valueStart] == '\'' || input[valueStart] == '"') {
+				end := cssStringEnd(input, valueStart)
+				if end > valueStart+1 {
+					value := input[valueStart+1 : end-1]
+					output.WriteString(input[index : valueStart+1])
+					output.WriteString(rewritePreviewCSSResource(value, prefix, configuredBaseURL, pagePath))
+					output.WriteByte(input[end-1])
+					index = end
+					continue
+				}
+			} else if strings.HasPrefix(input[valueStart:], "&#39;") || strings.HasPrefix(input[valueStart:], "&#34;") {
+				entity := input[valueStart : valueStart+5]
+				resourceStart := valueStart + len(entity)
+				closing := strings.Index(input[resourceStart:], entity)
+				if closing >= 0 {
+					resourceEnd := resourceStart + closing
+					output.WriteString(input[index:resourceStart])
+					output.WriteString(rewritePreviewCSSResource(input[resourceStart:resourceEnd], prefix, configuredBaseURL, pagePath))
+					output.WriteString(entity)
+					index = resourceEnd + len(entity)
+					continue
+				}
+			}
+		}
+		tokenLength := cssFunctionTokenLength(input, index, "image-set")
+		if tokenLength == 0 {
+			tokenLength = cssFunctionTokenLength(input, index, "-webkit-image-set")
+		}
+		if tokenLength > 0 {
+			if replacement, end, ok := rewriteCSSImageSetFunction(input, index, tokenLength, prefix, configuredBaseURL, pagePath); ok {
+				output.WriteString(replacement)
+				index = end
+				continue
+			}
+		}
+		if tokenLength := cssURLTokenLength(input, index); tokenLength > 0 {
+			if replacement, end, ok := rewriteCSSURLFunction(input, index, tokenLength, prefix, configuredBaseURL, pagePath); ok {
+				output.WriteString(replacement)
+				index = end
+				continue
+			}
+		}
+		output.WriteByte(input[index])
+		index++
+	}
+	return []byte(output.String())
+}
+
+func cssTokenAt(value string, index int, token string) bool {
+	if index < 0 || index+len(token) > len(value) || !strings.EqualFold(value[index:index+len(token)], token) {
+		return false
+	}
+	if index > 0 && isCSSIdentifierBefore(value, index) {
+		return false
+	}
+	end := index + len(token)
+	return end == len(value) || !isCSSIdentifierAt(value, end)
+}
+
+func isCSSIdentifierRune(value rune) bool {
+	return value == '_' || value == '-' || unicode.IsLetter(value) || unicode.IsDigit(value) || unicode.IsMark(value)
+}
+
+func isCSSIdentifierAt(value string, index int) bool {
+	if index < 0 || index >= len(value) {
+		return false
+	}
+	runeValue, _ := utf8.DecodeRuneInString(value[index:])
+	return isCSSIdentifierRune(runeValue)
+}
+
+func isCSSIdentifierBefore(value string, index int) bool {
+	if index <= 0 || index > len(value) {
+		return false
+	}
+	runeValue, _ := utf8.DecodeLastRuneInString(value[:index])
+	return isCSSIdentifierRune(runeValue)
+}
+
+func isCSSWhitespace(value byte) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n' || value == '\f'
+}
+
+func skipCSSWhitespaceAndComments(value string, index int) int {
+	for index < len(value) {
+		for index < len(value) && isCSSWhitespace(value[index]) {
+			index++
+		}
+		if !strings.HasPrefix(value[index:], "/*") {
+			return index
+		}
+		end := strings.Index(value[index+2:], "*/")
+		if end < 0 {
+			return len(value)
+		}
+		index += end + 4
+	}
+	return index
+}
+
+func cssStringEnd(value string, start int) int {
+	quote := value[start]
+	for index := start + 1; index < len(value); index++ {
+		if value[index] == '\\' {
+			index++
+			continue
+		}
+		if value[index] == quote {
+			return index + 1
+		}
+	}
+	return len(value)
+}
+
+func cssFunctionTokenLength(value string, index int, token string) int {
+	if cssTokenAt(value, index, token) {
+		return len(token)
+	}
+	return 0
+}
+
+func cssURLTokenLength(value string, index int) int {
+	if cssTokenAt(value, index, "url") {
+		return len("url")
+	}
+	if index+5 <= len(value) && strings.EqualFold(value[index:index+5], `u\72l`) {
+		if index > 0 && isCSSIdentifierBefore(value, index) {
+			return 0
+		}
+		end := index + 5
+		if end == len(value) || !isCSSIdentifierAt(value, end) {
+			return 5
+		}
+	}
+	return 0
+}
+
+func rewriteCSSImageSetFunction(value string, start, tokenLength int, prefix, configuredBaseURL, pagePath string) (string, int, bool) {
+	index := start + tokenLength
+	index = skipCSSWhitespaceAndComments(value, index)
+	if index >= len(value) || value[index] != '(' {
+		return "", start, false
+	}
+	contentStart := index + 1
+	last := start
+	depth := 1
+	var output strings.Builder
+	for index = contentStart; index < len(value); {
+		if strings.HasPrefix(value[index:], "/*") {
+			commentEnd := strings.Index(value[index+2:], "*/")
+			if commentEnd < 0 {
+				return "", start, false
+			}
+			commentEnd += index + 4
+			output.WriteString(value[last:commentEnd])
+			last = commentEnd
+			index = commentEnd
+			continue
+		}
+		if value[index] == '\'' || value[index] == '"' {
+			end := cssStringEnd(value, index)
+			if end <= index+1 {
+				return "", start, false
+			}
+			output.WriteString(value[last : index+1])
+			resource := value[index+1 : end-1]
+			if cssImageSetTypeArgument(value, index) {
+				output.WriteString(resource)
+			} else {
+				output.WriteString(rewritePreviewCSSResource(resource, prefix, configuredBaseURL, pagePath))
+			}
+			output.WriteString(value[end-1 : end])
+			last = end
+			index = end
+			continue
+		}
+		if strings.HasPrefix(value[index:], "&#39;") || strings.HasPrefix(value[index:], "&#34;") {
+			entity := value[index : index+5]
+			closing := strings.Index(value[index+5:], entity)
+			if closing < 0 {
+				return "", start, false
+			}
+			valueStart := index + len(entity)
+			valueEnd := valueStart + closing
+			output.WriteString(value[last:valueStart])
+			resource := value[valueStart:valueEnd]
+			if cssImageSetTypeArgument(value, index) {
+				output.WriteString(resource)
+			} else {
+				output.WriteString(rewritePreviewCSSResource(resource, prefix, configuredBaseURL, pagePath))
+			}
+			output.WriteString(value[valueEnd : valueEnd+len(entity)])
+			last = valueEnd + len(entity)
+			index = last
+			continue
+		}
+		if nestedTokenLength := cssURLTokenLength(value, index); nestedTokenLength > 0 {
+			if replacement, end, ok := rewriteCSSURLFunction(value, index, nestedTokenLength, prefix, configuredBaseURL, pagePath); ok {
+				output.WriteString(value[last:index])
+				output.WriteString(replacement)
+				last = end
+				index = end
+				continue
+			}
+		}
+		switch value[index] {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				output.WriteString(value[last : index+1])
+				return output.String(), index + 1, true
+			}
+		}
+		index++
+	}
+	return "", start, false
+}
+
+func cssImageSetTypeArgument(value string, quoteStart int) bool {
+	before := strings.TrimRightFunc(value[:quoteStart], isCSSWhitespaceRune)
+	for strings.HasSuffix(before, "*/") {
+		commentStart := strings.LastIndex(before[:len(before)-2], "/*")
+		if commentStart < 0 {
+			break
+		}
+		before = strings.TrimRightFunc(before[:commentStart], isCSSWhitespaceRune)
+	}
+	if !strings.HasSuffix(before, "(") {
+		return false
+	}
+	before = strings.TrimRightFunc(before[:len(before)-1], isCSSWhitespaceRune)
+	end := len(before)
+	index := end
+	for index > 0 {
+		runeValue, size := utf8.DecodeLastRuneInString(before[:index])
+		if !isCSSIdentifierRune(runeValue) {
+			break
+		}
+		index -= size
+	}
+	return end > index && strings.EqualFold(before[index:end], "type")
+}
+
+func isCSSWhitespaceRune(value rune) bool {
+	return value == ' ' || value == '\t' || value == '\r' || value == '\n' || value == '\f'
+}
+
+func rewriteCSSURLFunction(value string, start, tokenLength int, prefix, configuredBaseURL, pagePath string) (string, int, bool) {
+	index := start + tokenLength
+	for index < len(value) && isCSSWhitespace(value[index]) {
+		index++
+	}
+	if index >= len(value) || value[index] != '(' {
+		return "", start, false
+	}
+	index++
+	index = skipCSSWhitespaceAndComments(value, index)
+	valueStart := index
+	var valueEnd, end int
+	quoteEntity := ""
+	if index < len(value) && (value[index] == '\'' || value[index] == '"') {
+		end = cssStringEnd(value, index)
+		if end <= index+1 {
+			return "", start, false
+		}
+		valueStart = index + 1
+		valueEnd = end - 1
+	} else if strings.HasPrefix(value[index:], "&#39;") || strings.HasPrefix(value[index:], "&#34;") {
+		quoteEntity = value[index : index+5]
+		valueStart = index + len(quoteEntity)
+		closing := strings.Index(value[valueStart:], quoteEntity)
+		if closing < 0 {
+			return "", start, false
+		}
+		valueEnd = valueStart + closing
+		end = valueEnd + len(quoteEntity)
+	} else {
+		for index < len(value) && value[index] != ')' && !isCSSWhitespace(value[index]) {
+			index++
+		}
+		valueEnd = index
+		end = index
+	}
+	for end < len(value) && isCSSWhitespace(value[end]) {
+		end++
+	}
+	if end >= len(value) || value[end] != ')' {
+		return "", start, false
+	}
+	end++
+	replacement := value[start:valueStart] + rewritePreviewCSSResource(value[valueStart:valueEnd], prefix, configuredBaseURL, pagePath) + value[valueEnd:end]
+	return replacement, end, true
+}
+
+func rewritePreviewCSSResource(value, prefix, configuredBaseURL, pagePath string) string {
+	if rewritten := rewritePreviewConfiguredURL(value, prefix, configuredBaseURL); rewritten != value {
+		return rewritten
+	}
+	if strings.HasPrefix(value, "/") && !strings.HasPrefix(value, "//") {
+		return rewritePreviewRootURLWithBase(value, prefix, configuredBaseURL)
+	}
+	if pagePath != "" {
+		return rewritePreviewRelativeURL(value, prefix, pagePath)
+	}
+	return value
+}
+
+func rewritePreviewConfiguredSrcset(value, prefix, configuredBaseURL string) string {
+	return rewritePreviewSrcsetCandidates(value, func(candidate string) string {
+		return rewritePreviewConfiguredURL(candidate, prefix, configuredBaseURL)
+	})
+}
+
+func rewritePreviewSrcsetCandidates(value string, rewrite func(string) string) string {
+	candidates := strings.Split(value, ",")
+	for index, candidate := range candidates {
+		trimmed := strings.TrimLeft(candidate, " \t\r\n\f")
+		if trimmed == "" {
+			continue
+		}
+		leading := len(candidate) - len(trimmed)
+		tokenEnd := strings.IndexAny(trimmed, " \t\r\n\f")
+		if tokenEnd < 0 {
+			tokenEnd = len(trimmed)
+		}
+		original := trimmed[:tokenEnd]
+		rewritten := rewrite(original)
+		if rewritten != original {
+			candidates[index] = candidate[:leading] + rewritten + candidate[leading+tokenEnd:]
+		}
+	}
+	return strings.Join(candidates, ",")
+}
+
+func rewritePreviewConfiguredURL(value, prefix, configuredBaseURL string) string {
+	base, err := url.Parse(strings.TrimSpace(configuredBaseURL))
+	if err != nil || base.Scheme == "" || base.Host == "" {
+		return value
+	}
+	target, err := url.Parse(value)
+	if err != nil || !target.IsAbs() || target.Host == "" || !strings.EqualFold(target.Scheme, base.Scheme) || !strings.EqualFold(target.Host, base.Host) {
+		return value
+	}
+	baseDecodedPath, err := url.PathUnescape(base.EscapedPath())
+	if err != nil {
+		return value
+	}
+	basePath := path.Clean(baseDecodedPath)
+	if basePath == "." || basePath == "" {
+		basePath = "/"
+	}
+	targetEscapedPath := target.EscapedPath()
+	targetDecodedPath, err := url.PathUnescape(targetEscapedPath)
+	if err != nil {
+		return value
+	}
+	targetHasTrailingSlash := strings.HasSuffix(targetEscapedPath, "/") && targetEscapedPath != ""
+	targetPath := path.Clean(targetDecodedPath)
+	if targetPath == "." || targetPath == "" {
+		targetPath = "/"
+	}
+	baseRoot := strings.TrimSuffix(basePath, "/")
+	if baseRoot != "" && baseRoot != "/" && targetPath != baseRoot && !strings.HasPrefix(targetPath, baseRoot+"/") {
+		return value
+	}
+	resolved := targetEscapedPath
+	if targetDecodedPath != targetPath {
+		resolved = (&url.URL{Path: targetPath}).EscapedPath()
+	}
+	if targetHasTrailingSlash && resolved != "/" && !strings.HasSuffix(resolved, "/") {
+		resolved += "/"
+	}
+	if target.RawQuery != "" {
+		resolved += "?" + target.RawQuery
+	}
+	if target.Fragment != "" {
+		resolved += "#" + target.EscapedFragment()
+	}
+	return rewritePreviewRootURLWithBase(resolved, prefix, configuredBaseURL)
 }
 
 func rewritePreviewRelativeSrcset(value, prefix, pagePath string) string {
-	candidates := strings.Split(value, ",")
-	for index, candidate := range candidates {
-		fields := strings.Fields(candidate)
-		if len(fields) == 0 {
-			continue
-		}
-		fields[0] = rewritePreviewRelativeURL(fields[0], prefix, pagePath)
-		candidates[index] = strings.Join(fields, " ")
-	}
-	return strings.Join(candidates, ",")
+	return rewritePreviewSrcsetCandidates(value, func(candidate string) string {
+		return rewritePreviewRelativeURL(candidate, prefix, pagePath)
+	})
 }
 
 func rewritePreviewRelativeURL(value, prefix, pagePath string) string {
@@ -743,52 +1539,77 @@ func rewritePreviewRelativeURL(value, prefix, pagePath string) string {
 }
 
 func rewritePreviewHTML(body []byte, prefix string) []byte {
-	text := previewURLAttributePattern.ReplaceAllStringFunc(string(body), func(match string) string {
-		parts := previewURLAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 4 {
-			return match
+	return rewritePreviewHTMLWithBase(body, prefix, "")
+}
+
+func rewritePreviewHTMLWithBase(body []byte, prefix, configuredBaseURL string) []byte {
+	text, restored := protectPreviewCSSContexts(string(body), prefix, configuredBaseURL, "")
+	text = string(rewritePreviewHTMLUnprotectedAt([]byte(text), prefix, configuredBaseURL))
+	for marker, value := range restored {
+		text = strings.ReplaceAll(text, marker, value)
+	}
+	return []byte(text)
+}
+
+func rewritePreviewHTMLUnprotectedAt(body []byte, prefix, configuredBaseURL string) []byte {
+	text := rewritePreviewHTMLTags(string(body), func(attrName, tag string) string {
+		if !isPreviewURLAttributeName(attrName) {
+			return tag
 		}
-		return parts[1] + parts[2] + rewritePreviewRootURL(parts[3], prefix)
-	})
-	text = previewUnquotedURLAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
-		parts := previewUnquotedURLAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 3 {
-			return match
-		}
-		return parts[1] + rewritePreviewRootURL(parts[2], prefix)
-	})
-	text = previewSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
-		parts := previewSrcsetAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 4 {
-			return match
-		}
-		candidates := strings.Split(parts[3], ",")
-		for index, candidate := range candidates {
-			fields := strings.Fields(candidate)
-			if len(fields) == 0 || strings.HasPrefix(fields[0], "//") || !strings.HasPrefix(fields[0], "/") {
-				continue
+		tag = previewURLAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewURLAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 4 {
+				return match
 			}
-			fields[0] = rewritePreviewRootURL(fields[0], prefix)
-			candidates[index] = strings.Join(fields, " ")
-		}
-		return parts[1] + parts[2] + strings.Join(candidates, ",")
-	})
-	return []byte(previewUnquotedSrcsetAttributePattern.ReplaceAllStringFunc(text, func(match string) string {
-		parts := previewUnquotedSrcsetAttributePattern.FindStringSubmatch(match)
-		if len(parts) != 3 {
-			return match
-		}
-		candidates := strings.Split(parts[2], ",")
-		for index, candidate := range candidates {
-			fields := strings.Fields(candidate)
-			if len(fields) == 0 || strings.HasPrefix(fields[0], "//") || !strings.HasPrefix(fields[0], "/") {
-				continue
+			return parts[1] + parts[2] + rewritePreviewRootURLWithBase(parts[3], prefix, configuredBaseURL)
+		})
+		tag = previewUnquotedURLAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewUnquotedURLAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
 			}
-			fields[0] = rewritePreviewRootURL(fields[0], prefix)
-			candidates[index] = strings.Join(fields, " ")
-		}
-		return parts[1] + strings.Join(candidates, ",")
-	}))
+			return parts[1] + rewritePreviewRootURLWithBase(parts[2], prefix, configuredBaseURL)
+		})
+		tag = previewSrcsetAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewSrcsetAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 4 {
+				return match
+			}
+			return parts[1] + parts[2] + rewritePreviewSrcsetCandidates(parts[3], func(candidate string) string {
+				if strings.HasPrefix(candidate, "//") || !strings.HasPrefix(candidate, "/") {
+					return candidate
+				}
+				return rewritePreviewRootURLWithBase(candidate, prefix, configuredBaseURL)
+			})
+		})
+		return previewUnquotedSrcsetAttributePattern.ReplaceAllStringFunc(tag, func(match string) string {
+			parts := previewUnquotedSrcsetAttributePattern.FindStringSubmatch(match)
+			if len(parts) != 3 {
+				return match
+			}
+			return parts[1] + rewritePreviewSrcsetCandidates(parts[2], func(candidate string) string {
+				if strings.HasPrefix(candidate, "//") || !strings.HasPrefix(candidate, "/") {
+					return candidate
+				}
+				return rewritePreviewRootURLWithBase(candidate, prefix, configuredBaseURL)
+			})
+		})
+	})
+	return []byte(text)
+}
+
+func rewritePreviewLocation(value, prefix, configuredBaseURL string) (string, bool) {
+	if rewritten := rewritePreviewConfiguredURL(value, prefix, configuredBaseURL); rewritten != value {
+		return rewritten, true
+	}
+	parsed, err := url.Parse(value)
+	if err == nil && (parsed.IsAbs() || parsed.Host != "" || strings.HasPrefix(value, "//")) {
+		return "", false
+	}
+	if strings.HasPrefix(value, "/") {
+		return rewritePreviewRootURLWithBase(value, prefix, configuredBaseURL), true
+	}
+	return rewritePreviewRelativeURL(value, prefix, "/"), true
 }
 
 func rewritePreviewRootURL(value, prefix string) string {
@@ -796,6 +1617,50 @@ func rewritePreviewRootURL(value, prefix string) string {
 		return value
 	}
 	return prefix + value
+}
+
+func rewritePreviewRootURLWithBase(value, prefix, configuredBaseURL string) string {
+	if strings.TrimSpace(configuredBaseURL) == "" || !strings.HasPrefix(value, "/") || strings.HasPrefix(value, "//") {
+		return rewritePreviewRootURL(value, prefix)
+	}
+	parsed, err := url.Parse(value)
+	if err != nil {
+		return rewritePreviewRootURL(value, prefix)
+	}
+	decodedTarget, err := url.PathUnescape(parsed.EscapedPath())
+	if err != nil {
+		return value
+	}
+	cleanTarget := path.Clean(decodedTarget)
+	if cleanTarget == "." || cleanTarget == "" {
+		cleanTarget = "/"
+	}
+	if cleanTarget == decodedTarget {
+		return rewritePreviewRootURL(value, prefix)
+	}
+	base, err := url.Parse(strings.TrimSpace(configuredBaseURL))
+	if err != nil {
+		return value
+	}
+	decodedBase, err := url.PathUnescape(base.EscapedPath())
+	if err != nil {
+		return value
+	}
+	baseRoot := strings.TrimSuffix(path.Clean(decodedBase), "/")
+	if baseRoot != "" && baseRoot != "/" && cleanTarget != baseRoot && !strings.HasPrefix(cleanTarget, baseRoot+"/") {
+		return value
+	}
+	resolved := (&url.URL{Path: cleanTarget}).EscapedPath()
+	if strings.HasSuffix(parsed.EscapedPath(), "/") && resolved != "/" && !strings.HasSuffix(resolved, "/") {
+		resolved += "/"
+	}
+	if parsed.RawQuery != "" {
+		resolved += "?" + parsed.RawQuery
+	}
+	if parsed.Fragment != "" {
+		resolved += "#" + parsed.EscapedFragment()
+	}
+	return rewritePreviewRootURL(resolved, prefix)
 }
 
 // jsonUnmarshal is kept local to the edit package so preview requests share

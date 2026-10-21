@@ -179,6 +179,23 @@ test('authenticated catalog maps articles, sections, drafts, and preserves full 
   await context.close();
 });
 
+test('editor announces initial catalog loading while controls are disabled', async ({browser}) => {
+  const context = await browser.newContext();
+  await context.route('**/_oxpio/sources', async route => {
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    await route.continue();
+  });
+  const page = await context.newPage();
+  await login(page);
+  await expect(page.locator('#content-editor')).toHaveAttribute('aria-busy', 'true');
+  await expect(page.locator('#busy-indicator')).toBeVisible();
+  await expect(page.locator('#busy-message')).toHaveText('Loading document catalog…');
+  await expect(page.locator('#save')).toBeDisabled();
+  await expect(page.locator('#content-editor')).toHaveAttribute('aria-busy', 'false', {timeout: 20_000});
+  await expect(page.locator('#status')).toContainText('Loaded');
+  await context.close();
+});
+
 test('editor visual states hide irrelevant controls and protect frontmatter during media insertion', async ({browser}) => {
   const context = await browser.newContext();
   const page = await context.newPage();

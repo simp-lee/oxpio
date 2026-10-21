@@ -376,22 +376,22 @@ async function clearDraft(path = state.path) {
 }
 async function offerDraft(path, hash, token) {
   const current = () => token === state.loadToken && state.path === path && state.hash === hash;
-  if (!window.indexedDB || !current()) return;
+  if (!window.indexedDB || !current()) return false;
   const exact = await draftRecord(`${path}:${hash}`);
-  if (!current()) return;
+  if (!current()) return false;
   let record = exact;
   if (!record) {
     const db = await openDraftDB();
-    if (!db) return;
+    if (!db) return false;
     record = await new Promise((resolve, reject) => {
       const request = db.transaction("drafts", "readonly").objectStore("drafts").getAll();
       request.onsuccess = () => resolve(request.result.filter(item => item.path === path).sort((a, b) => b.savedAt - a.savedAt)[0] || null);
       request.onerror = () => reject(request.error);
     });
   }
-  if (!record || !record.candidate || !current()) return;
+  if (!record || !record.candidate || !current()) return false;
   if (confirm(`Restore the unsaved local draft for ${path}?`)) {
-    if (!current()) return;
+    if (!current()) return false;
     const baselineFields = JSON.parse(JSON.stringify(state.formBaseline));
     state.mode = record.candidate.mode || "source";
     state.surface = state.mode === "source" ? "source" : "write";
@@ -406,9 +406,10 @@ async function offerDraft(path, hash, token) {
     updateMode();
     dirty(true);
     status("Local draft restored; save to publish it.");
-  } else {
-    await clearDraftKey(record.key);
+    return true;
   }
+  await clearDraftKey(record.key);
+  return false;
 }
 function applyIndentPreference() {
   if (!editor) return;
@@ -679,29 +680,43 @@ function expandSourceAncestors(path) {
   }
 }
 async function loadCatalog(preferred = state.path) {
-  const data = await responseJSON(await fetchWithTimeout("/_oxpio/sources"));
-  state.catalogSources = data.sources;
-  if (!state.sourceTreeInitialized) {
-    state.collapsedSourceFolders = defaultCollapsedSourceFolders(data.sources, preferred);
-    state.sourceTreeInitialized = true;
-  } else {
-    expandSourceAncestors(preferred);
+  const initialLoad = !state.sourceTreeInitialized;
+  let stopProgress = null;
+  if (initialLoad) {
+    busy(true, "Loading document catalog…");
+    stopProgress = progressStatus("Loading document catalog…");
   }
-  const select = $("#source");
-  select.replaceChildren();
-  for (const source of data.sources) {
-    const option = document.createElement("option");
-    option.value = source.relPath;
-    option.dataset.search = `${source.relPath} ${source.title} ${source.effectivePublish ? "published" : "draft"}`.toLowerCase();
-    option.textContent = `${source.effectivePublish ? "" : "[Draft] "}${source.relPath}`;
-    select.append(option);
+  try {
+    const data = await responseJSON(await fetchWithTimeout("/_oxpio/sources"));
+    state.catalogSources = data.sources;
+    if (!state.sourceTreeInitialized) {
+      state.collapsedSourceFolders = defaultCollapsedSourceFolders(data.sources, preferred);
+      state.sourceTreeInitialized = true;
+    } else {
+      expandSourceAncestors(preferred);
+    }
+    const select = $("#source");
+    select.replaceChildren();
+    for (const source of data.sources) {
+      const option = document.createElement("option");
+      option.value = source.relPath;
+      option.dataset.search = `${source.relPath} ${source.title} ${source.effectivePublish ? "published" : "draft"}`.toLowerCase();
+      option.textContent = `${source.effectivePublish ? "" : "[Draft] "}${source.relPath}`;
+      select.append(option);
+    }
+    renderSourceTree();
+    filterDocuments();
+    select.value = data.sources.some(source => source.relPath === preferred) ? preferred : (data.sources[0]?.relPath || "");
+    const loadResult = select.value ? await loadSource(select.value, initialLoad ? "Loading document catalog…" : undefined) : {draftRestored: false, parseError: ""};
+    if (!select.value) clearEditor();
+    await refreshFiles(preferred);
+    status(loadResult.parseError ? `Fix this in source mode: ${loadResult.parseError}` : (loadResult.draftRestored ? "Local draft restored; save to publish it." : (select.value ? `Loaded ${select.value}` : "No Markdown sources")));
+  } finally {
+    if (initialLoad) {
+      stopProgress?.();
+      busy(false);
+    }
   }
-  renderSourceTree();
-  filterDocuments();
-  select.value = data.sources.some(source => source.relPath === preferred) ? preferred : (data.sources[0]?.relPath || "");
-  if (select.value) await loadSource(select.value);
-  else clearEditor();
-  await refreshFiles(preferred);
 }
 function filterDocuments() {
   const query = ($("#document-search")?.value || "").trim().toLowerCase();
@@ -866,16 +881,16 @@ function clearEditor() {
   $("#preview-empty").hidden = false;
   status("No Markdown sources");
 }
-async function loadSource(path) {
+async function loadSource(path, busyReason = "Working… controls are temporarily disabled.") {
   cancelLivePreview();
   state.previewPending = "";
   const token = ++state.loadToken;
   let loadCancelled = false;
   let loadSucceeded = false;
-  busy(true);
+  busy(true, busyReason);
   try {
     const data = await responseJSON(await fetchWithTimeout(`/_oxpio/source-meta?path=${encodeURIComponent(path)}`));
-    if (token !== state.loadToken) return;
+    if (token !== state.loadToken) return {draftRestored: false, parseError: ""};
     state.path = path;
     expandSourceAncestors(path);
     renderSourceTree();
@@ -913,9 +928,10 @@ async function loadSource(path) {
     $("#preview-frame").style.height = "";
     $("#preview-empty").hidden = false;
     status(data.parseError ? `Fix this in source mode: ${data.parseError}` : `Loaded ${path}`);
-    await offerDraft(path, state.hash, token);
-    if (token !== state.loadToken) return;
+    const draftRestored = await offerDraft(path, state.hash, token);
+    if (token !== state.loadToken) return false;
     loadSucceeded = true;
+    return {draftRestored, parseError: data.parseError || ""};
   } catch (error) {
     if (isAbortError(error)) {
       loadCancelled = true;
