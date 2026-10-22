@@ -89,6 +89,18 @@ func BuildForOutputWithOverlayPreview(vaultPath, outputPath string, overlay map[
 	if err != nil {
 		return nil, err
 	}
+	return BuildForOutputWithConfigAndOverlayPreview(boundary.VaultPath, boundary.OutputPath, cfg, overlay, deleted, previewPath, concurrency)
+}
+
+// BuildForOutputWithConfigAndOverlayPreview builds an isolated candidate with
+// an explicit in-memory configuration and Markdown overlay. The configuration
+// is never written to the Vault.
+func BuildForOutputWithConfigAndOverlayPreview(vaultPath, outputPath string, cfg model.SiteConfig, overlay map[string][]byte, deleted map[string]bool, previewPath string, concurrency int) (*Result, error) {
+	boundary, err := internalfsutil.ResolveVaultOutput(vaultPath, outputPath)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ThemeDir = ""
 	return buildWithConfigAndOutputAndOverlay(boundary.VaultPath, cfg, boundary.OutputPath, overlay, deleted, previewPath, concurrency)
 }
 

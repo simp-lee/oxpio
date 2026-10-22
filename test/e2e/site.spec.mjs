@@ -357,6 +357,22 @@ test('strict Markdown runtime stays local and social PNG is independently reacha
   await context.close();
 });
 
+test('mobile sidebar opens and closes through the in-panel control', async ({browser}) => {
+  const {context, blocked} = await offlineContext(browser, {viewport: {width: 390, height: 844}});
+  const page = await context.newPage();
+  await page.goto(`${origin}/alpha/child/child/`);
+  await expect.poll(() => page.locator('[data-site-body]').getAttribute('data-sidebar-ready')).toBe('true');
+  await page.locator('[data-sidebar-toggle]').click();
+  await expect(page.locator('body')).toHaveAttribute('data-sidebar-open', 'true');
+  const close = page.locator('[data-sidebar-close]');
+  await expect(close).toBeVisible();
+  await close.click();
+  await expect(page.locator('body')).not.toHaveAttribute('data-sidebar-open', 'true');
+  await expect(page.locator('[data-sidebar-toggle]')).toHaveAttribute('aria-expanded', 'false');
+  expect(blocked).toEqual([]);
+  await context.close();
+});
+
 test('sidebar preserves encoded and whitespace-significant routes', async ({browser}) => {
   const {context, blocked} = await offlineContext(browser);
   const page = await context.newPage();

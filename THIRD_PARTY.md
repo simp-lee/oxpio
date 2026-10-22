@@ -40,6 +40,7 @@ all paths referenced by this notice.
 - `acb6440a713d880a13a21b468ba7cd43f5a2b2934972e51be791c880730777b8  internal/social/assets/DroidSansFallbackFull.ttf`
 - `cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30  internal/social/assets/DroidSansFallbackFull.LICENSE`
 
+- `aaf20145c0b8ecd450ccf6eb0cebece2f77d8e6a02c30d291f28c1167b57b2df  internal/render/runtime-assets/katex/contrib/mhchem.min.js`
 - `e5372d199bcdae8b4de71d0f7ceba72a4ba12774a27c60a6f1f77d03b3228ee4  internal/render/runtime-assets/katex/contrib/auto-render.min.js`
 - `68534840bcfdd2bffb6f0e8deb48684dd01e7f04ea2813267577afb906de1d13  internal/render/runtime-assets/katex/fonts/KaTeX_AMS-Regular.ttf`
 - `30da91e84c893f875e252689faebdc590b2871145e8adc7f9a9d4dbd8ce0b251  internal/render/runtime-assets/katex/fonts/KaTeX_AMS-Regular.woff`

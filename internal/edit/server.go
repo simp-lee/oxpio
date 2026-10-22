@@ -317,6 +317,10 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 	case "csrf":
 		s.serveCSRF(w, r)
 	default:
+		if strings.HasPrefix(path, "editor-runtime/") {
+			s.serveEditorRuntimeAsset(w, r)
+			return
+		}
 		if strings.HasPrefix(path, "preview/") {
 			s.servePreview(w, r)
 			return

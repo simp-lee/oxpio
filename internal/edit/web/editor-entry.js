@@ -1,6 +1,7 @@
 import {basicSetup} from "codemirror";
 import {markdown} from "@codemirror/lang-markdown";
-import {indentUnit} from "@codemirror/language";
+import {GFM} from "@lezer/markdown";
+import {indentUnit, syntaxTree} from "@codemirror/language";
 import {indentWithTab} from "@codemirror/commands";
 import {Compartment, EditorState, Prec, StateEffect, StateField} from "@codemirror/state";
 import {Decoration, EditorView, WidgetType, keymap} from "@codemirror/view";
@@ -14,14 +15,12 @@ const state = {
   kind: "article", mode: "visual", surface: "write", source: "", baselineSource: "", hash: "",
   bodyBaseline: "", formBaseline: {}, sourceChanged: false,
   filePath: "", fileHash: "", fileKind: "", fileSourceKind: "",
-  fileDialogMode: "", dirty: false, busy: false, busyCount: 0, busyReason: "", operationController: null, operationOwned: false, operationCommitted: false, operationCancelled: false, livePreviewBusy: false, livePreviewBusyRequest: 0, livePreviewController: null, livePreviewFrameCancel: null, loadToken: 0,
-  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", livePreviewAfterCommit: false, livePreviewAfterCommitRequest: 0, previewToken: "", catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
+  fileDialogMode: "", dirty: false, busy: false, busyCount: 0, busyReason: "", operationController: null, operationOwned: false, operationCommitted: false, operationCancelled: false, loadToken: 0,
+  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", previewToken: "", catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
 };
 const editable = new Compartment();
 let editor;
 let suppressChanges = false;
-let livePreviewTimer = 0;
-let livePreviewRequest = 0;
 const requestTimeout = 30000;
 
 function status(message) { $("#status").textContent = message; }
@@ -52,40 +51,25 @@ function dirty(value = true) {
   saveState(value ? "unsaved" : "saved", value ? "Unsaved" : "Saved");
   if (value) scheduleDraft();
 }
+function disposeHighCostWorker() {
+  if (highCostWorker) highCostWorker.terminate();
+  highCostWorker = null;
+  if (highCostWorkerURL) URL.revokeObjectURL(highCostWorkerURL);
+  highCostWorkerURL = "";
+}
 function cancelLivePreview(notify = false) {
-  clearTimeout(livePreviewTimer);
-  livePreviewTimer = 0;
-  livePreviewRequest++;
-  if (state.livePreviewController) {
-    state.livePreviewController.abort();
-    state.livePreviewController = null;
-  }
-  if (state.livePreviewFrameCancel) {
-    state.livePreviewFrameCancel();
-    state.livePreviewFrameCancel = null;
-    const frame = $("#preview-frame");
-    frame.onload = null;
-    frame.src = "about:blank";
-    frame.hidden = true;
-  }
-  state.livePreviewBusy = false;
-  state.livePreviewBusyRequest = 0;
-  syncBusyIndicator();
+  disposeHighCostWorker();
+  highCostGeneration += 1;
+  highCostInFlight = false;
   if (notify) status("Live preview cancelled.");
 }
-function scheduleLivePreview(delay = 350) {
-  const afterCommit = state.livePreviewAfterCommit;
+function scheduleLivePreview() {
   if (state.surface !== "write" || state.mode !== "visual" || !editor) {
     cancelLivePreview();
     return;
   }
-  cancelLivePreview();
-  state.livePreviewAfterCommit = false;
-  if (!afterCommit) diagnostics();
-  const request = ++livePreviewRequest;
-  state.livePreviewAfterCommitRequest = afterCommit ? request : 0;
-  editor.dispatch({effects: [livePreviewLine.of(null), livePreviewRender.of({body: "", blocks: [], styles: ""})]});
-  livePreviewTimer = setTimeout(() => refreshLivePreview(request).catch(error => diagnostics(error.diagnostics, `Live preview failed: ${error.message}`)), delay);
+  diagnostics();
+  scheduleHighCostTasks(editor.state);
 }
 function previewTokenFromURL(url) {
   return String(url || "").match(/\/[_a-z0-9-]*oxpio\/preview\/([^/]+)/iu)?.[1] || "";
@@ -162,94 +146,179 @@ async function applyPreviewResult(result, kind = "content") {
   empty.hidden = true;
   empty.classList.remove("is-loading");
 }
-async function refreshLivePreview(request) {
-  if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || !state.path || state.busy) return;
-  state.livePreviewBusy = true;
-  state.livePreviewBusyRequest = request;
-  const controller = new AbortController();
-  let cancelFrameWait;
-  let livePreviewDiagnostics = [];
-  let generatedPreviewToken = "";
-  state.livePreviewController = controller;
-  syncBusyIndicator();
-  try {
-    const source = await compose(controller.signal);
-    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || state.busy) return;
-    const result = await mutation("POST", "/_oxpio/preview", {path: state.path, source}, previewRequestHeaders(), controller.signal);
-    livePreviewDiagnostics = result.diagnostics || [];
-    const resultToken = previewTokenFromURL(result.contentURL || result.url || result.fullURL);
-    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || state.busy) {
-      await cleanupPreviewToken(resultToken);
-      return;
-    }
-    diagnostics(livePreviewDiagnostics);
-    const frame = $("#preview-frame");
-    state.previewContentURL = result.contentURL || result.url || "";
-    state.previewPageURL = result.fullURL || result.url || "";
-    state.previewToken = resultToken;
-    generatedPreviewToken = resultToken;
-    state.previewKind = "content";
-    state.previewURL = state.previewContentURL;
-    state.previewOpen = true;
-    const loaded = new Promise((resolve, reject) => {
-      let settled = false;
-      const finish = (error = null) => {
-        if (settled) return;
-        settled = true;
-        window.clearTimeout(timeout);
-        frame.removeEventListener("load", onload);
-        frame.removeEventListener("error", onerror);
-        if (error) reject(error); else resolve();
-      };
-      const onload = () => finish();
-      const onerror = () => finish(new Error("Live preview frame failed to load"));
-      cancelFrameWait = () => finish(new DOMException("Live preview cancelled", "AbortError"));
-      state.livePreviewFrameCancel = cancelFrameWait;
-      const timeout = window.setTimeout(() => {
-        const error = new Error("Live preview frame timed out");
-        error.name = "TimeoutError";
-        finish(error);
-      }, requestTimeout);
-      frame.addEventListener("load", onload, {once: true});
-      frame.addEventListener("error", onerror, {once: true});
-      frame.src = state.previewURL;
-    });
-    frame.hidden = false;
-    await loaded;
-    if (request !== livePreviewRequest || state.surface !== "write" || state.mode !== "visual" || state.busy) return;
-    const documentRoot = frame.contentDocument?.querySelector("[data-page-content]");
-    if (!documentRoot) throw new Error("Live preview page did not contain rendered content");
-    const blocks = [...documentRoot.children].map(child => serializeLivePreviewBlock(child, frame.contentDocument));
-    const styles = livePreviewStyles(frame.contentDocument);
-    editor.dispatch({effects: livePreviewRender.of({body: text(), blocks, styles})});
-    if (state.livePreviewAfterCommitRequest === request) state.livePreviewAfterCommitRequest = 0;
-  } catch (error) {
-    const currentRequest = request === livePreviewRequest && state.surface === "write" && state.mode === "visual" && !state.busy;
-    if (generatedPreviewToken) {
-      await cleanupPreviewToken(generatedPreviewToken);
-      if (state.previewToken === generatedPreviewToken) state.previewToken = "";
-    }
-    if (!currentRequest) return;
-    resetPreviewFrame();
-    const afterCommit = state.livePreviewAfterCommitRequest === request;
-    if (afterCommit) {
-      saveState("saved", "Saved with warnings");
-      status(isAbortError(error) ? "Saved; live preview cancelled." : "Saved; live preview failed; see diagnostics.");
-      state.livePreviewAfterCommitRequest = 0;
-    }
-    if (livePreviewDiagnostics.length && !error.diagnostics) error.diagnostics = livePreviewDiagnostics;
-    if (error.name !== "AbortError") {
-      if (!afterCommit) status("Live preview failed; see diagnostics.");
-      throw error;
-    }
-  } finally {
-    if (state.livePreviewFrameCancel === cancelFrameWait) state.livePreviewFrameCancel = null;
-    if (state.livePreviewBusyRequest === request) {
-      if (state.livePreviewController === controller) state.livePreviewController = null;
-      state.livePreviewBusy = false;
-      syncBusyIndicator();
-    }
+const inlineNodeNames = new Set(["StrongEmphasis", "Emphasis", "Strikethrough", "Link", "Image", "InlineCode", "Autolink", "Subscript", "Superscript", "Emoji"]);
+const markerNodeNames = new Set(["EmphasisMark", "StrikethroughMark", "LinkMark", "CodeMark", "URL", "HeaderMark", "ListMark", "QuoteMark", "TableDelimiter", "TaskMarker"]);
+const livePreviewMetrics = {coreRenders: 0, workerTasks: 0, workerCancels: 0, serviceRequests: 0, coreRenderMs: [], keyToPaintMs: []};
+window.__oxpioLivePreviewMetrics = livePreviewMetrics;
+let highCostWorker;
+let highCostWorkerURL = "";
+let highCostGeneration = 0;
+let mathRuntimePromise = null;
+let mermaidRuntimePromise = null;
+let mermaidRenderID = 0;
+let highCostInFlight = false;
+let renderGeneration = 0;
+function ensureMathRuntime() {
+  if (window.katex) return Promise.resolve(window.katex);
+  if (mathRuntimePromise) return mathRuntimePromise;
+  mathRuntimePromise = new Promise((resolve, reject) => {
+    const load = (url, next) => {
+      const script = document.createElement("script");
+      script.src = new URL(url, document.baseURI).href;
+      script.onload = next;
+      script.onerror = () => reject(new Error(`${url} failed to load`));
+      document.head.append(script);
+    };
+    load("editor-runtime/katex.min.js", () => load("editor-runtime/mhchem.min.js", () => resolve(window.katex)));
+  });
+  return mathRuntimePromise;
+}
+function ensureMermaidRuntime() {
+  if (window.mermaid) return Promise.resolve(window.mermaid);
+  if (mermaidRuntimePromise) return mermaidRuntimePromise;
+  mermaidRuntimePromise = new Promise((resolve, reject) => {
+    const script = document.createElement("script");
+    script.src = new URL("editor-runtime/mermaid.min.js", document.baseURI).href;
+    script.onload = () => resolve(window.mermaid);
+    script.onerror = () => reject(new Error("Mermaid runtime failed to load"));
+    document.head.append(script);
+  });
+  return mermaidRuntimePromise;
+}
+function directBlockNodes(viewState) {
+  const nodes = [];
+  for (let node = syntaxTree(viewState).topNode.firstChild; node; node = node.nextSibling) {
+    if (node.to > node.from) nodes.push(node);
   }
+  return nodes;
+}
+function emptyRenderDocument(viewState) {
+  return {body: viewState.doc.toString(), source: viewState.doc.toString(), blocks: [], styles: "", generation: ++renderGeneration};
+}
+function findActiveSyntaxNode(viewState, position) {
+  let node = syntaxTree(viewState).resolveInner(Math.max(0, position), -1);
+  while (node && node.name !== "Document") {
+    if (inlineNodeNames.has(node.name) || node.name === "Paragraph" || node.name === "TableCell" || node.name === "Table" || /^ATXHeading[1-6]$/u.test(node.name) || node.name.endsWith("List") || node.name === "ListItem" || node.name === "Blockquote" || node.name === "FencedCode" || node.name === "CodeBlock") return {from: node.from, to: node.to, name: node.name};
+    node = node.parent;
+  }
+  return null;
+}
+function activeNodeMatches(node, active) { return !!active && node.from === active.from && node.to === active.to && node.name === active.name; }
+function activeSourceDecorations(viewState, active) {
+  const ranges = [];
+  const activeBlock = directBlockNodes(viewState).find(node => active && node.from <= active.from && node.to >= active.to);
+  if (activeBlock) {
+    const line = viewState.doc.lineAt(activeBlock.from);
+    const heading = /^ATXHeading[1-6]$/u.test(activeBlock.name);
+    if (heading) ranges.push(Decoration.line({class: `live-heading live-heading-${activeBlock.name.slice(-1)}`}).range(line.from));
+  }
+  const nodes = [];
+  syntaxTree(viewState).iterate({enter(node) {
+    const inActiveBlock = !!activeBlock && node.from >= activeBlock.from && node.to <= activeBlock.to;
+    if (inActiveBlock && inlineNodeNames.has(node.name)) nodes.push(node);
+    if (inActiveBlock && new Set(["HeaderMark", "ListMark", "QuoteMark", "TableDelimiter"]).has(node.name) && activeBlock.name !== "FencedCode") {
+      const activeBlockNode = active && active.name === activeBlock.name && active.from === activeBlock.from && active.to === activeBlock.to;
+      if (!activeBlockNode && (!active || node.from < active.from || node.to > active.to)) {
+        const range = liveReplace(node.from, node.to);
+        if (range) ranges.push(range);
+      }
+    }
+  }});
+  const covered = [];
+  for (const node of nodes.sort((a, b) => a.from - b.from || b.to - a.to)) {
+    if (covered.some(range => node.from >= range.from && node.to <= range.to)) continue;
+    if (!activeNodeMatches(node, active)) ranges.push(...liveNodeMarkerRanges(viewState, node, active));
+    covered.push({from: node.from, to: node.to});
+  }
+  return ranges;
+}
+function utf8BoundaryMap(source) {
+  const map = new Map([[0, 0]]);
+  const encoder = new TextEncoder();
+  let bytes = 0;
+  let units = 0;
+  for (const character of source) {
+    bytes += encoder.encode(character).length;
+    units += character.length;
+    map.set(bytes, units);
+  }
+  return map;
+}
+function codeMirrorInlineRanges(from, to) {
+  if (!editor) return [];
+  const ranges = [];
+  syntaxTree(editor.state).iterate({enter(node) {
+    if (node.from >= from && node.to <= to && inlineNodeNames.has(node.name)) ranges.push({from: node.from, to: node.to, name: node.name});
+  }});
+  return ranges;
+}
+function normalizeSharedRender(result) {
+  if (!result || result.error) throw new Error(result?.error || "Markdown core returned no result");
+  const source = result.source || "";
+  const boundaries = utf8BoundaryMap(source);
+  const offset = value => boundaries.get(Number(value)) ?? 0;
+  return {
+    body: source,
+    source,
+    styles: "",
+    generation: ++renderGeneration,
+    blocks: (result.blocks || []).map(block => {
+      let from = offset(block.from);
+      let to = offset(block.to);
+      const syntaxKinds = {FencedCodeBlock: "FencedCode", Callout: "Blockquote", Blockquote: "Blockquote", Table: "Table", HTMLBlock: "CommentBlock", List: "BulletList"};
+      const container = directBlockNodes(editor.state).find(node => node.from <= from && node.to > from && (node.name === syntaxKinds[block.kind] || (block.kind === "List" && node.name === "OrderedList")));
+      if (container) {
+        from = container.from;
+        to = container.to;
+      }
+      return {from, to, name: block.kind, html: block.html, inline: codeMirrorInlineRanges(from, to)};
+    }),
+  };
+}
+function ensureHighCostWorker() {
+  if (highCostWorker || typeof Worker === "undefined") return highCostWorker;
+  const wasmURL = JSON.stringify(new URL("editor-runtime/live-preview.wasm", document.baseURI).href);
+  const execURL = JSON.stringify(new URL("editor-runtime/wasm_exec.js", document.baseURI).href);
+  const workerSource = `importScripts(${execURL}); const go = new Go(); let cancelledBefore = 0; const ready = (async () => { const response = await fetch(${wasmURL}); if (!response.ok) throw new Error("Markdown WASM request failed: " + response.status); const bytes = await response.arrayBuffer(); const compiled = await WebAssembly.instantiate(bytes, go.importObject); go.run(compiled.instance); while (typeof self.oxpioLivePreviewRender !== "function") await new Promise(resolve => setTimeout(resolve, 0)); })(); self.onmessage = async event => { if (event.data.cancelBefore) { cancelledBefore = Math.max(cancelledBefore, event.data.cancelBefore); return; } const generation = event.data.generation; if (generation <= cancelledBefore) return; try { await ready; if (generation <= cancelledBefore) return; const result = JSON.parse(self.oxpioLivePreviewRender(event.data.source)); if (generation > cancelledBefore) self.postMessage({generation, result}); } catch (error) { self.postMessage({generation, error: error.message || String(error)}); } };`;
+  highCostWorkerURL = URL.createObjectURL(new Blob([workerSource], {type: "text/javascript"}));
+  highCostWorker = new Worker(highCostWorkerURL);
+  highCostWorker.onmessage = event => {
+    if (event.data.generation !== highCostGeneration) return;
+    highCostInFlight = false;
+    try {
+      if (event.data.error) throw new Error(event.data.error);
+      const started = performance.now();
+      const rendered = normalizeSharedRender(event.data.result);
+      livePreviewMetrics.coreRenders += 1;
+      livePreviewMetrics.coreRenderMs.push(performance.now() - started);
+      if (livePreviewMetrics.coreRenderMs.length > 200) livePreviewMetrics.coreRenderMs.shift();
+      if (editor && rendered.body === editor.state.doc.toString()) editor.dispatch({effects: livePreviewCore.of(rendered)});
+    } catch (error) {
+      diagnostics([], `Write rendering failed: ${error.message}`);
+      status(`Write rendering failed: ${error.message}`);
+    }
+  };
+  highCostWorker.onerror = event => {
+    highCostInFlight = false;
+    diagnostics([], "Write rendering Worker failed.");
+    status("Write rendering Worker failed.");
+    disposeHighCostWorker();
+  };
+  return highCostWorker;
+}
+function scheduleHighCostTasks(viewState) {
+  const source = viewState.doc.toString();
+  if (source.includes("$") || source.includes("\\(")) ensureMathRuntime().catch(() => {});
+  const worker = ensureHighCostWorker();
+  if (!worker) return;
+  if (highCostInFlight) {
+    livePreviewMetrics.workerCancels += 1;
+    worker.postMessage({cancelBefore: highCostGeneration});
+  }
+  highCostGeneration += 1;
+  highCostInFlight = true;
+  livePreviewMetrics.workerTasks += 1;
+  worker.postMessage({generation: highCostGeneration, source});
 }
 function scheduleDraft() {
   clearTimeout(state.draftTimer);
@@ -260,11 +329,11 @@ function scheduleDraft() {
 function syncBusyIndicator() {
   const indicator = $("#busy-indicator");
   if (!indicator) return;
-  const active = state.busy || state.livePreviewBusy;
+  const active = state.busy;
   indicator.hidden = !active;
   if (active) {
-    $("#busy-message").textContent = state.busy ? state.busyReason : "Updating live preview…";
-    $("#cancel-operation").hidden = !(state.operationController || state.livePreviewBusy);
+    $("#busy-message").textContent = state.busyReason;
+    $("#cancel-operation").hidden = !state.operationController;
   } else {
     $("#cancel-operation").hidden = true;
   }
@@ -423,12 +492,19 @@ function loadPreferences() {
     state.keepPreview = preferences.keepPreview !== false;
     document.documentElement.dataset.theme = preferences.theme && preferences.theme !== "system" ? preferences.theme : "";
     document.documentElement.style.colorScheme = preferences.theme === "dark" ? "dark" : preferences.theme === "light" ? "light" : "";
+    syncRenderedTheme();
     $("#indent-setting").textContent = `Indent: ${state.indent} spaces`;
     $("#preference-theme").value = preferences.theme || "system";
     $("#preference-indent").value = state.indent;
     $("#preference-preview").checked = state.keepPreview;
     applyIndentPreference();
   } catch { /* browser preferences are best effort and never enter the vault */ }
+}
+function syncRenderedTheme() {
+  const theme = document.documentElement.dataset.theme || "";
+  document.querySelectorAll(".live-rendered-block, .live-rendered-inline").forEach(element => {
+    element.dataset.theme = theme || "system";
+  });
 }
 function storePreferences() {
   const preferences = {theme: $("#preference-theme").value, indent: Number($("#preference-indent").value) || 2, keepPreview: $("#preference-preview").checked};
@@ -437,6 +513,7 @@ function storePreferences() {
   localStorage.setItem("oxpio-editor-preferences", JSON.stringify({...preferences, indent: state.indent}));
   document.documentElement.dataset.theme = preferences.theme === "system" ? "" : preferences.theme;
   document.documentElement.style.colorScheme = preferences.theme === "dark" ? "dark" : preferences.theme === "light" ? "light" : "";
+  syncRenderedTheme();
   $("#indent-setting").textContent = `Indent: ${state.indent} spaces`;
   applyIndentPreference();
 }function dateInputValue(value) {
@@ -562,6 +639,7 @@ function fetchWithTimeout(url, options = {}) {
   });
 }
 async function mutation(method, url, body, headers = {}, signal) {
+  if (String(url).endsWith("/_oxpio/preview")) livePreviewMetrics.serviceRequests += 1;
   signal = signal || state.operationController?.signal;
   const session = await responseJSON(await fetchWithTimeout("/_oxpio/csrf", {signal}));
   headers = {...headers, "X-OXPIO-CSRF": session.csrf};
@@ -706,11 +784,12 @@ async function loadCatalog(preferred = state.path) {
     }
     renderSourceTree();
     filterDocuments();
-    select.value = data.sources.some(source => source.relPath === preferred) ? preferred : (data.sources[0]?.relPath || "");
+    const defaultPath = data.sources.find(source => source.relPath === "_index.md")?.relPath || data.sources[0]?.relPath || "";
+    select.value = data.sources.some(source => source.relPath === preferred) ? preferred : defaultPath;
     const loadResult = select.value ? await loadSource(select.value, initialLoad ? "Loading document catalog…" : undefined) : {draftRestored: false, parseError: ""};
     if (!select.value) clearEditor();
     await refreshFiles(preferred);
-    status(loadResult.parseError ? `Fix this in source mode: ${loadResult.parseError}` : (loadResult.draftRestored ? "Local draft restored; save to publish it." : (select.value ? `Loaded ${select.value}` : "No Markdown sources")));
+    status(loadResult.parseError ? `Fix this in source mode: ${loadResult.parseError}` : (loadResult.draftRestored ? "Local draft restored; save to publish it." : (select.value ? `Loaded ${select.value}` : "Select a Markdown document to begin editing.")));
   } finally {
     if (initialLoad) {
       stopProgress?.();
@@ -879,7 +958,7 @@ function clearEditor() {
   $("#preview-frame").removeAttribute("src");
   $("#preview-frame").style.height = "";
   $("#preview-empty").hidden = false;
-  status("No Markdown sources");
+  status("Select a Markdown document to begin editing.");
 }
 async function loadSource(path, busyReason = "Working… controls are temporarily disabled.") {
   cancelLivePreview();
@@ -1083,7 +1162,6 @@ async function save() {
       try { await loadCatalog(path); } finally { state.suppressPreview = false; }
       if (mode === "source") { state.mode = "source"; setText(state.source); updateMode(); }
       if (reopenLivePreview) {
-        state.livePreviewAfterCommit = true;
         state.previewPending = "live";
       } else if (reopenPreview) {
         let previewResult;
@@ -1439,8 +1517,8 @@ function indentExtensions(spaces = state.indent) {
   return [indentUnit.of(" ".repeat(spaces)), EditorState.tabSize.of(spaces)];
 }
 const indentation = new Compartment();
-const livePreviewLine = StateEffect.define();
-const livePreviewRender = StateEffect.define();
+const livePreviewActive = StateEffect.define();
+const livePreviewCore = StateEffect.define();
 class LivePreviewWidget extends WidgetType {
   constructor(text, className) { super(); this.text = text; this.className = className; }
   eq(other) { return this.text === other.text && this.className === other.className; }
@@ -1452,139 +1530,208 @@ class LivePreviewWidget extends WidgetType {
   }
 }
 class LiveRenderedWidget extends WidgetType {
-  constructor(html, styles) { super(); this.html = html; this.styles = styles; }
-  eq(other) { return this.html === other.html && this.styles === other.styles; }
+  constructor(html, styles, from = 0, to = 0, name = "", source = "", inline = [], inlineHost = false) { super(); this.html = html; this.styles = styles; this.from = from; this.to = to; this.name = name; this.source = source; this.inline = inline; this.inlineHost = inlineHost; }
+  eq(other) { return this.html === other.html && this.styles === other.styles && this.from === other.from && this.to === other.to && this.name === other.name && this.source === other.source && this.inline === other.inline && this.inlineHost === other.inlineHost; }
   toDOM() {
     const element = document.createElement("div");
-    element.className = "live-rendered-block";
+    element.className = this.inlineHost ? "live-rendered-inline" : "live-rendered-block";
+    element.dataset.theme = document.documentElement.dataset.theme || "system";
+    element.dataset.liveBlockFrom = String(this.from);
+    element.dataset.liveBlockTo = String(this.to);
+    element.dataset.liveBlockName = this.name;
     const shadow = element.attachShadow({mode: "open"});
     const style = document.createElement("style");
-    style.textContent = `:host { --preview-bg: #fff; --preview-surface: #fff; --preview-text: #20252b; --preview-muted: #687687; --preview-accent: #1769aa; --preview-border: #dce1e6; --preview-code-bg: #20252b; --preview-code-text: #f5f7fa; --preview-inline-code: #eef1f4; --preview-table-head: #f0f4f7; --preview-callout: #f4f8fb; display: block; max-width: 100%; color: var(--preview-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; }${this.styles}`;
+    style.textContent = `:host { --preview-bg: #fff; --preview-surface: #fff; --preview-text: #20252b; --preview-muted: #687687; --preview-accent: #1769aa; --preview-border: #dce1e6; --preview-code-bg: #20252b; --preview-code-text: #f5f7fa; --preview-inline-code: #eef1f4; --preview-table-head: #f0f4f7; --preview-callout: #f4f8fb; display: block; max-width: 100%; color: var(--preview-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; } :host(.live-rendered-inline) { display: inline; vertical-align: baseline; } .content-preview-content { min-width: 0; } ${this.inlineHost ? ".content-preview-content, p { display: inline; margin: 0; }" : ""} h1, h2, h3, h4, h5, h6 { margin: .5rem 0; } p { margin: .7rem 0; } pre { overflow-x: auto; padding: .75rem; background: #20252b; color: #f5f7fa; } pre.mermaid { background: #f8fafb; color: #20252b; border: 1px dashed #aeb7c2; } code, .live-inline-code { padding: .08rem .25rem; border-radius: .2rem; background: #eef1f4; } pre code { padding: 0; background: transparent; } blockquote { margin: .75rem 0; padding-left: .8rem; border-left: 3px solid #aeb7c2; color: #495665; } .callout { margin: .75rem 0; padding: .65rem .8rem; border-left: 3px solid #2d75b9; border-radius: .25rem; background: #f4f8fb; } .callout-title { margin-bottom: .35rem; color: #1769aa; font-weight: 700; } .footnotes { margin-top: 1.5rem; padding-top: .5rem; border-top: 1px solid #dce1e6; font-size: .85em; } table { width: 100%; border-collapse: collapse; } th, td { padding: .35rem .5rem; border: 1px solid #dce1e6; text-align: left; } th { background: #f0f4f7; } a, .live-link { color: #1769aa; text-decoration: underline; } .live-image { padding: .15rem .4rem; border: 1px solid #c7cdd4; border-radius: .25rem; background: #f8fafb; } .live-math { font-family: Georgia, serif; font-style: italic; } ul:has(> li > .oxpio-task-input), ul:has(> li > p > .oxpio-task-input) { list-style: none; padding-left: 0; } ul:has(> li > .oxpio-task-input) > li, ul:has(> li > p > .oxpio-task-input) > li { padding-left: 0; } .oxpio-task-input { appearance: none; -webkit-appearance: none; display: inline-block; width: 1.25em; height: 1.25em; margin: 0 .35em 0 0; padding: 0; vertical-align: -.18em; border: 1px solid #aeb4bb; border-radius: .28em; background: transparent; background-position: 50% 50%; background-repeat: no-repeat; background-size: 100%; color: #687385; opacity: 1; } .oxpio-task-input:checked { border: none; border-radius: 0; background-image: none; background-color: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: 100%; mask-size: 100%; -webkit-mask-position: 50% 50%; mask-position: 50% 50%; } .oxpio-task-input[data-task='x']:checked, .oxpio-task-input[data-task='X']:checked { border-radius: .28em; background-color: #8b5cf6; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m5 12 4 4L19 6' fill='none' stroke='white' stroke-linecap='round' stroke-linejoin='round' stroke-width='2.5'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='/']:checked { background-image: none; background-color: transparent; border: none; position: relative; overflow: hidden; } .oxpio-task-input[data-task='/']:checked::after { content: ''; display: block; position: absolute; inset: 0 auto 0 0; width: calc(50% - .5px); background-color: #8b5cf6; } .oxpio-task-input[data-task='?']:checked { border: 0; background-color: #eab308; background-size: 200% 90%; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 16 16"%3E%3Cpath fill="white" fill-rule="evenodd" d="M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='"']:checked { border: 0; background-color: #14b8a6; background-size: 75%; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 24 24"%3E%3Cpath fill="white" d="M6.5 10c-.223 0-.437.034-.65.065c.069-.232.14-.468.254-.68c.114-.308.292-.575.469-.844c.148-.291.409-.488.601-.737c.201-.242.475-.403.692-.604c.213-.21.492-.315.714-.463c.232-.133.434-.28.65-.35l.539-.222l.474-.197l-.485-1.938l-.597.144c-.191.048-.424.104-.689.171c-.271.05-.56.187-.882.312c-.318.142-.686.238-1.028.466c-.344.218-.741.4-1.091.692c-.339.301-.748.562-1.05.945c-.33.358-.656.734-.909 1.162c-.293.408-.492.856-.702 1.299c-.19.443-.343.896-.468 1.336c-.237.882-.343 1.72-.384 2.437c-.034.718-.014 1.315.028 1.747c.015.204.043.402.063.539l.025.168l.026-.006A4.5 4.5 0 1 0 6.5 10z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='>']:checked { color: #687385; transform: rotate(90deg); -webkit-mask-position: 50% 100%; mask-position: 50% 100%; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10.894 2.553a1 1 0 0 0-1.788 0l-7 14a1 1 0 0 0 1.169 1.409l5-1.429A1 1 0 0 0 9 15.571V11a1 1 0 1 1 2 0v4.571a1 1 0 0 0 .725.962l5 1.428a1 1 0 0 0 1.17-1.408l-7-14z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='<']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='-']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M3 10a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='!']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-8a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0V6a1 1 0 0 0-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='*']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a.951.951 0 0 0 .951-.69l1.07-3.292z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='l']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M5.05 4.05a7 7 0 1 1 9.9 9.9L10 18.9l-4.95-4.95a7 7 0 0 1 0-9.9ZM10 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='b']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14l-5-2.5L5 18V4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='i']:checked { background-color: #2563eb; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 512 512"%3E%3Cpath fill="none" stroke="white" stroke-width="40" d="M196 220h64v172M187 396h138"/%3E%3Cpath fill="white" d="M256 160a32 32 0 1 1 32-32a32 32 0 0 1-32 32Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='S']:checked { background-color: #16a34a; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 48 48"%3E%3Cpath fill="white" d="M26 8a2 2 0 1 0-4 0v2a8 8 0 1 0 0 16v8a4 4 0 0 1-3.773-2.666a2 2 0 0 0-3.771 1.332A8 8 0 0 0 22 38v2a2 2 0 1 0 4 0v-2a8 8 0 1 0 0-16v-8a4 4 0 0 1 3.773 2.666a2 2 0 0 0 3.771-1.332A8 8 0 0 0 26 10V8Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='I']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M11 3a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0V3zM15.657 5.757a1 1 0 0 0-1.414-1.414l-.707.707a1 1 0 0 0 1.414 1.414l.707-.707zM18 10a1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 1 1zM8 16v-1h4v1a2 2 0 1 1-4 0zM12 14a4 4 0 1 0-4.954 0c.27.213.462.519.476.859h4.002z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='f']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12.395 2.553a1 1 0 0 0-1.45-.385C7.8 4.3 7.1 8.2 7 10.7A2.6 2.6 0 0 1 5.5 8.2A7 7 0 1 0 15 13c0-3.2-2.2-5.7-2.6-10.4Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='k']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 8a6 6 0 0 1-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1 1 18 8zm-6-4a1 1 0 1 0 0 2 2 2 0 0 1 2 2 1 1 0 1 0 2 0 4 4 0 0 0-4-4z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='w']:checked { color: #7c3aed; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 13v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4a4 4 0 0 1-2 1 3 3 0 0 1-3-2 3 3 0 0 1-6 0 3 3 0 0 1-3 2 4 4 0 0 1-2-1Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='p']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 10.5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 1 1-3 0v-6zM6 10.333v5.43a2 2 0 0 0 1.106 1.79L8 18h6.36a2 2 0 0 0 1.96-1.6l1.2-6A2 2 0 0 0 15.56 8H12V4a2 2 0 0 0-2-2 1 1 0 0 0-1 1v.667a4 4 0 0 1-.8 2.4L6.8 7.933a4 4 0 0 0-.8 2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='c']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M18 9.5a1.5 1.5 0 1 1-3 0v-6a1.5 1.5 0 1 1 3 0v6zM14 9.667v-5.43A2 2 0 0 0 11.9 2H5.64a2 2 0 0 0-1.96 1.6l-1.2 6A2 2 0 0 0 4.44 12H8v4a2 2 0 0 0 2 2 1 1 0 0 0 1-1v-.667a4 4 0 0 0 .8-2.4l1.4-1.866a4 4 0 0 0 .8-2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='u']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 7a1 1 0 1 0 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V8.414l-4.293 4.293a1 1 0 0 1-1.414 0L8 10.414l-4.293 4.293a1 1 0 0 1-1.414-1.414l5-5a1 1 0 0 1 1.414 0L11 10.586 14.586 7H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='d']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 13a1 1 0 1 0 0 2h5a1 1 0 0 0 1-1V9a1 1 0 1 0-2 0v2.586L12.707 7.293a1 1 0 0 0-1.414 0L8 10.586 3.707 6.293a1 1 0 0 0-1.414 1.414l5 5a1 1 0 0 0 1.414 0L11 10.414 14.586 13H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked, .oxpio-task-input[data-task='M']:checked, .oxpio-task-input[data-task='D']:checked { -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.25 2.25 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.25 2.25 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked { color: #16a34a; } .oxpio-task-input[data-task='M']:checked { color: #7c3aed; } .oxpio-task-input[data-task='D']:checked { color: #687385; } .oxpio-task-input[data-task='\"']:checked { border: 0; background-color: #14b8a6; background-size: 75%; background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z'/%3E%3C/svg%3E\"); } .oxpio-task-input[data-task='P']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='M']:checked { color: #7c3aed; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='D']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 1 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0-1.5.75.75 0 0 0-1.5 0ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1-2.5 0Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='c']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M18 9.5a1.5 1.5 0 1 1-3 0v-6a1.5 1.5 0 1 1 3 0v6zM14 9.667v-5.43A2 2 0 0 0 11.9 2H5.64a2 2 0 0 0-1.96 1.6l-1.2 6A2 2 0 0 0 4.44 12H8v4a2 2 0 0 0 2 2 1 1 0 0 0 1-1v-.667a4 4 0 0 0 .8-2.4l1.4-1.866a4 4 0 0 0 .8-2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='M']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='D']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0-1.5.75.75 0 0 0-1.5 0ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1-2.5 0Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='>']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10.894 2.553a1 1 0 0 0-1.788 0l-7 14a1 1 0 0 0 1.169 1.409l5-1.429A1 1 0 0 0 9 15.571V11a1 1 0 1 1 2 0v4.571a1 1 0 0 0 .725.962l5 1.428a1 1 0 0 0 1.17-1.408l-7-14z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='<']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='-']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M3 10a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='!']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-8a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0V6a1 1 0 0 0-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='*']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-1.371-1.81.588-1.81h3.461a.951.951 0 0 0 .951-.69l1.07-3.292z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='l']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M5.05 4.05a7 7 0 1 1 9.9 9.9L10 18.9l-4.95-4.95a7 7 0 0 1 0-9.9ZM10 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='b']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14l-5-2.5L5 18V4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='I']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M11 3a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0V3zM15.657 5.757a1 1 0 0 0-1.414-1.414l-.707.707a1 1 0 0 0 1.414 1.414l.707-.707zM18 10a1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 1 1zM8 16v-1h4v1a2 2 0 1 1-4 0zM12 14a4 4 0 1 0-4.954 0c.27.213.462.519.476.859h4.002z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='f']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12.395 2.553a1 1 0 0 0-1.45-.385C7.8 4.3 7.1 8.2 7 10.7A2.6 2.6 0 0 1 5.5 8.2A7 7 0 1 0 15 13c0-3.2-2.2-5.7-2.6-10.4Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='k']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 8a6 6 0 0 1-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1 1 18 8zm-6-4a1 1 0 1 0 0 2 2 2 0 0 1 2 2 1 1 0 1 0 2 0 4 4 0 0 0-4-4z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='w']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 13v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4a4 4 0 0 1-2 1 3 3 0 0 1-3-2 3 3 0 0 1-6 0 3 3 0 0 1-3 2 4 4 0 0 1-2-1Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='p']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 10.5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 1 1-3 0v-6zM6 10.333v5.43a2 2 0 0 0 1.106 1.79L8 18h6.36a2 2 0 0 0 1.96-1.6l1.2-6A2 2 0 0 0 15.56 8H12V4a2 2 0 0 0-2-2 1 1 0 0 0-1 1v.667a4 4 0 0 1-.8 2.4L6.8 7.933a4 4 0 0 0-.8 2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='u']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 7a1 1 0 1 0 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V8.414l-4.293 4.293a1 1 0 0 1-1.414 0L8 10.414l-4.293 4.293a1 1 0 0 1-1.414-1.414l5-5a1 1 0 0 1 1.414 0L11 10.586 14.586 7H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='d']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 13a1 1 0 1 0 0 2h5a1 1 0 0 0 1-1V9a1 1 0 1 0-2 0v2.586L12.707 7.293a1 1 0 0 0-1.414 0L8 10.586 3.707 6.293a1 1 0 0 0-1.414 1.414l5 5a1 1 0 0 0 1.414 0L11 10.414 14.586 13H12z'/%3E%3C/svg%3E"); } :host([data-theme="dark"]) .oxpio-task-input[data-task='?']:checked, :host-context(html[data-theme="dark"]) .oxpio-task-input[data-task='?']:checked { background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' fill-opacity='.8' d='M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z\"/%3E%3C/svg%3E\"); } :host([data-theme="dark"]) .oxpio-task-input[data-task='\"']:checked, :host-context(html[data-theme="dark"]) .oxpio-task-input[data-task='\"']:checked { background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' fill-opacity='.7' d='M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z'/%3E%3C/svg%3E\"); } @media (prefers-color-scheme: dark) { :host([data-theme="system"]) .oxpio-task-input[data-task='?']:checked { background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 16 16"%3E%3Cpath fill="black" fill-opacity="0.8" d="M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z"/%3E%3C/svg%3E'); } :host([data-theme="system"]) .oxpio-task-input[data-task='\"']:checked { background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 24 24"%3E%3Cpath fill="black" fill-opacity="0.7" d="M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z"/%3E%3C/svg%3E'); } } li:has(> input[data-task='x']:checked), li:has(> input[data-task='X']:checked), li:has(> input[data-task='-']:checked), li:has(> p > input[data-task='x']:checked), li:has(> p > input[data-task='X']:checked), li:has(> p > input[data-task='-']:checked) { text-decoration: line-through solid currentColor 1px; }${this.styles}`;
+    const mathStyle = document.createElement("link");
+    mathStyle.rel = "stylesheet";
+    mathStyle.href = new URL("editor-runtime/katex.min.css", document.baseURI).href;
+    const taskStatusStyle = document.createElement("link");
+    taskStatusStyle.rel = "stylesheet";
+    taskStatusStyle.href = new URL("editor-runtime/task-status.css", document.baseURI).href;
     const content = document.createElement("div");
     content.className = "content-preview-content";
     content.innerHTML = this.html;
-    shadow.append(style, content);
+    const inlineElements = [...content.querySelectorAll("strong, em, del, a, code, img")];
+    const inlineSelectors = {StrongEmphasis: "strong", Emphasis: "em", Strikethrough: "del", Link: "a", Autolink: "a", InlineCode: "code", Image: "img"};
+    const usedInlineElements = new Set();
+    (this.inline || []).forEach(range => {
+      const selector = inlineSelectors[range.name];
+      const element = inlineElements.find(candidate => candidate.matches(selector) && !usedInlineElements.has(candidate));
+      if (!element) return;
+      usedInlineElements.add(element);
+      element.setAttribute("data-live-inline-from", String(range.from));
+      element.setAttribute("data-live-inline-to", String(range.to));
+      element.setAttribute("data-live-inline-name", range.name);
+    });
+    content.querySelectorAll("[data-live-inline-offset-from]").forEach(inline => {
+      const from = this.from + Number(inline.getAttribute("data-live-inline-offset-from"));
+      const to = this.from + Number(inline.getAttribute("data-live-inline-offset-to"));
+      inline.setAttribute("data-live-inline-from", String(from));
+      inline.setAttribute("data-live-inline-to", String(to));
+      inline.removeAttribute("data-live-inline-offset-from");
+      inline.removeAttribute("data-live-inline-offset-to");
+    });
+    content.querySelectorAll("[data-live-math-from]").forEach(math => {
+      const from = utf8BoundaryMap(this.source).get(Number(math.getAttribute("data-live-math-from"))) ?? this.from;
+      const to = utf8BoundaryMap(this.source).get(Number(math.getAttribute("data-live-math-to"))) ?? this.to;
+      math.setAttribute("data-live-inline-from", String(from));
+      math.setAttribute("data-live-inline-to", String(to));
+      math.setAttribute("data-live-inline-name", "Math");
+      math.removeAttribute("data-live-math-from");
+      math.removeAttribute("data-live-math-to");
+    });
+    const renderMath = () => content.querySelectorAll(".oxpio-math").forEach(math => {
+      if (!window.katex?.renderToString || math.querySelector(".katex, .katex-error")) return;
+      const raw = math.textContent.trim();
+      const display = raw.startsWith("$$") || raw.startsWith("\\[");
+      const wrapped = raw.startsWith("\\(") || raw.startsWith("\\[");
+      const formula = display || wrapped ? raw.slice(2, -2).trim() : raw.slice(1, -1);
+      try { math.innerHTML = window.katex.renderToString(formula, {displayMode: display, throwOnError: false, trust: false}); } catch { /* KaTeX keeps the source visible. */ }
+    });
+    if (window.katex) renderMath(); else ensureMathRuntime().then(renderMath).catch(() => {});
+    const mermaidBlocks = [...content.querySelectorAll("pre code.language-mermaid")].map(code => {
+      const block = code.parentElement;
+      const source = code.textContent;
+      block.classList.add("mermaid");
+      block.textContent = source;
+      return {block, source};
+    });
+    if (mermaidBlocks.length) {
+      ensureMermaidRuntime().then(async mermaid => {
+        mermaid.initialize({startOnLoad: false, securityLevel: "strict", theme: "neutral"});
+        for (const {block, source} of mermaidBlocks) {
+          const rendered = await mermaid.render(`oxpio-mermaid-${++mermaidRenderID}`, source);
+          block.innerHTML = rendered.svg;
+          rendered.bindFunctions?.(block);
+        }
+      }).catch(() => {});
+    }
+    shadow.append(style, taskStatusStyle, mathStyle, content);
     return element;
   }
 }
-function markdownBlocks(source) {
-  const blocks = [];
-  const separator = /\n[ \t]*\n+/g;
-  let start = 0;
-  let match;
-  while ((match = separator.exec(source)) !== null) {
-    if (match.index > start) blocks.push({from: start, to: match.index});
-    start = match.index + match[0].length;
-  }
-  if (start < source.length) blocks.push({from: start, to: source.length});
-  return blocks;
-}
-function serializeLivePreviewBlock(element, documentRoot) {
-  const clone = element.cloneNode(true);
-  for (const node of [clone, ...clone.querySelectorAll("[src], [href]")]) {
-    for (const attribute of ["src", "href"]) {
-      const value = node.getAttribute?.(attribute);
-      if (value && !/^(?:#|data:|https?:|mailto:|javascript:)/iu.test(value)) node.setAttribute(attribute, new URL(value, documentRoot.baseURI).href);
-    }
-  }
-  return clone.outerHTML;
-}
-function livePreviewStyles(documentRoot) {
-  return [...(documentRoot?.styleSheets || [])].flatMap(sheet => {
-    try { return [...sheet.cssRules].map(rule => rule.cssText); } catch { return []; }
-  }).join("\n");
-}
 function liveReplace(from, to) { return from < to ? Decoration.replace({}).range(from, to) : null; }
 function liveWidget(from, to, text, className) { return from < to ? Decoration.replace({widget: new LivePreviewWidget(text, className)}).range(from, to) : null; }
-function renderedLivePreviewDecorations(viewState, _activeLine, rendered) {
-  if (!rendered?.blocks?.length || rendered.body !== viewState.doc.toString()) return null;
-  const blocks = markdownBlocks(rendered.body);
-  if (blocks.length !== rendered.blocks.length) return null;
-  const ranges = [];
-  blocks.forEach((block, index) => {
-    ranges.push(Decoration.replace({widget: new LiveRenderedWidget(rendered.blocks[index], rendered.styles), block: true}).range(block.from, block.to));
-  });
-  return ranges.length ? Decoration.set(ranges, true) : Decoration.none;
+function findSyntaxNodes(viewState, from, to, names) {
+  const nodes = [];
+  syntaxTree(viewState).iterate({enter(node) {
+    if (names.has(node.name) && node.from >= from && node.to <= to) nodes.push(node);
+  }});
+  return nodes;
 }
-function buildLivePreviewDecorations(viewState, activeLine, rendered) {
-  if (state.surface !== "write" || state.mode !== "visual") return Decoration.none;
-  const renderedDecorations = renderedLivePreviewDecorations(viewState, activeLine, rendered);
-  if (renderedDecorations) return renderedDecorations;
-  const doc = viewState.doc;
+function liveNodeMarkerRanges(viewState, node, activeInline) {
+  if (activeInline && activeInline.from === node.from && activeInline.to === node.to) return [];
+  const children = findSyntaxNodes(viewState, node.from, node.to, new Set(["EmphasisMark", "CodeMark", "LinkMark", "URL", "StrikethroughMark"]));
   const ranges = [];
-  for (let number = 1; number <= doc.lines; number++) {
-    const line = doc.line(number);
-    const source = line.text;
-    const add = range => { if (range) ranges.push(range); };
-    const heading = source.match(/^(\u0020{0,3})(#{1,6})\s+/);
-    const blockquote = source.match(/^(\u0020{0,3}>\s?)/);
-    const callout = source.match(/^(\u0020{0,3}>\s?)\[!([^\]]+)\]\s*/i);
-    const list = source.match(/^(\u0020{0,3})(?:(?:[-+*])|(?:\d+[.)]))\s+/);
-    const task = source.match(/^(\u0020{0,3})(?:[-+*]|\d+[.)])\s+\[[ xX]\]\s+/);
-    const fence = source.match(/^\u0020{0,3}(`{3,}|~{3,})/);
-    const tableRule = /^\s*\|?(?:\s*:?-+:?\s*\|)+\s*$/.test(source);
-    const horizontalRule = /^\s{0,3}(?:\*\s*){3,}$|^\s{0,3}(?:-\s*){3,}$|^\s{0,3}(?:_\s*){3,}$/.test(source);
-    if (heading) {
-      ranges.push(Decoration.line({class: `live-heading live-heading-${heading[2].length}`}).range(line.from));
-      add(liveReplace(line.from + heading[1].length, line.from + heading[0].length));
-    } else if (task) {
-      ranges.push(Decoration.line({class: "live-list live-task"}).range(line.from));
-      add(liveReplace(line.from + task[1].length, line.from + task[0].length));
-    } else if (list) {
-      ranges.push(Decoration.line({class: "live-list"}).range(line.from));
-      add(liveReplace(line.from + list[1].length, line.from + list[0].length));
-    } else if (callout) {
-      ranges.push(Decoration.line({class: "live-blockquote live-callout"}).range(line.from));
-      add(liveReplace(line.from, line.from + callout[1].length));
-      add(liveWidget(line.from + callout[1].length, line.from + callout[0].length, callout[2].toUpperCase(), "live-callout-label"));
-    } else if (blockquote) {
-      ranges.push(Decoration.line({class: "live-blockquote"}).range(line.from));
-      add(liveReplace(line.from, line.from + blockquote[1].length));
-    } else if (fence || tableRule || horizontalRule) {
-      ranges.push(Decoration.line({class: fence ? "live-code-fence" : "live-hidden-line"}).range(line.from));
-      add(liveReplace(line.from, line.to));
-      continue;
+  const addReplace = child => {
+    const range = liveReplace(child.from, child.to);
+    if (range) ranges.push(range);
+  };
+  if (node.name === "Image") {
+    const source = viewState.sliceDoc(node.from, node.to);
+    const label = source.match(/^!\[([^\]]*)\]/u)?.[1] || "image";
+    const range = liveWidget(node.from, node.to, `🖼 ${label}`, "live-image");
+    return range ? [range] : [];
+  }
+  if (node.name === "Link") {
+    const marks = children.filter(child => child.name === "LinkMark").sort((a, b) => a.from - b.from);
+    children.filter(child => child.name === "LinkMark" || child.name === "URL").forEach(addReplace);
+    if (marks.length >= 2 && marks[0].to <= marks[1].from) {
+      ranges.push(Decoration.mark({class: "live-link"}).range(marks[0].to, marks[1].from));
     }
-    const image = source.match(/!\[([^\]]*)\]\(([^)]+)\)/);
-    const link = image || source.match(/\[([^\]]+)\]\(([^)]+)\)/);
-    if (link) {
-      const start = link.index;
-      const label = image ? `🖼 ${link[1] || link[2]}` : link[1];
-      add(liveWidget(line.from + start, line.from + start + link[0].length, label, image ? "live-image" : "live-link"));
-      continue;
+    return ranges;
+  }
+  if (node.name === "InlineCode") {
+    children.filter(child => child.name === "CodeMark").forEach(addReplace);
+    const marks = children.filter(child => child.name === "CodeMark").sort((a, b) => a.from - b.from);
+    if (marks.length >= 2) ranges.push(Decoration.mark({class: "live-inline-code"}).range(marks[0].to, marks[1].from));
+    return ranges;
+  }
+  const marks = children.filter(child => child.name.endsWith("Mark")).sort((a, b) => a.from - b.from);
+  marks.forEach(addReplace);
+  if (marks.length >= 2) {
+    const className = node.name === "StrongEmphasis" ? "live-strong" : node.name === "Strikethrough" ? "live-strikethrough" : "live-emphasis";
+    ranges.push(Decoration.mark({class: className}).range(marks[0].to, marks[marks.length - 1].from));
+  }
+  return ranges;
+}
+function sharedMathContext(block, source, activeFrom = null, activeTo = null) {
+  if (!block?.html || !source) return null;
+  const root = document.createElement("div");
+  root.innerHTML = block.html;
+  const boundaries = utf8BoundaryMap(source);
+  const mathNodes = [...root.querySelectorAll(".oxpio-math[data-live-math-from]")];
+  const math = mathNodes.find(candidate => boundaries.get(Number(candidate.getAttribute("data-live-math-from"))) === activeFrom && boundaries.get(Number(candidate.getAttribute("data-live-math-to"))) === activeTo) || mathNodes[0];
+  if (!math) return null;
+  const from = boundaries.get(Number(math.getAttribute("data-live-math-from")));
+  const to = boundaries.get(Number(math.getAttribute("data-live-math-to")));
+  if (from === undefined || to === undefined) return null;
+  const beforeRange = document.createRange();
+  beforeRange.selectNodeContents(root);
+  beforeRange.setEndBefore(math);
+  const afterRange = document.createRange();
+  afterRange.selectNodeContents(root);
+  afterRange.setStartAfter(math);
+  const before = document.createElement("div");
+  before.append(beforeRange.cloneContents());
+  const after = document.createElement("div");
+  after.append(afterRange.cloneContents());
+  return {from, to, before: before.innerHTML, after: after.innerHTML};
+}
+function renderedLivePreviewDecorations(viewState, active, rendered) {
+  if (!rendered?.blocks?.length || rendered.body !== viewState.doc.toString()) return null;
+  const blocks = rendered.blocks;
+  const activeBlock = blocks.find(block => active && block.from <= active.from && block.to >= active.to);
+  const ranges = [];
+  const revealAll = viewState.selection.main.from === 0 && viewState.selection.main.to === viewState.doc.length;
+  for (const block of blocks) {
+    const isTable = block.name === "Table";
+    if (active?.name === "Math" && activeBlock === block) {
+      const context = sharedMathContext(block, rendered.source || rendered.body, active.from, active.to);
+      if (context && context.from === active.from && context.to === active.to) {
+        if (block.from < active.from && context.before) ranges.push(Decoration.replace({widget: new LiveRenderedWidget(context.before, rendered.styles, block.from, active.from, block.name, rendered.source || rendered.body, [], true)}).range(block.from, active.from));
+        if (active.to < block.to && context.after) ranges.push(Decoration.replace({widget: new LiveRenderedWidget(context.after, rendered.styles, active.to, block.to, block.name, rendered.source || rendered.body, [], true)}).range(active.to, block.to));
+        continue;
+      }
     }
-    const markerStart = heading?.[0].length || task?.[0].length || list?.[0].length || 0;
-    const markers = /(`+|\*\*|__|\*|_)/g;
-    let marker;
-    while ((marker = markers.exec(source)) !== null) {
-      if (marker.index < markerStart) continue;
-      add(liveReplace(line.from + marker.index, line.from + marker.index + marker[0].length));
+    if (revealAll) {
+      ranges.push(...activeSourceDecorations(viewState, {from: block.from, to: block.to, name: block.name}));
+    } else if (!activeBlock || block !== activeBlock || isTable) {
+      ranges.push(Decoration.replace({widget: new LiveRenderedWidget(block.html, rendered.styles, block.from, block.to, block.name, rendered.source || rendered.body, block.inline), block: true}).range(block.from, block.to));
+    } else {
+      ranges.push(...activeSourceDecorations(viewState, active));
     }
   }
   return ranges.length ? Decoration.set(ranges.sort((a, b) => a.from - b.from || a.to - b.to), true) : Decoration.none;
 }
+function buildLivePreviewDecorations(viewState, active, rendered) {
+  if (state.surface !== "write" || state.mode !== "visual") return Decoration.none;
+  return renderedLivePreviewDecorations(viewState, active, rendered) || Decoration.none;
+}
 const livePreviewDecorations = StateField.define({
   create: viewState => {
-    const rendered = {body: "", blocks: [], styles: ""};
-    return {line: viewState.doc.lineAt(viewState.selection.main.head).number, rendered, decorations: buildLivePreviewDecorations(viewState, null, rendered)};
+    const active = findActiveSyntaxNode(viewState, viewState.selection.main.head);
+    const rendered = emptyRenderDocument(viewState);
+    return {active, rendered, decorations: buildLivePreviewDecorations(viewState, active, rendered)};
   },
   update(value, transaction) {
-    let line = value.line;
+    let active = value.active;
     let rendered = value.rendered;
-    let explicit = false;
+    let explicitActive = false;
+    let coreRendered = false;
     for (const effect of transaction.effects) {
-      if (effect.is(livePreviewLine)) { line = effect.value; explicit = true; }
-      if (effect.is(livePreviewRender)) { rendered = effect.value; explicit = true; }
+      if (effect.is(livePreviewActive)) { active = effect.value; explicitActive = true; }
+      if (effect.is(livePreviewCore)) { rendered = effect.value; coreRendered = true; }
     }
-    if (transaction.docChanged || transaction.selection) line = transaction.state.doc.lineAt(transaction.state.selection.main.head).number;
-    if (transaction.docChanged && rendered.body !== transaction.state.doc.toString()) rendered = {body: "", blocks: [], styles: ""};
-    if (!transaction.docChanged && !transaction.selection && !explicit) return value;
-    return {line, rendered, decorations: buildLivePreviewDecorations(transaction.state, line, rendered)};
+    if (transaction.docChanged) rendered = emptyRenderDocument(transaction.state);
+    if (transaction.selection && !explicitActive) active = findActiveSyntaxNode(transaction.state, transaction.state.selection.main.head);
+    if (!transaction.docChanged && !transaction.selection && !explicitActive && !coreRendered) return value;
+    return {active, rendered, decorations: buildLivePreviewDecorations(transaction.state, active, rendered)};
   },
   provide: field => EditorView.decorations.from(field, value => value.decorations),
 });
 function editorExtensions() {
-  return [basicSetup, markdown(), livePreviewDecorations, indentation.of(indentExtensions()), EditorView.lineWrapping, editable.of(EditorView.editable.of(!state.busy)),
+  return [basicSetup, markdown({extensions: GFM}), livePreviewDecorations, indentation.of(indentExtensions()), EditorView.lineWrapping, editable.of(EditorView.editable.of(!state.busy)),
     Prec.highest(keymap.of([
       {key: "Mod-b", run: () => { command("bold"); return true; }},
       {key: "Mod-i", run: () => { command("italic"); return true; }},
@@ -1599,6 +1746,11 @@ function editorExtensions() {
         state.sourceChanged = true;
         updateEditorStats();
         dirty();
+        const keyStart = performance.now();
+        requestAnimationFrame(() => {
+          livePreviewMetrics.keyToPaintMs.push(performance.now() - keyStart);
+          if (livePreviewMetrics.keyToPaintMs.length > 200) livePreviewMetrics.keyToPaintMs.shift();
+        });
         scheduleLivePreview();
       }
     }),
@@ -1759,10 +1911,17 @@ editor.dom.addEventListener("click", event => {
   if (state.surface !== "write" || state.mode !== "visual") return;
   const target = event.target instanceof Element ? event.target.closest(".live-rendered-block") : null;
   if (!target) return;
+  const path = event.composedPath?.() || [];
+  const inline = path.find(node => node instanceof Element && node.hasAttribute("data-live-inline-from"));
+  const block = path.find(node => node instanceof Element && node.hasAttribute("data-live-block-from"));
   let position;
-  try { position = editor.posAtDOM(target, 0); } catch { position = editor.state.selection.main.head; }
+  try {
+    position = inline ? Number(inline.getAttribute("data-live-inline-from")) : block ? Number(block.getAttribute("data-live-block-from")) : editor.posAtDOM(target, 0);
+  } catch { position = editor.state.selection.main.head; }
+  const activeInline = inline ? {from: Number(inline.getAttribute("data-live-inline-from")), to: Number(inline.getAttribute("data-live-inline-to")), name: inline.getAttribute("data-live-inline-name") || ""} : block ? {from: Number(block.getAttribute("data-live-block-from")), to: Number(block.getAttribute("data-live-block-to")), name: block.getAttribute("data-live-block-name") || ""} : findActiveSyntaxNode(editor.state, position);
   event.preventDefault();
-  toggleMode(position).catch(error => diagnostics(error.diagnostics, `Switch mode failed: ${error.message}`));
+  editor.focus();
+  editor.dispatch({selection: {anchor: position}, effects: livePreviewActive.of(activeInline)});
 });
 loadPreferences();
 $("#document-search").oninput = filterDocuments;

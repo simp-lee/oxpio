@@ -441,6 +441,20 @@ func TestNewMarkdownResolvesSlashEdgeHashtagsUsingIndexNormalization(t *testing.
 	}
 }
 
+func TestNewMarkdownCommentsDoNotTrackHasMath(t *testing.T) {
+	t.Parallel()
+
+	note := &model.Note{Slug: "guide", RelPath: "notes/guide.md"}
+	md, renderResult := NewMarkdown(nil, note, nil, diag.NewCollector())
+	var buf bytes.Buffer
+	if err := md.Convert([]byte("%%hidden comment%%\n"), &buf); err != nil {
+		t.Fatal(err)
+	}
+	if renderResult == nil || renderResult.HasMath() || note.HasMath {
+		t.Fatalf("comment math flags = render:%v note:%v", renderResult != nil && renderResult.HasMath(), note.HasMath)
+	}
+}
+
 func TestNewMarkdownRendersLeadingCalloutDisplayMathAndTracksHasMath(t *testing.T) {
 	t.Parallel()
 

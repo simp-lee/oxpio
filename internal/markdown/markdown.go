@@ -11,6 +11,7 @@ import (
 	"github.com/simp-lee/oxpio/internal/markdown/callout"
 	internalembed "github.com/simp-lee/oxpio/internal/markdown/embed"
 	internalhighlight "github.com/simp-lee/oxpio/internal/markdown/highlight"
+	"github.com/simp-lee/oxpio/internal/markdown/taskstatus"
 	internalwikilink "github.com/simp-lee/oxpio/internal/markdown/wikilink"
 	"github.com/simp-lee/oxpio/internal/model"
 	"github.com/yuin/goldmark"
@@ -77,15 +78,31 @@ var (
 	sharedParser     goldmark.Markdown
 )
 
+func newCoreMarkdown() goldmark.Markdown {
+	return goldmark.New(
+		goldmark.WithParserOptions(
+			newParserOptions(nil, "", nil)...,
+		),
+		goldmark.WithExtensions(newCoreExtensions(noopWikilinkResolver{}, nil, "")...),
+	)
+}
+
+// NewCoreMarkdown returns the shared, context-free Markdown parser and
+// renderer used by livepreview in native Go and browser WASM. The native site
+// pipeline starts from the same core extension set before adding vault, theme,
+// and output-path renderers.
+func NewCoreMarkdown() goldmark.Markdown {
+	md := newCoreMarkdown()
+	// Keep container-aware display-math parsing in the shared core. The native
+	// site renderer and the WASM renderer provide their own output wrappers.
+	newMathTrackingExtender(nil).Extend(md)
+	return md
+}
+
 // NewParser returns the shared AST-only goldmark instance used by pass 1.
 func NewParser(_ *diag.Collector) goldmark.Markdown {
 	sharedParserOnce.Do(func() {
-		sharedParser = goldmark.New(
-			goldmark.WithParserOptions(
-				newParserOptions(nil, "", nil)...,
-			),
-			goldmark.WithExtensions(newCoreExtensions(noopWikilinkResolver{}, nil, "")...),
-		)
+		sharedParser = newCoreMarkdown()
 	})
 
 	return sharedParser
@@ -223,8 +240,9 @@ func newCoreExtensions(wikilinkResolver gmwikilink.Resolver, hashtagResolver gmh
 		&gmwikilink.Extender{Resolver: wikilinkResolver},
 		callout.New(),
 		internalhighlight.New(),
+		taskstatus.NewExtension(),
 		passthrough.New(passthrough.Config{
-			InlineDelimiters: []passthrough.Delimiters{{Open: "$", Close: "$"}, {Open: `\(`, Close: `\)`}},
+			InlineDelimiters: []passthrough.Delimiters{{Open: "$", Close: "$"}, {Open: `\(`, Close: `\)`}, {Open: "%%", Close: "%%"}},
 			BlockDelimiters:  []passthrough.Delimiters{{Open: "$$", Close: "$$"}, {Open: `\[`, Close: `\]`}},
 		}),
 	}

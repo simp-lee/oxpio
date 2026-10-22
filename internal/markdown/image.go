@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"html"
+	"strconv"
 	"strings"
 
 	"github.com/gohugoio/hugo-goldmark-extensions/passthrough"
@@ -347,12 +348,27 @@ func (r *mathTrackingHTMLRenderer) renderInlineMath(w util.BufWriter, source []b
 	if !entering {
 		return gast.WalkContinue, nil
 	}
+	mathNode := node.(*passthrough.PassthroughInline)
+	value := html.EscapeString(string(mathNode.Segment.Value(source)))
+	if mathNode.Delimiters != nil && mathNode.Delimiters.Open == "%%" {
+		_, _ = w.WriteString(`<span class="oxpio-comment" hidden data-oxpio-comment="true"></span>`)
+		return gast.WalkContinue, nil
+	}
 	if r.note != nil {
 		r.note.HasMath = true
 	}
-	mathNode := node.(*passthrough.PassthroughInline)
+	if r.note == nil {
+		_, _ = w.WriteString(`<span class="oxpio-math" data-live-math-from="`)
+		_, _ = w.WriteString(strconv.Itoa(mathNode.Segment.Start))
+		_, _ = w.WriteString(`" data-live-math-to="`)
+		_, _ = w.WriteString(strconv.Itoa(mathNode.Segment.Stop))
+		_, _ = w.WriteString(`">`)
+		_, _ = w.WriteString(value)
+		_, _ = w.WriteString(`</span>`)
+		return gast.WalkContinue, nil
+	}
 	_, _ = w.WriteString(`<span data-oxpio-math-source="inline">`)
-	_, _ = w.WriteString(html.EscapeString(string(mathNode.Segment.Value(source))))
+	_, _ = w.WriteString(value)
 	_, _ = w.WriteString(`</span>`)
 	return gast.WalkContinue, nil
 }
@@ -364,8 +380,19 @@ func (r *mathTrackingHTMLRenderer) renderDisplayMath(w util.BufWriter, source []
 	if r.note != nil {
 		r.note.HasMath = true
 	}
-	_, _ = w.WriteString(`<div data-oxpio-math-source="display">`)
 	block := node.(*passthrough.PassthroughBlock)
+	if r.note == nil {
+		from, to := displayMathNodeRange(node, source)
+		_, _ = w.WriteString(`<div class="oxpio-math" data-live-math-from="`)
+		_, _ = w.WriteString(strconv.Itoa(from))
+		_, _ = w.WriteString(`" data-live-math-to="`)
+		_, _ = w.WriteString(strconv.Itoa(to))
+		_, _ = w.WriteString(`">`)
+		_, _ = w.WriteString(html.EscapeString(DisplayMathSource(node, source)))
+		_, _ = w.WriteString(`</div>`)
+		return gast.WalkSkipChildren, nil
+	}
+	_, _ = w.WriteString(`<div data-oxpio-math-source="display">`)
 	containers := r.sourceContainers[block]
 	if containers == nil {
 		containers = displayMathSourceContainers(block)
@@ -402,6 +429,38 @@ func displayMathSourceContainers(node gast.Node) []displayMathSourceContainer {
 		reversed[left], reversed[right] = reversed[right], reversed[left]
 	}
 	return reversed
+}
+
+func displayMathNodeRange(node gast.Node, source []byte) (int, int) {
+	if node == nil || node.Lines() == nil || node.Lines().Len() == 0 {
+		return 0, 0
+	}
+	from := node.Lines().At(0).Start
+	to := node.Lines().At(node.Lines().Len() - 1).Stop
+	if node.Pos() >= 0 && node.Pos() < from {
+		from = node.Pos()
+	}
+	for from > 0 && source[from-1] != '\n' {
+		from--
+	}
+	if to < len(source) && source[to] == '\n' {
+		to++
+	}
+	return from, to
+}
+
+// DisplayMathSource returns display-math source without Markdown container
+// markers, so native and WASM renderers feed KaTeX the same formula text.
+func DisplayMathSource(node gast.Node, source []byte) string {
+	if node == nil || node.Lines() == nil {
+		return ""
+	}
+	var raw strings.Builder
+	for index := 0; index < node.Lines().Len(); index++ {
+		segment := node.Lines().At(index)
+		raw.Write(segment.Value(source))
+	}
+	return stripDisplayMathContainerMarkers(raw.String(), displayMathSourceContainers(node))
 }
 
 func stripDisplayMathContainerMarkers(source string, containers []displayMathSourceContainer) string {

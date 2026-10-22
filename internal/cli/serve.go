@@ -64,6 +64,7 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 	var outputPath string
 	var vaultPath string
 	var port int
+	var listen string
 	var watch bool
 
 	cmd := &cobra.Command{
@@ -71,6 +72,9 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 		Short: "Serve a generated site for local preview",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if listen != "127.0.0.1" && listen != "0.0.0.0" {
+				return fmt.Errorf("serve listen address must be 127.0.0.1 or 0.0.0.0")
+			}
 			if err := validateCommandPort(port, cmd.Flags().Changed("port")); err != nil {
 				return err
 			}
@@ -79,14 +83,14 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 				return err
 			}
 			if watch {
-				return runServeWatchMode(cmd, deps, boundary.VaultPath, boundary.OutputPath, port)
+				return runServeWatchMode(cmd, deps, boundary.VaultPath, boundary.OutputPath, port, listen)
 			}
 
 			srv, err := deps.newPreviewServer(boundary.OutputPath, port)
 			if err != nil {
 				return errors.Join(fmt.Errorf("create preview server: %w", err), closePreviewServer(srv))
 			}
-			listenErr := listenAndAnnounce(cmd, srv, "127.0.0.1", port)
+			listenErr := listenAndAnnounce(cmd, srv, listen, port)
 			closeErr := closePreviewServer(srv)
 			if listenErr != nil {
 				return errors.Join(fmt.Errorf("listen and serve: %w", listenErr), closeErr)
@@ -102,12 +106,13 @@ func newServeCommand(deps commandDependencies) *cobra.Command {
 	flags.StringVar(&outputPath, "output", "", "Path to the generated site output (default <vault>/public)")
 	flags.StringVar(&vaultPath, "vault", "", "Path to the OXPIO Vault (default current directory)")
 	flags.IntVar(&port, "port", 0, fmt.Sprintf("Port for the local preview server (default %d)", internalserver.DefaultPort))
+	flags.StringVar(&listen, "listen", "127.0.0.1", "Listener bind address (127.0.0.1 or 0.0.0.0)")
 	flags.BoolVar(&watch, "watch", false, "Rebuild on vault/config changes and live-reload connected browsers")
 
 	return cmd
 }
 
-func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedVaultPath string, resolvedOutputPath string, port int) (runErr error) {
+func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedVaultPath string, resolvedOutputPath string, port int, listen string) (runErr error) {
 	resolvedConfigPath := filepath.Join(normalizedVaultPath, defaultConfigFilename)
 	outputTransactionPaths := make(map[string]struct{})
 	trackOutputTransactionPath := func(path string) {
@@ -186,7 +191,7 @@ func runServeWatchMode(cmd *cobra.Command, deps commandDependencies, normalizedV
 		runErr = errors.Join(runErr, watchErr, closePreviewServer(srv))
 	}()
 
-	if err := listenAndAnnounce(cmd, srv, "127.0.0.1", port); err != nil {
+	if err := listenAndAnnounce(cmd, srv, listen, port); err != nil {
 		return fmt.Errorf("listen and serve: %w", err)
 	}
 

@@ -1,6 +1,6 @@
 .DEFAULT_GOAL := check
 
-.PHONY: tools fmt fmt-check lint test audit check
+.PHONY: tools fmt fmt-check live-preview-wasm lint test audit check
 
 GO ?= go
 GO_ENV_GOBIN := $(strip $(shell $(GO) env GOBIN 2>/dev/null))
@@ -30,6 +30,10 @@ fmt:
 	@files="$$(find . -type f -name '*.go' -not -path './vendor/*')"; \
 	if [ -n "$$files" ]; then $(GOIMPORTS) -w $$files && $(GOFUMPT) -w $$files; fi
 
+live-preview-wasm:
+	cp "$$($(GO) env GOROOT)/lib/wasm/wasm_exec.js" internal/edit/web/wasm_exec.js
+	GOOS=js GOARCH=wasm $(GO) build -trimpath -ldflags='-s -w' -o internal/edit/web/live-preview.wasm ./cmd/livepreview-wasm
+
 fmt-check:
 	@command -v $(GOIMPORTS) >/dev/null 2>&1 || { echo "$(GOIMPORTS) not found; run: make tools"; exit 1; }
 	@command -v $(GOFUMPT) >/dev/null 2>&1 || { echo "$(GOFUMPT) not found; run: make tools"; exit 1; }
@@ -44,7 +48,7 @@ lint:
 	@command -v $(GOLANGCI_LINT) >/dev/null 2>&1 || { echo "$(GOLANGCI_LINT) not found; run: make tools"; exit 1; }
 	$(GOLANGCI_LINT) run $(PKGS)
 
-test:
+test: live-preview-wasm
 	$(GO) test $(PKGS)
 
 audit:

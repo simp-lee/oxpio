@@ -14,11 +14,12 @@ import (
 )
 
 const (
-	katexCSSOutputPath  = "assets/oxpio-runtime/katex.min.css"
-	katexJSOutputPath   = "assets/oxpio-runtime/katex.min.js"
-	katexAutoOutputPath = "assets/oxpio-runtime/auto-render.min.js"
-	mermaidJSOutputPath = "assets/oxpio-runtime/mermaid.min.js"
-	logoOutputPath      = "assets/oxpio/logo.svg"
+	katexCSSOutputPath    = "assets/oxpio-runtime/katex.min.css"
+	katexJSOutputPath     = "assets/oxpio-runtime/katex.min.js"
+	katexAutoOutputPath   = "assets/oxpio-runtime/auto-render.min.js"
+	katexMhchemOutputPath = "assets/oxpio-runtime/mhchem.min.js"
+	mermaidJSOutputPath   = "assets/oxpio-runtime/mermaid.min.js"
+	logoOutputPath        = "assets/oxpio/logo.svg"
 )
 
 type embeddedOutputAsset struct {
@@ -31,6 +32,7 @@ var runtimeTemplateAssets = func() []embeddedOutputAsset {
 		{name: "runtime-assets/katex/katex.min.css", outputPath: katexCSSOutputPath},
 		{name: "runtime-assets/katex/katex.min.js", outputPath: katexJSOutputPath},
 		{name: "runtime-assets/katex/contrib/auto-render.min.js", outputPath: katexAutoOutputPath},
+		{name: "runtime-assets/katex/contrib/mhchem.min.js", outputPath: katexMhchemOutputPath},
 		{name: "runtime-assets/mermaid/mermaid.min.js", outputPath: mermaidJSOutputPath},
 	}
 	fonts, _ := fs.Glob(embeddedSiteFS, "runtime-assets/katex/fonts/*")

@@ -36,7 +36,7 @@ var commandSpecs = []CommandSpec{
 	{Name: "init", Summary: "Create a minimal OXPIO Vault", SideEffects: "creates missing Vault files", ReadScope: "Vault boundary", WriteScope: "oxpio.yaml and _index.md", OutputFields: []string{"created"}},
 	{Name: "validate", Summary: "Analyze a Vault without publishing", Flags: []FlagSpec{{Name: "output", Value: "PATH", Summary: "Formal output boundary"}}, SideEffects: "read-only", ReadScope: "Vault and selected output boundary", WriteScope: "none", OutputFields: []string{"errors", "warnings"}},
 	{Name: "publish", Summary: "Strictly generate and atomically publish the site", Flags: []FlagSpec{{Name: "output", Value: "PATH", Summary: "Formal output boundary"}, {Name: "dry-run", Summary: "Generate without replacing output"}}, SideEffects: "publishes output unless dry-run", ReadScope: "Vault and selected theme", WriteScope: "output", OutputFields: []string{"output", "preview", "published", "artifacts"}},
-	{Name: "serve", Summary: "Serve an existing output, optionally watching publish", Flags: []FlagSpec{{Name: "output", Value: "PATH", Summary: "Formal output boundary"}, {Name: "watch", Summary: "Publish on input changes"}}, SideEffects: "serves local output", ReadScope: "output", WriteScope: "output only with watch", OutputFields: []string{"address"}},
+	{Name: "serve", Summary: "Serve an existing output, optionally watching publish", Flags: []FlagSpec{{Name: "output", Value: "PATH", Summary: "Formal output boundary"}, {Name: "listen", Value: "ADDRESS", Summary: "Listener bind address"}, {Name: "watch", Summary: "Publish on input changes"}}, SideEffects: "serves local output", ReadScope: "output", WriteScope: "output only with watch", OutputFields: []string{"address"}},
 	{Name: "editor", Summary: "Run the explicitly enabled local editor", Flags: []FlagSpec{{Name: "setup", Summary: "Configure the editor account"}, {Name: "reset-password", Summary: "Reset the editor password"}, {Name: "output", Value: "PATH", Summary: "Formal output boundary"}, {Name: "listen", Value: "ADDRESS", Summary: "Listener bind address"}}, SideEffects: "serves and may publish", ReadScope: "Vault and output", WriteScope: "source and output", OutputFields: []string{"address", "configured"}},
 	{Name: "version", Summary: "Print the OXPIO version", SideEffects: "none", ReadScope: "none", WriteScope: "none", OutputFields: []string{"version"}},
 	{Name: "config read", Summary: "Read a redacted configuration summary", SideEffects: "read-only", ReadScope: "oxpio.yaml", WriteScope: "none", OutputFields: []string{"configured", "hash", "title", "baseURL", "language", "theme", "navigation", "versions", "attachments", "editorConfigured"}},
@@ -114,7 +114,7 @@ func enrichCommandSpec(spec CommandSpec) CommandSpec {
 	if spec.Name == "editor" || spec.Name == "serve" {
 		addFlag("port", "NUM", "Listener port")
 	}
-	if spec.Name == "editor" {
+	if spec.Name == "editor" || spec.Name == "serve" {
 		addFlag("listen", "ADDRESS", "Listener bind address")
 	}
 	if spec.Name == "theme preview" {
@@ -130,7 +130,7 @@ func enrichCommandSpec(spec CommandSpec) CommandSpec {
 	if spec.Name == "serve" || spec.Name == "editor" || spec.Name == "theme preview" {
 		setDefault("port", "8080")
 	}
-	if spec.Name == "editor" {
+	if spec.Name == "editor" || spec.Name == "serve" {
 		setDefault("listen", "127.0.0.1")
 	}
 	if len(spec.Examples) == 0 {

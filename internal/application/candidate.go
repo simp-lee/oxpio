@@ -15,6 +15,9 @@ type CandidateBuildOptions struct {
 	SourceOutputPath  string
 	PreviewSourcePath string
 	AllowWarnings     bool
+	// Config overrides the Vault theme/config only for an isolated candidate.
+	// It is never written back to the Vault.
+	Config *model.SiteConfig
 }
 
 // CandidatePublishOptions is the transaction handoff for a previously built
@@ -33,6 +36,7 @@ func BuildCandidate(vaultPath, outputPath string, options CandidateBuildOptions)
 		SourceDeleted:     options.SourceDeleted,
 		SourceOutputPath:  options.SourceOutputPath,
 		PreviewSourcePath: options.PreviewSourcePath,
+		Config:            options.Config,
 	})
 }
 

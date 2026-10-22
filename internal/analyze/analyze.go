@@ -11,6 +11,7 @@ import (
 
 	diagnostic "github.com/simp-lee/oxpio/internal/diag"
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
 	"github.com/simp-lee/oxpio/internal/siteplan"
 )
 
@@ -44,6 +45,20 @@ func AnalyzeWithOutputAndConcurrency(vaultPath, outputPath string, concurrency i
 // reading candidate Markdown bytes from an immutable edit overlay.
 func AnalyzeWithOutputAndConcurrencyAndOverlay(vaultPath, outputPath string, concurrency int, overlay map[string][]byte, deleted map[string]bool) (Result, error) {
 	return AnalyzeWithOutputAndConcurrencyAndOverlayPreview(vaultPath, outputPath, concurrency, overlay, deleted, "")
+}
+
+// AnalyzeWithOutputAndConcurrencyAndOverlayPreview makes one overlaid source
+// renderable for an isolated preview while retaining its source publish state.
+func AnalyzeWithConfigAndOutputAndOverlayPreview(vaultPath, outputPath string, cfg model.SiteConfig, concurrency int, overlay map[string][]byte, deleted map[string]bool, previewPath string) (Result, error) {
+	planned, err := siteplan.BuildForOutputWithConfigAndOverlayPreview(vaultPath, outputPath, cfg, overlay, deleted, previewPath, concurrency)
+	if planned == nil {
+		collector := diagnostic.NewCollector()
+		if err != nil {
+			collector.Add(analyzeErrorDiagnostic(vaultPath, err))
+		}
+		return Result{Diagnostics: collector.Diagnostics()}, err
+	}
+	return Result{Plan: planned, Diagnostics: append([]diagnostic.Diagnostic(nil), planned.Diagnostics...)}, err
 }
 
 // AnalyzeWithOutputAndConcurrencyAndOverlayPreview makes one overlaid source

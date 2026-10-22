@@ -815,6 +815,9 @@
     }
     loadScript(new URL("katex.min.js", vendorBaseURL).href, "KaTeX")
       .then(function () {
+        return loadScript(new URL("mhchem.min.js", vendorBaseURL).href, "KaTeX mhchem");
+      })
+      .then(function () {
         return loadScript(new URL("auto-render.min.js", vendorBaseURL).href, "KaTeX auto-render");
       })
       .then(function () {

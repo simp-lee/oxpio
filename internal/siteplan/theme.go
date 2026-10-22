@@ -117,6 +117,9 @@ func planThemeAssets(plan *model.SitePlan, scan, fullScan vault.ScanResult, inde
 		if strings.EqualFold(path.Ext(source), ".css") {
 			var err error
 			data, err = asset.RewriteCSSURLs(data, func(raw string) (string, error) {
+				if strings.HasPrefix(strings.ToLower(strings.TrimSpace(raw)), "data:image/") {
+					return raw, nil
+				}
 				u, err := url.Parse(raw)
 				if err != nil {
 					return "", fmt.Errorf("theme CSS URL %q: %w", raw, err)

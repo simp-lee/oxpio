@@ -62,6 +62,8 @@ type Options struct {
 	// source/config/theme changes immediately before output replacement.
 	InputFingerprint string
 	ValidateInput    func() error
+	// Config selects an isolated in-memory configuration for preview builds.
+	Config *model.SiteConfig
 }
 
 // BuildWithOptions analyzes the vault once and publishes the resulting
@@ -73,7 +75,13 @@ func BuildWithOptions(vaultPath, outputPath string, options Options) (*BuildResu
 	if options.SourceOutputPath != "" {
 		sourceOutputPath = options.SourceOutputPath
 	}
-	analysis, analyzeErr := internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlayPreview(vaultPath, sourceOutputPath, options.Concurrency, options.SourceOverlay, options.SourceDeleted, options.PreviewSourcePath)
+	var analysis internalanalyze.Result
+	var analyzeErr error
+	if options.Config != nil {
+		analysis, analyzeErr = internalanalyze.AnalyzeWithConfigAndOutputAndOverlayPreview(vaultPath, sourceOutputPath, *options.Config, options.Concurrency, options.SourceOverlay, options.SourceDeleted, options.PreviewSourcePath)
+	} else {
+		analysis, analyzeErr = internalanalyze.AnalyzeWithOutputAndConcurrencyAndOverlayPreview(vaultPath, sourceOutputPath, options.Concurrency, options.SourceOverlay, options.SourceDeleted, options.PreviewSourcePath)
+	}
 	if writeErr := internalanalyze.WriteDiagnostics(options.DiagnosticsWriter, analysis.Diagnostics); writeErr != nil {
 		return nil, fmt.Errorf("write diagnostics: %w", writeErr)
 	}

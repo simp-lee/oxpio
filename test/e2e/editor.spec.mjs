@@ -221,7 +221,8 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   const preview = page.frameLocator('#preview-frame');
   await expect(preview.locator('[data-page-content]')).toContainText('Original');
   await expect(preview.locator('.site-header')).toHaveCount(0);
-  await expect(preview.locator('link[href*="style.css"]')).toHaveCount(1);
+  await expect(preview.locator('style[data-oxpio-basic-preview]')).toHaveCount(1);
+  await expect(preview.locator('link[href*="style.css"]')).toHaveCount(0);
   await page.locator('#page-preview').click();
   await expect(page.frameLocator('#preview-frame').locator('.site-header')).toHaveCount(1);
 
@@ -258,16 +259,21 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
 test('live preview renders unsaved editor changes in the same workspace', async ({browser}) => {
   const context = await browser.newContext();
   const page = await context.newPage();
+  let previewRequests = 0;
+  page.on('request', request => { if (new URL(request.url()).pathname.endsWith('/_oxpio/preview')) previewRequests += 1; });
   await login(page);
   await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   const editor = page.locator('#editor .cm-content');
   await expect(editor).toBeVisible();
   await expect(page.locator('.preview-pane')).toBeHidden();
   await editor.fill('# Immediate save marker\n\nUnsaved before first preview');
+  await expect.poll(() => previewRequests).toBe(0);
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
+  previewRequests = 0;
   await editor.fill('# Live preview marker\n\nInline math: $E = mc^2$.\n\n```go\nfunc Preview() {}\n```\n\n| Stage | Result |\n| --- | --- |\n| Draft | Ready |');
+  await expect.poll(() => previewRequests).toBe(0);
   await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
   const renderedBeforeHover = await page.locator('#editor .live-rendered-block').count();
   await page.locator('#editor .live-rendered-block').first().hover();
@@ -279,13 +285,134 @@ test('live preview renders unsaved editor changes in the same workspace', async 
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
-  await page.locator('#editor .live-rendered-block').first().click();
-  await expect(page.locator('#source-mode')).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(async () => page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].some(element => element.shadowRoot?.textContent?.includes('Live preview marker')))).toBe(true);
+  const liveBlock = page.locator('#editor .live-rendered-block').first();
+  const renderedBeforeClick = await page.locator('#editor .live-rendered-block').count();
+  await liveBlock.click();
+  await expect(page.locator('#write-mode')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#source-mode')).toHaveAttribute('aria-selected', 'false');
   await expect(page.locator('#editor .cm-content')).toContainText('# Live preview marker');
+  await expect(page.locator('#editor .live-rendered-block')).toHaveCount(renderedBeforeClick - 1);
   await page.locator('#editor .cm-content').press('X');
   await expect(page.locator('#editor .cm-content')).toContainText('X# Live preview marker');
   await expect(page.locator('#editor .cm-content')).not.toContainText('X---');
   await expect(page.locator('.preview-pane')).toBeHidden();
+  await context.close();
+});
+
+test('write mode reveals only the active inline Markdown node', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await editor.fill('Normal **bold** and *italic* with [a link](https://example.test).\n\nNeighbor block');
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
+  await expect.poll(async () => page.evaluate(() => document.querySelector('#editor .live-rendered-block')?.shadowRoot?.innerHTML || '')).toContain('data-live-inline-from');
+  const firstBlock = page.locator('#editor .live-rendered-block').first();
+  await firstBlock.locator('strong').click();
+  await expect(page.locator('#write-mode')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#source-mode')).toHaveAttribute('aria-selected', 'false');
+  await expect(editor).toContainText('**bold**');
+  await expect(page.locator('#editor .live-rendered-block')).toHaveCount(1);
+  await context.close();
+});
+
+test('math live preview renders KaTeX and exposes only the active formula source', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await editor.fill('前置 **bold** $x^2$ 和 \\(y^2\\) 后。\n\nNeighbor block');
+  await expect(page.locator('#editor .oxpio-math')).toHaveCount(2);
+  await expect(page.locator('#editor .oxpio-math .katex')).toHaveCount(2);
+  await page.locator('#editor .oxpio-math').last().click();
+  await expect(editor).toContainText('\\(y^2\\)');
+  await expect(editor).not.toContainText('$x^2$');
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBe(1);
+  await context.close();
+});
+
+test('write preview keeps layout stable and exposes local render metrics', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await page.evaluate(() => {
+    window.__oxpioLayoutShifts = 0;
+    if (window.PerformanceObserver) new PerformanceObserver(list => { window.__oxpioLayoutShifts += list.getEntries().filter(entry => !entry.hadRecentInput).reduce((sum, entry) => sum + entry.value, 0); }).observe({type: 'layout-shift', buffered: true});
+  });
+  const before = await page.evaluate(() => ({busy: document.querySelector('#busy-indicator')?.getBoundingClientRect().height, editorTop: document.querySelector('#content-editor')?.getBoundingClientRect().top}));
+  await editor.fill('A '.repeat(20) + '**local** preview');
+  await expect.poll(() => page.evaluate(() => window.__oxpioLivePreviewMetrics?.coreRenders || 0)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => window.__oxpioLivePreviewMetrics?.keyToPaintMs?.length || 0)).toBeGreaterThan(0);
+  await expect.poll(() => page.evaluate(() => window.__oxpioLivePreviewMetrics?.serviceRequests || 0)).toBe(0);
+  const after = await page.evaluate(() => ({busy: document.querySelector('#busy-indicator')?.getBoundingClientRect().height, editorTop: document.querySelector('#content-editor')?.getBoundingClientRect().top}));
+  expect(after.busy).toBe(before.busy);
+  expect(after.editorTop).toBe(before.editorTop);
+  expect(await page.evaluate(() => window.__oxpioLayoutShifts || 0)).toBeLessThan(0.001);
+  await context.close();
+});
+
+test('long Write documents update locally without service preview requests', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  const longDocument = Array.from({length: 180}, (_, index) => `## Section ${index}\n\nParagraph ${index} with **strong** and [link](https://example.test/${index}).`).join('\n\n');
+  const started = Date.now();
+  await editor.fill(longDocument);
+  await expect.poll(() => page.evaluate(() => window.__oxpioLivePreviewMetrics?.coreRenders || 0)).toBeGreaterThan(0);
+  expect(Date.now() - started).toBeLessThan(5000);
+  await expect.poll(() => page.evaluate(() => window.__oxpioLivePreviewMetrics?.serviceRequests || 0)).toBe(0);
+  await context.close();
+});
+
+test('live preview fixture uses shared semantic rendering and local high-cost runtimes', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await editor.fill(await fs.readFile(path.join(repoRoot, 'test', 'testdata', 'editor', 'live-preview.md'), 'utf8'));
+  const renderedHTML = () => page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].map(element => element.shadowRoot?.innerHTML || '').join(''));
+  await expect.poll(renderedHTML).toContain('data-live-inline-name="Math"');
+  const topHTML = await renderedHTML();
+  expect(topHTML).toContain('katex');
+  const mermaidBlocks = new Set();
+  for (const fraction of [0, 0.2, 0.4, 0.6, 0.8, 1]) {
+    await page.evaluate(value => {
+      const scroller = document.querySelector('#editor .cm-scroller');
+      if (scroller) scroller.scrollTop = scroller.scrollHeight * value;
+    }, fraction);
+    await page.waitForTimeout(150);
+    const mounted = await page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].filter(element => element.shadowRoot?.querySelector('pre.mermaid svg')).map(element => element.dataset.liveBlockFrom));
+    mounted.forEach(from => mermaidBlocks.add(from));
+  }
+  expect(mermaidBlocks.size).toBe(2);
+  await expect.poll(renderedHTML).toContain('callout-note');
+  expect(await page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].some(element => element.shadowRoot?.querySelector('svg[aria-roledescription="error"]')))).toBe(false);
+  await page.screenshot({path: path.join(repoRoot, 'test-results', 'live-preview-syntax-gallery-top.png'), fullPage: true});
+  await context.close();
+});
+
+test('task status gallery uses Obsidian-style semantic SVG markers', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await editor.fill(`## Basic\n- [ ] to-do\n- [/] incomplete\n- [x] done\n- [-] canceled\n- [>] forwarded\n- [<] scheduling\n\n## Extras\n- [?] question\n- [!] important\n- [*] star\n- [\"] quote\n- [l] location\n- [b] bookmark\n- [i] information\n- [S] savings\n- [I] idea\n- [p] pros\n- [c] cons\n- [f] fire\n- [k] key\n- [w] win\n- [u] up\n- [d] down\n- [D] draft pull request\n- [P] open pull request\n- [M] merged pull request`);
+  await page.getByText('Basic', {exact: true}).click();
+  const renderedHTML = () => page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].map(element => element.shadowRoot?.innerHTML || '').join(''));
+  await expect.poll(renderedHTML).toContain('data-task=\"?\"');
+  const html = await renderedHTML();
+  for (const status of ['data-task=\" \"', 'data-task=\"/\"', 'data-task=\"x\"', 'data-task=\"-\"', 'data-task=\"&gt;\"', 'data-task=\"&lt;\"', 'data-task=\"?\"', 'data-task=\"M\"']) expect(html).toContain(status);
+  expect(html).toContain('oxpio-task-input');
+  await page.screenshot({path: path.join(repoRoot, 'test-results', 'task-status-gallery.png'), fullPage: true});
   await context.close();
 });
 

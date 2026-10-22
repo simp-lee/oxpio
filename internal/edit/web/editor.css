@@ -1,5 +1,8 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+/* Keep operation feedback out of the document flow so Write never jumps. */
+.busy-indicator[hidden] { display: flex !important; visibility: hidden; opacity: 0; pointer-events: none; }
+.busy-indicator { min-height: 1.25rem; }
 :root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 body { margin: 0; background: #f4f6f8; color: #20252b; }
 button, input, select { font: inherit; }
@@ -54,7 +57,9 @@ button.danger { color: #9e2a2b; }
 .sidebar-help p { margin-top: .35rem; line-height: 1.45; }
 .workspace { min-width: 0; padding: 1rem; }
 .status { min-height: 1.5rem; margin: 0 0 .2rem; color: #495665; }
-.busy-indicator { display: flex; align-items: center; gap: .45rem; min-height: 1.25rem; margin: 0 0 .55rem; color: #1769aa; font-size: .8rem; font-weight: 700; }
+.busy-indicator { display: flex; align-items: center; gap: .45rem; height: 1.25rem; min-height: 1.25rem; margin: 0 0 .55rem; overflow: hidden; color: #1769aa; font-size: .8rem; font-weight: 700; white-space: nowrap; visibility: visible; opacity: 1; transition: opacity .12s ease; }
+.cm-editor, .cm-editor .cm-content, .diff-editor, .diff-editor .cm-editor { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: .9rem; }
+.cm-line { line-height: 1.55; }
 .busy-indicator::before { content: ""; width: .75rem; height: .75rem; flex: 0 0 .75rem; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: oxpio-spin .75s linear infinite; }
 .cancel-operation { margin-left: auto; padding: .2rem .5rem; color: inherit; font-size: .75rem; }
 @keyframes oxpio-spin { to { transform: rotate(360deg); } }
@@ -108,7 +113,13 @@ body.editor-fullscreen .editor-preview-grid { min-height: calc(100vh - 4.25rem);
 .cm-line.live-code-fence, .cm-line.live-hidden-line { min-height: .35rem; color: transparent; }
 .live-preview-token { display: inline-block; color: #1769aa; }
 .live-rendered-block { display: block; width: 100%; min-width: 0; padding-inline: .6rem; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.live-link { text-decoration: underline; }
+.live-link { color: #1769aa; text-decoration: underline; }
+.live-strong { font-weight: 700; }
+.live-emphasis { font-style: italic; }
+.live-strikethrough { text-decoration: line-through; }
+.live-inline-code { padding: 0 .18rem; border-radius: .2rem; background: #eef1f4; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.live-task { display: inline-flex; align-items: baseline; gap: .3rem; }
+.live-task input { accent-color: #1769aa; }
 .live-callout-label { margin-right: .35rem; padding: .1rem .35rem; border-radius: .25rem; background: #dcecf9; color: #1769aa; font-size: .72em; font-weight: 700; letter-spacing: .03em; }
 .live-image { padding: .15rem .4rem; border: 1px solid #c7cdd4; border-radius: .25rem; background: #f8fafb; }
 .preview-pane iframe { display: block; width: 100%; height: auto; min-height: 0; flex: 0 0 auto; border: 0; background: #fff; }

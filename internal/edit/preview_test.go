@@ -348,18 +348,18 @@ func TestServerCloseRemovesTemporaryPreviews(t *testing.T) {
 }
 
 func TestRenderContentPreviewHTMLKeepsArticleContentAndDropsSiteShell(t *testing.T) {
-	fullPage := []byte(`<!doctype html><html lang="en" data-oxpio-math data-oxpio-sidebar data-oxpio-popover><head><title>Article</title><link rel="stylesheet" href="/docs/theme.css"><script src="/docs/runtime.js"></script></head><body class="site-body"><header class="site-header">Navigation</header><main class="site-main"><div class="site-content"><article><h1>Title</h1><div data-page-content><p>Body</p></div></article></div></main><footer>Footer</footer></body></html>`)
+	fullPage := []byte(`<!doctype html><html lang="en" data-oxpio-math data-oxpio-sidebar data-oxpio-popover><head><title>Article</title><link rel="stylesheet" href="/docs/theme.css"><link rel="stylesheet" href="/assets/style.abc123.css"><script src="/docs/runtime.js"></script></head><body class="site-body"><header class="site-header">Navigation</header><main class="site-main"><div class="site-content"><article><h1>Title</h1><div data-page-content><p>Body</p></div></article></div></main><footer>Footer</footer></body></html>`)
 	got, err := renderContentPreviewHTML(fullPage)
 	if err != nil {
 		t.Fatal(err)
 	}
 	html := string(got)
-	for _, want := range []string{"data-oxpio-math", "<h1>Title</h1>", "data-page-content", "theme.css", "runtime.js", "Body"} {
+	for _, want := range []string{"data-oxpio-math", "<h1>Title</h1>", "data-page-content", "data-oxpio-basic-preview", "/assets/style.abc123.css", "Body"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("content preview missing %q: %s", want, html)
 		}
 	}
-	for _, unwanted := range []string{"data-oxpio-sidebar", "data-oxpio-popover"} {
+	for _, unwanted := range []string{"data-oxpio-sidebar", "data-oxpio-popover", "theme.css", "runtime.js"} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("content preview retained runtime marker %q: %s", unwanted, html)
 		}
@@ -407,8 +407,8 @@ func TestRenderContentPreviewHTMLUsesRendererMarkersWithoutThemeMarker(t *testin
 			t.Fatalf("marker-based content preview retained %q: %s", unwanted, html)
 		}
 	}
-	if strings.Count(html, "window.contentScript=1") != 1 {
-		t.Fatalf("marker-based content preview duplicated content script: %s", html)
+	if strings.Contains(html, "window.contentScript=1") {
+		t.Fatalf("marker-based content preview retained an arbitrary content script: %s", html)
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"unicode/utf8"
 
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
+	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
 	xhtml "golang.org/x/net/html"
 )
@@ -28,6 +29,27 @@ const (
 	previewContentStartMarker = "oxpio-content-start-7c4f7e1b6d2a"
 	previewContentEndMarker   = "oxpio-content-end-7c4f7e1b6d2a"
 )
+
+const basicPreviewCSS = `
+:root { color-scheme: light dark; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+* { box-sizing: border-box; }
+body { margin: 0; padding: 1.5rem; color: #20252b; background: #fff; line-height: 1.65; }
+.content-preview-main { width: min(100%, 72rem); margin: 0 auto; }
+article, section { max-width: 58rem; margin: 0 auto; }
+h1, h2, h3, h4, h5, h6 { line-height: 1.25; }
+p, ul, ol, blockquote, pre, table { margin: 1rem 0; }
+a { color: #1769aa; }
+img { max-width: 100%; height: auto; }
+blockquote { padding: .2rem 1rem; border-left: .25rem solid #aeb7c2; color: #495665; }
+pre { overflow-x: auto; padding: 1rem; border-radius: .35rem; background: #20252b; color: #f5f7fa; }
+code { padding: .1rem .25rem; border-radius: .2rem; background: #eef1f4; }
+pre code { padding: 0; background: transparent; }
+table { width: 100%; border-collapse: collapse; }
+th, td { padding: .45rem .6rem; border: 1px solid #dce1e6; text-align: left; }
+th { background: #f0f4f7; }
+pre.mermaid { overflow-x: auto; background: #f8fafb; color: #20252b; border: 1px dashed #aeb7c2; }
+@media (max-width: 42rem) { body { padding: 1rem; } }
+`
 
 type editorPreview struct {
 	static      *internalserver.Server
@@ -225,27 +247,37 @@ func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 
 	previewDocument := &xhtml.Node{Type: xhtml.DocumentNode}
 	previewDocument.AppendChild(&xhtml.Node{Type: xhtml.DoctypeNode, Data: "html"})
-	previewHTML := &xhtml.Node{Type: xhtml.ElementNode, Data: "html", Attr: append([]xhtml.Attribute(nil), htmlRoot.Attr...)}
-	removePreviewRuntimeMarker(previewHTML, "data-oxpio-sidebar")
-	removePreviewRuntimeMarker(previewHTML, "data-oxpio-popover")
+	previewHTML := &xhtml.Node{Type: xhtml.ElementNode, Data: "html", Attr: previewHTMLAttributes(htmlRoot)}
 	previewDocument.AppendChild(previewHTML)
-	previewHead := &xhtml.Node{Type: xhtml.ElementNode, Data: "head", Attr: append([]xhtml.Attribute(nil), headRoot.Attr...)}
+	previewHead := &xhtml.Node{Type: xhtml.ElementNode, Data: "head"}
+	previewHead.AppendChild(&xhtml.Node{Type: xhtml.ElementNode, Data: "meta", Attr: []xhtml.Attribute{{Key: "charset", Val: "utf-8"}}})
+	previewHead.AppendChild(&xhtml.Node{Type: xhtml.ElementNode, Data: "meta", Attr: []xhtml.Attribute{{Key: "name", Val: "viewport"}, {Key: "content", Val: "width=device-width, initial-scale=1"}}})
+	if title := findPreviewElement(headRoot, func(node *xhtml.Node) bool { return node.Type == xhtml.ElementNode && node.Data == "title" }); title != nil {
+		previewHead.AppendChild(clonePreviewNode(title))
+	}
+	basicStyle := &xhtml.Node{Type: xhtml.ElementNode, Data: "style", Attr: []xhtml.Attribute{{Key: "data-oxpio-basic-preview", Val: ""}}}
+	basicStyle.AppendChild(&xhtml.Node{Type: xhtml.TextNode, Data: basicPreviewCSS})
+	previewHead.AppendChild(basicStyle)
 	for child := headRoot.FirstChild; child != nil; child = child.NextSibling {
-		previewHead.AppendChild(clonePreviewNode(child))
+		if child.Type != xhtml.ElementNode {
+			continue
+		}
+		if child.Data == "script" && hasPreviewRuntimeSource(child) || child.Data == "link" && (hasPreviewRuntimeStylesheet(child) || hasPreviewThemeStylesheet(child)) {
+			previewHead.AppendChild(clonePreviewNode(child))
+		}
 	}
 	previewHTML.AppendChild(previewHead)
-	previewBody := &xhtml.Node{Type: xhtml.ElementNode, Data: "body", Attr: append([]xhtml.Attribute(nil), bodyRoot.Attr...)}
-	previewBody.Attr = append(previewBody.Attr, xhtml.Attribute{Key: "data-oxpio-content-preview", Val: ""})
-	previewMain := &xhtml.Node{Type: xhtml.ElementNode, Data: "main", Attr: []xhtml.Attribute{{Key: "class", Val: "site-main content-preview-main"}}}
-	previewContent := &xhtml.Node{Type: xhtml.ElementNode, Data: "div", Attr: []xhtml.Attribute{{Key: "class", Val: "site-content"}}}
+	previewBody := &xhtml.Node{Type: xhtml.ElementNode, Data: "body", Attr: []xhtml.Attribute{{Key: "data-oxpio-content-preview", Val: ""}}}
+	previewMain := &xhtml.Node{Type: xhtml.ElementNode, Data: "main", Attr: []xhtml.Attribute{{Key: "class", Val: "content-preview-main"}}}
+	previewContent := &xhtml.Node{Type: xhtml.ElementNode, Data: "div", Attr: []xhtml.Attribute{{Key: "class", Val: "content-preview-content"}}}
 	contentClone := clonePreviewNode(contentRoot)
+	removePreviewScripts(contentClone)
 	if content == nil {
 		wrapPreviewContentMarkers(contentClone)
 	}
 	previewContent.AppendChild(contentClone)
 	previewMain.AppendChild(previewContent)
 	previewBody.AppendChild(previewMain)
-	appendPreviewScripts(previewBody, bodyRoot, contentRoot, contentStart, contentEnd)
 	previewHTML.AppendChild(previewBody)
 
 	var rendered bytes.Buffer
@@ -255,15 +287,72 @@ func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 	return rendered.Bytes(), nil
 }
 
-func removePreviewRuntimeMarker(node *xhtml.Node, key string) {
-	if node == nil {
+func removePreviewScripts(root *xhtml.Node) {
+	if root == nil {
 		return
 	}
-	for index := len(node.Attr) - 1; index >= 0; index-- {
-		if node.Attr[index].Key == key {
-			node.Attr = append(node.Attr[:index], node.Attr[index+1:]...)
+	for child := root.FirstChild; child != nil; {
+		next := child.NextSibling
+		if child.Type == xhtml.ElementNode && child.Data == "script" {
+			root.RemoveChild(child)
+		} else {
+			removePreviewScripts(child)
+		}
+		child = next
+	}
+}
+
+func previewHTMLAttributes(root *xhtml.Node) []xhtml.Attribute {
+	if root == nil {
+		return nil
+	}
+	allowed := map[string]bool{
+		"lang": true, "data-oxpio-kind": true, "data-oxpio-base-path": true,
+		"data-oxpio-version": true, "data-oxpio-math": true, "data-oxpio-mermaid": true, "data-theme": true,
+	}
+	attributes := make([]xhtml.Attribute, 0, len(root.Attr))
+	for _, attribute := range root.Attr {
+		if allowed[attribute.Key] {
+			attributes = append(attributes, attribute)
 		}
 	}
+	return attributes
+}
+
+func hasPreviewRuntimeSource(node *xhtml.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, attribute := range node.Attr {
+		if attribute.Key == "src" {
+			return strings.Contains(attribute.Val, "/assets/oxpio/runtime.")
+		}
+	}
+	return false
+}
+
+func hasPreviewRuntimeStylesheet(node *xhtml.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, attribute := range node.Attr {
+		if attribute.Key == "href" {
+			return strings.Contains(attribute.Val, "/assets/oxpio-runtime/katex.min.css")
+		}
+	}
+	return false
+}
+
+func hasPreviewThemeStylesheet(node *xhtml.Node) bool {
+	if node == nil {
+		return false
+	}
+	for _, attribute := range node.Attr {
+		if attribute.Key == "href" {
+			return strings.Contains(attribute.Val, "/assets/style.")
+		}
+	}
+	return false
 }
 
 func previewNodeFollows(start, end *xhtml.Node) bool {
@@ -332,39 +421,6 @@ func clonePreviewNode(node *xhtml.Node) *xhtml.Node {
 		clone.AppendChild(clonePreviewNode(child))
 	}
 	return clone
-}
-
-func appendPreviewScripts(parent, original, excluded, contentStart, contentEnd *xhtml.Node) {
-	if original == nil || original == excluded || previewNodeWithinRange(original, contentStart, contentEnd) {
-		return
-	}
-	if original.Type == xhtml.ElementNode && original.Data == "script" {
-		parent.AppendChild(clonePreviewNode(original))
-		return
-	}
-	for child := original.FirstChild; child != nil; child = child.NextSibling {
-		appendPreviewScripts(parent, child, excluded, contentStart, contentEnd)
-	}
-}
-
-func previewNodeWithinRange(node, start, end *xhtml.Node) bool {
-	if node == nil || start == nil || end == nil || start.Parent == nil || start.Parent != end.Parent {
-		return false
-	}
-	parent := start.Parent
-	direct := node
-	for direct.Parent != nil && direct.Parent != parent {
-		direct = direct.Parent
-	}
-	if direct.Parent != parent {
-		return false
-	}
-	for child := start.NextSibling; child != nil && child != end; child = child.NextSibling {
-		if child == direct {
-			return true
-		}
-	}
-	return false
 }
 
 func previewSitePath(basePath, route string) string {
@@ -439,6 +495,13 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
 		return
 	}
+	previewConfig, err := internalconfig.LoadForThemePreview(s.vault, s.output)
+	if err != nil {
+		writeJSONStatus(w, http.StatusUnprocessableEntity, map[string]string{"error": err.Error()})
+		return
+	}
+	previewConfig.Theme = internalconfig.ThemeBaseID
+	previewConfig.ThemeDir = ""
 	root, err := os.MkdirTemp("", ".oxpio-preview-*")
 	if err != nil {
 		http.Error(w, "could not create preview workspace", http.StatusInternalServerError)
@@ -454,6 +517,7 @@ func (s *Server) createPreview(w http.ResponseWriter, r *http.Request) {
 		SourceOverlay:     overlay,
 		SourceOutputPath:  s.output,
 		PreviewSourcePath: previewPath,
+		Config:            &previewConfig,
 	})
 	if buildErr != nil {
 		cleanupErr := s.discardUnpublishedPreview(nil, root)
