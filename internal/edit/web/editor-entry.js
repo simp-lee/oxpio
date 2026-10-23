@@ -1615,9 +1615,17 @@ class LivePreviewWidget extends WidgetType {
     return element;
   }
 }
+function liveInlineRangesEqual(left, right) {
+  if (left === right) return true;
+  if (!left || !right || left.length !== right.length) return false;
+  return left.every((range, index) => {
+    const other = right[index];
+    return range.from === other.from && range.to === other.to && range.name === other.name;
+  });
+}
 class LiveRenderedWidget extends WidgetType {
   constructor(html, styles, from = 0, to = 0, name = "", source = "", inline = [], inlineHost = false) { super(); this.html = html; this.styles = styles; this.from = from; this.to = to; this.name = name; this.source = source; this.inline = inline; this.inlineHost = inlineHost; }
-  eq(other) { return this.html === other.html && this.styles === other.styles && this.from === other.from && this.to === other.to && this.name === other.name && this.source === other.source && this.inline === other.inline && this.inlineHost === other.inlineHost; }
+  eq(other) { return this.html === other.html && this.styles === other.styles && this.from === other.from && this.to === other.to && this.name === other.name && liveInlineRangesEqual(this.inline, other.inline) && this.inlineHost === other.inlineHost; }
   toDOM() {
     const element = document.createElement("div");
     element.className = this.inlineHost ? "live-rendered-inline" : "live-rendered-block";

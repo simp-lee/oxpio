@@ -344,6 +344,20 @@ test('write mode reveals only the active inline Markdown node', async ({browser}
   await context.close();
 });
 
+test('footnote references reveal their local Markdown source', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await editor.fill('Text[^1]\n\n[^1]: Note\n\nNeighbor\n');
+  const reference = page.locator('#editor .live-rendered-block [data-live-inline-name="Link"]');
+  await expect.poll(() => reference.count()).toBeGreaterThan(0);
+  await reference.first().click();
+  await expect(editor).toContainText('[^1]');
+  await context.close();
+});
+
 test('math live preview renders KaTeX and exposes only the active formula source', async ({browser}) => {
   const context = await browser.newContext();
   const page = await context.newPage();
@@ -398,6 +412,23 @@ test('rapid Write input coalesces local worker tasks without service preview req
   expect(after.workerTasks - before).toBeLessThan(20);
   expect(after.serviceRequests).toBe(0);
   await expect(editor).toContainText('abcdefghijklmnopqrst');
+  await context.close();
+});
+
+test('unchanged live blocks reuse their rendered widgets after local edits', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await editor.fill('First **block**\n\nSecond *block*\n\nThird [block](https://example.test)');
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(1);
+  await page.evaluate(() => { window.__oxpioFirstLiveBlock = document.querySelector('#editor .live-rendered-block'); });
+  const before = await page.evaluate(() => window.__oxpioLivePreviewMetrics?.coreRenders || 0);
+  await editor.press('End');
+  await editor.press('x');
+  await expect.poll(() => page.evaluate(value => (window.__oxpioLivePreviewMetrics?.coreRenders || 0) > value, before)).toBe(true);
+  await expect.poll(() => page.evaluate(() => window.__oxpioFirstLiveBlock === document.querySelector('#editor .live-rendered-block'))).toBe(true);
   await context.close();
 });
 
