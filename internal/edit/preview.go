@@ -41,6 +41,13 @@ p, ul, ol, blockquote, pre, table { margin: 1rem 0; }
 a { color: #1769aa; }
 img { max-width: 100%; height: auto; }
 blockquote { padding: .2rem 1rem; border-left: .25rem solid #aeb7c2; color: #495665; }
+.callout { margin: 1rem 0; padding: .75rem 1rem; border-left: .25rem solid #1769aa; border-radius: .25rem; background: #f4f8fb; }
+.callout-title { margin-bottom: .35rem; color: #1769aa; font-weight: 700; }
+details.callout > summary { cursor: pointer; }
+ul:has(> li > .oxpio-task-input), ul:has(> li > p > .oxpio-task-input) { list-style: none; padding-left: 0; }
+.oxpio-task-input { appearance: none; width: 1.1em; height: 1.1em; margin: 0 .35em 0 0; vertical-align: -.15em; border: 1px solid #aeb7c2; border-radius: .25em; background: #fff; }
+.oxpio-task-input:checked { border-color: #1769aa; background: #1769aa; box-shadow: inset 0 0 0 .2em #fff; }
+li:has(> .oxpio-task-input[data-task='x']:checked), li:has(> .oxpio-task-input[data-task='X']:checked), li:has(> .oxpio-task-input[data-task='-']:checked), li:has(> p > .oxpio-task-input[data-task='x']:checked), li:has(> p > .oxpio-task-input[data-task='X']:checked), li:has(> p > .oxpio-task-input[data-task='-']:checked) { text-decoration: line-through solid currentColor 1px; }
 pre { overflow-x: auto; padding: 1rem; border-radius: .35rem; background: #20252b; color: #f5f7fa; }
 code { padding: .1rem .25rem; border-radius: .2rem; background: #eef1f4; }
 pre code { padding: 0; background: transparent; }
@@ -262,7 +269,7 @@ func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 		if child.Type != xhtml.ElementNode {
 			continue
 		}
-		if child.Data == "script" && hasPreviewRuntimeSource(child) || child.Data == "link" && (hasPreviewRuntimeStylesheet(child) || hasPreviewThemeStylesheet(child)) {
+		if child.Data == "script" && hasPreviewRuntimeSource(child) || child.Data == "link" && hasPreviewRuntimeStylesheet(child) {
 			previewHead.AppendChild(clonePreviewNode(child))
 		}
 	}
@@ -338,18 +345,6 @@ func hasPreviewRuntimeStylesheet(node *xhtml.Node) bool {
 	for _, attribute := range node.Attr {
 		if attribute.Key == "href" {
 			return strings.Contains(attribute.Val, "/assets/oxpio-runtime/katex.min.css")
-		}
-	}
-	return false
-}
-
-func hasPreviewThemeStylesheet(node *xhtml.Node) bool {
-	if node == nil {
-		return false
-	}
-	for _, attribute := range node.Attr {
-		if attribute.Key == "href" {
-			return strings.Contains(attribute.Val, "/assets/style.")
 		}
 	}
 	return false

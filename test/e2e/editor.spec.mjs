@@ -128,6 +128,19 @@ test('anonymous public pages remain usable without JavaScript or external networ
   await context.close();
 });
 
+test('new editor sessions select the home document after the initial catalog load', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor`);
+  await expect(page.locator('#content-editor')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#source')).toHaveValue('_index.md');
+  await expect(page.locator('.source-tree-entry[data-path="_index.md"]')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('#editor .cm-content')).toContainText('Home');
+  await expect(page.locator('#save')).toBeEnabled();
+  await context.close();
+});
+
 test('authenticated catalog maps articles, sections, drafts, and preserves full Markdown on save', async ({browser}) => {
   const context = await browser.newContext();
   const blocked = [];
@@ -314,7 +327,20 @@ test('write mode reveals only the active inline Markdown node', async ({browser}
   await expect(page.locator('#write-mode')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#source-mode')).toHaveAttribute('aria-selected', 'false');
   await expect(editor).toContainText('**bold**');
+  await expect(editor).not.toContainText('*italic*');
+  await expect(editor).not.toContainText('](https://example.test)');
   await expect(page.locator('#editor .live-rendered-block')).toHaveCount(1);
+  const inactiveInline = page.locator('#editor .live-rendered-inline').first();
+  await expect(inactiveInline).toBeVisible();
+  await inactiveInline.click();
+  await expect(editor).toContainText('*italic*');
+  await expect(editor).not.toContainText('**bold**');
+  const inactiveLink = page.locator('#editor .live-rendered-inline[data-live-inline-name="Link"]');
+  await expect(inactiveLink).toBeVisible();
+  await inactiveLink.click();
+  await expect(editor).toContainText('[a link](https://example.test)');
+  await expect(editor).not.toContainText('**bold**');
+  await expect(editor).not.toContainText('*italic*');
   await context.close();
 });
 
@@ -353,6 +379,25 @@ test('write preview keeps layout stable and exposes local render metrics', async
   expect(after.busy).toBe(before.busy);
   expect(after.editorTop).toBe(before.editorTop);
   expect(await page.evaluate(() => window.__oxpioLayoutShifts || 0)).toBeLessThan(0.001);
+  await context.close();
+});
+
+test('rapid Write input coalesces local worker tasks without service preview requests', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  const editor = page.locator('#editor .cm-content');
+  await expect.poll(() => page.evaluate(() => window.__oxpioLivePreviewMetrics?.coreRenders || 0)).toBeGreaterThan(0);
+  const before = await page.evaluate(() => window.__oxpioLivePreviewMetrics?.workerTasks || 0);
+  await editor.click();
+  await editor.press('Control+End');
+  await editor.pressSequentially('abcdefghijklmnopqrst', {delay: 0});
+  await expect.poll(() => page.evaluate(value => (window.__oxpioLivePreviewMetrics?.workerTasks || 0) > value, before)).toBe(true);
+  const after = await page.evaluate(() => ({workerTasks: window.__oxpioLivePreviewMetrics?.workerTasks || 0, serviceRequests: window.__oxpioLivePreviewMetrics?.serviceRequests || 0}));
+  expect(after.workerTasks - before).toBeLessThan(20);
+  expect(after.serviceRequests).toBe(0);
+  await expect(editor).toContainText('abcdefghijklmnopqrst');
   await context.close();
 });
 
@@ -622,6 +667,17 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   expect(contentPreviewResponse.headers()['cache-control']).toBe('no-store');
   await page.locator('#write-mode').click();
   await expect(page.locator('[data-field="title"]')).toBeVisible();
+  await page.locator('#editor .cm-content').fill('> [!NOTE] Preview note\n> Note body\n\n- [x] Done\n- [?] Question\n');
+  await page.locator('#read-mode').click();
+  const semanticPreview = page.frameLocator('#preview-frame');
+  await expect(semanticPreview.locator('style[data-oxpio-basic-preview]')).toHaveCount(1);
+  await expect(semanticPreview.locator('.callout')).toHaveCount(1);
+  await expect(semanticPreview.locator('.callout-title')).toHaveText('Preview note');
+  await expect(semanticPreview.locator('.oxpio-task-input')).toHaveCount(2);
+  await expect(semanticPreview.locator('.oxpio-task-input').first()).toBeChecked();
+  await expect(semanticPreview.locator('.oxpio-task-input').nth(1)).toBeChecked();
+  await expect(semanticPreview.locator('li').filter({hasText: 'Question'})).toHaveCSS('text-decoration-line', 'none');
+  await page.locator('#write-mode').click();
 
   await page.locator('[data-field="title"]').fill('Updated draft');
   await page.locator('[data-field="description"]').fill('A draft description');

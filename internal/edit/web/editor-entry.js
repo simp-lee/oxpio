@@ -58,6 +58,9 @@ function disposeHighCostWorker() {
   highCostWorkerURL = "";
 }
 function cancelLivePreview(notify = false) {
+  if (highCostFrame) cancelAnimationFrame(highCostFrame);
+  highCostFrame = 0;
+  highCostPendingSource = "";
   disposeHighCostWorker();
   highCostGeneration += 1;
   highCostInFlight = false;
@@ -147,12 +150,15 @@ async function applyPreviewResult(result, kind = "content") {
   empty.classList.remove("is-loading");
 }
 const inlineNodeNames = new Set(["StrongEmphasis", "Emphasis", "Strikethrough", "Link", "Image", "InlineCode", "Autolink", "Subscript", "Superscript", "Emoji"]);
+const renderedInlineSelectors = {StrongEmphasis: "strong", Emphasis: "em", Strikethrough: "del", Link: "a", Autolink: "a", InlineCode: "code", Image: "img"};
 const markerNodeNames = new Set(["EmphasisMark", "StrikethroughMark", "LinkMark", "CodeMark", "URL", "HeaderMark", "ListMark", "QuoteMark", "TableDelimiter", "TaskMarker"]);
 const livePreviewMetrics = {coreRenders: 0, workerTasks: 0, workerCancels: 0, serviceRequests: 0, coreRenderMs: [], keyToPaintMs: []};
 window.__oxpioLivePreviewMetrics = livePreviewMetrics;
 let highCostWorker;
 let highCostWorkerURL = "";
 let highCostGeneration = 0;
+let highCostFrame = 0;
+let highCostPendingSource = "";
 let mathRuntimePromise = null;
 let mermaidRuntimePromise = null;
 let mermaidRenderID = 0;
@@ -195,6 +201,23 @@ function directBlockNodes(viewState) {
 function emptyRenderDocument(viewState) {
   return {body: viewState.doc.toString(), source: viewState.doc.toString(), blocks: [], styles: "", generation: ++renderGeneration};
 }
+function preserveRenderedDocument(rendered, transaction) {
+  const source = transaction.state.doc.toString();
+  if (!rendered?.blocks?.length) return rendered ? {...rendered, body: source, source} : emptyRenderDocument(transaction.state);
+  const changed = [];
+  transaction.changes.iterChangedRanges((from, to) => changed.push({from, to}));
+  const oldSource = rendered.source || rendered.body || "";
+  const intersects = (block, range) => {
+    const from = Math.max(0, range.from - 1);
+    const to = Math.min(oldSource.length, range.to + 1);
+    return from <= block.to && to >= block.from;
+  };
+  const blocks = rendered.blocks.filter(block => !changed.some(range => intersects(block, range))).map(block => {
+    const map = (value, assoc = 1) => transaction.changes.mapPos(value, assoc);
+    return {...block, from: map(block.from), to: map(block.to, -1), html: remapRenderedMathOffsets(block.html, oldSource, source, transaction.changes), inline: (block.inline || []).map(range => ({...range, from: map(range.from), to: map(range.to, -1)}))};
+  }).filter(block => block.from < block.to);
+  return {...rendered, body: source, source, blocks};
+}
 function findActiveSyntaxNode(viewState, position) {
   let node = syntaxTree(viewState).resolveInner(Math.max(0, position), -1);
   while (node && node.name !== "Document") {
@@ -204,7 +227,24 @@ function findActiveSyntaxNode(viewState, position) {
   return null;
 }
 function activeNodeMatches(node, active) { return !!active && node.from === active.from && node.to === active.to && node.name === active.name; }
-function activeSourceDecorations(viewState, active) {
+function renderedInlineHTML(block, node) {
+  const selector = renderedInlineSelectors[node.name];
+  if (!selector || !block?.html) return "";
+  const root = document.createElement("div");
+  root.innerHTML = block.html;
+  const elements = [...root.querySelectorAll("strong, em, del, a, code, img")];
+  let elementIndex = 0;
+  for (const range of block.inline || []) {
+    const rangeSelector = renderedInlineSelectors[range.name];
+    if (!rangeSelector) continue;
+    const index = elements.findIndex((element, index) => index >= elementIndex && element.matches(rangeSelector));
+    if (index < 0) continue;
+    if (range.from === node.from && range.to === node.to && range.name === node.name) return elements[index].outerHTML;
+    elementIndex = index + 1;
+  }
+  return "";
+}
+function activeSourceDecorations(viewState, active, renderedBlock = null, renderedStyles = "") {
   const ranges = [];
   const activeBlock = directBlockNodes(viewState).find(node => active && node.from <= active.from && node.to >= active.to);
   if (activeBlock) {
@@ -215,7 +255,7 @@ function activeSourceDecorations(viewState, active) {
   const nodes = [];
   syntaxTree(viewState).iterate({enter(node) {
     const inActiveBlock = !!activeBlock && node.from >= activeBlock.from && node.to <= activeBlock.to;
-    if (inActiveBlock && inlineNodeNames.has(node.name)) nodes.push(node);
+    if (inActiveBlock && inlineNodeNames.has(node.name)) nodes.push({from: node.from, to: node.to, name: node.name});
     if (inActiveBlock && new Set(["HeaderMark", "ListMark", "QuoteMark", "TableDelimiter"]).has(node.name) && activeBlock.name !== "FencedCode") {
       const activeBlockNode = active && active.name === activeBlock.name && active.from === activeBlock.from && active.to === activeBlock.to;
       if (!activeBlockNode && (!active || node.from < active.from || node.to > active.to)) {
@@ -227,7 +267,17 @@ function activeSourceDecorations(viewState, active) {
   const covered = [];
   for (const node of nodes.sort((a, b) => a.from - b.from || b.to - a.to)) {
     if (covered.some(range => node.from >= range.from && node.to <= range.to)) continue;
-    if (!activeNodeMatches(node, active)) ranges.push(...liveNodeMarkerRanges(viewState, node, active));
+    const containsActive = !!active && node.from <= active.from && node.to >= active.to;
+    if (!activeNodeMatches(node, active) && !containsActive && renderedBlock) {
+      const html = renderedInlineHTML(renderedBlock, node);
+      if (html) {
+        ranges.push(Decoration.replace({widget: new LiveRenderedWidget(html, renderedStyles, node.from, node.to, node.name, viewState.doc.toString(), [], true)}).range(node.from, node.to));
+      } else {
+        ranges.push(...liveNodeMarkerRanges(viewState, node, active));
+      }
+    } else if (!activeNodeMatches(node, active)) {
+      ranges.push(...liveNodeMarkerRanges(viewState, node, active));
+    }
     covered.push({from: node.from, to: node.to});
   }
   return ranges;
@@ -243,6 +293,33 @@ function utf8BoundaryMap(source) {
     map.set(bytes, units);
   }
   return map;
+}
+function utf8OffsetForCodeUnits(source, target) {
+  const encoder = new TextEncoder();
+  let bytes = 0;
+  let units = 0;
+  for (const character of source) {
+    if (units >= target) break;
+    bytes += encoder.encode(character).length;
+    units += character.length;
+  }
+  return bytes;
+}
+function remapRenderedMathOffsets(html, oldSource, newSource, changes) {
+  if (!html || !html.includes("data-live-math-")) return html;
+  const root = document.createElement("div");
+  root.innerHTML = html;
+  const oldBoundaries = utf8BoundaryMap(oldSource);
+  root.querySelectorAll("[data-live-math-from][data-live-math-to]").forEach(math => {
+    const oldFrom = oldBoundaries.get(Number(math.getAttribute("data-live-math-from")));
+    const oldTo = oldBoundaries.get(Number(math.getAttribute("data-live-math-to")));
+    if (oldFrom === undefined || oldTo === undefined) return;
+    const from = changes.mapPos(oldFrom, 1);
+    const to = changes.mapPos(oldTo, -1);
+    math.setAttribute("data-live-math-from", String(utf8OffsetForCodeUnits(newSource, from)));
+    math.setAttribute("data-live-math-to", String(utf8OffsetForCodeUnits(newSource, to)));
+  });
+  return root.innerHTML;
 }
 function codeMirrorInlineRanges(from, to) {
   if (!editor) return [];
@@ -306,8 +383,7 @@ function ensureHighCostWorker() {
   };
   return highCostWorker;
 }
-function scheduleHighCostTasks(viewState) {
-  const source = viewState.doc.toString();
+function startHighCostTask(source) {
   if (source.includes("$") || source.includes("\\(")) ensureMathRuntime().catch(() => {});
   const worker = ensureHighCostWorker();
   if (!worker) return;
@@ -319,6 +395,16 @@ function scheduleHighCostTasks(viewState) {
   highCostInFlight = true;
   livePreviewMetrics.workerTasks += 1;
   worker.postMessage({generation: highCostGeneration, source});
+}
+function scheduleHighCostTasks(viewState) {
+  highCostPendingSource = viewState.doc.toString();
+  if (highCostFrame) return;
+  highCostFrame = requestAnimationFrame(() => {
+    highCostFrame = 0;
+    const source = highCostPendingSource;
+    highCostPendingSource = "";
+    if (source) startHighCostTask(source);
+  });
 }
 function scheduleDraft() {
   clearTimeout(state.draftTimer);
@@ -1539,6 +1625,11 @@ class LiveRenderedWidget extends WidgetType {
     element.dataset.liveBlockFrom = String(this.from);
     element.dataset.liveBlockTo = String(this.to);
     element.dataset.liveBlockName = this.name;
+    if (this.inlineHost) {
+      element.dataset.liveInlineFrom = String(this.from);
+      element.dataset.liveInlineTo = String(this.to);
+      element.dataset.liveInlineName = this.name;
+    }
     const shadow = element.attachShadow({mode: "open"});
     const style = document.createElement("style");
     style.textContent = `:host { --preview-bg: #fff; --preview-surface: #fff; --preview-text: #20252b; --preview-muted: #687687; --preview-accent: #1769aa; --preview-border: #dce1e6; --preview-code-bg: #20252b; --preview-code-text: #f5f7fa; --preview-inline-code: #eef1f4; --preview-table-head: #f0f4f7; --preview-callout: #f4f8fb; display: block; max-width: 100%; color: var(--preview-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; } :host(.live-rendered-inline) { display: inline; vertical-align: baseline; } .content-preview-content { min-width: 0; } ${this.inlineHost ? ".content-preview-content, p { display: inline; margin: 0; }" : ""} h1, h2, h3, h4, h5, h6 { margin: .5rem 0; } p { margin: .7rem 0; } pre { overflow-x: auto; padding: .75rem; background: #20252b; color: #f5f7fa; } pre.mermaid { background: #f8fafb; color: #20252b; border: 1px dashed #aeb7c2; } code, .live-inline-code { padding: .08rem .25rem; border-radius: .2rem; background: #eef1f4; } pre code { padding: 0; background: transparent; } blockquote { margin: .75rem 0; padding-left: .8rem; border-left: 3px solid #aeb7c2; color: #495665; } .callout { margin: .75rem 0; padding: .65rem .8rem; border-left: 3px solid #2d75b9; border-radius: .25rem; background: #f4f8fb; } .callout-title { margin-bottom: .35rem; color: #1769aa; font-weight: 700; } .footnotes { margin-top: 1.5rem; padding-top: .5rem; border-top: 1px solid #dce1e6; font-size: .85em; } table { width: 100%; border-collapse: collapse; } th, td { padding: .35rem .5rem; border: 1px solid #dce1e6; text-align: left; } th { background: #f0f4f7; } a, .live-link { color: #1769aa; text-decoration: underline; } .live-image { padding: .15rem .4rem; border: 1px solid #c7cdd4; border-radius: .25rem; background: #f8fafb; } .live-math { font-family: Georgia, serif; font-style: italic; } ul:has(> li > .oxpio-task-input), ul:has(> li > p > .oxpio-task-input) { list-style: none; padding-left: 0; } ul:has(> li > .oxpio-task-input) > li, ul:has(> li > p > .oxpio-task-input) > li { padding-left: 0; } .oxpio-task-input { appearance: none; -webkit-appearance: none; display: inline-block; width: 1.25em; height: 1.25em; margin: 0 .35em 0 0; padding: 0; vertical-align: -.18em; border: 1px solid #aeb4bb; border-radius: .28em; background: transparent; background-position: 50% 50%; background-repeat: no-repeat; background-size: 100%; color: #687385; opacity: 1; } .oxpio-task-input:checked { border: none; border-radius: 0; background-image: none; background-color: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: 100%; mask-size: 100%; -webkit-mask-position: 50% 50%; mask-position: 50% 50%; } .oxpio-task-input[data-task='x']:checked, .oxpio-task-input[data-task='X']:checked { border-radius: .28em; background-color: #8b5cf6; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m5 12 4 4L19 6' fill='none' stroke='white' stroke-linecap='round' stroke-linejoin='round' stroke-width='2.5'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='/']:checked { background-image: none; background-color: transparent; border: none; position: relative; overflow: hidden; } .oxpio-task-input[data-task='/']:checked::after { content: ''; display: block; position: absolute; inset: 0 auto 0 0; width: calc(50% - .5px); background-color: #8b5cf6; } .oxpio-task-input[data-task='?']:checked { border: 0; background-color: #eab308; background-size: 200% 90%; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 16 16"%3E%3Cpath fill="white" fill-rule="evenodd" d="M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='"']:checked { border: 0; background-color: #14b8a6; background-size: 75%; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 24 24"%3E%3Cpath fill="white" d="M6.5 10c-.223 0-.437.034-.65.065c.069-.232.14-.468.254-.68c.114-.308.292-.575.469-.844c.148-.291.409-.488.601-.737c.201-.242.475-.403.692-.604c.213-.21.492-.315.714-.463c.232-.133.434-.28.65-.35l.539-.222l.474-.197l-.485-1.938l-.597.144c-.191.048-.424.104-.689.171c-.271.05-.56.187-.882.312c-.318.142-.686.238-1.028.466c-.344.218-.741.4-1.091.692c-.339.301-.748.562-1.05.945c-.33.358-.656.734-.909 1.162c-.293.408-.492.856-.702 1.299c-.19.443-.343.896-.468 1.336c-.237.882-.343 1.72-.384 2.437c-.034.718-.014 1.315.028 1.747c.015.204.043.402.063.539l.025.168l.026-.006A4.5 4.5 0 1 0 6.5 10z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='>']:checked { color: #687385; transform: rotate(90deg); -webkit-mask-position: 50% 100%; mask-position: 50% 100%; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10.894 2.553a1 1 0 0 0-1.788 0l-7 14a1 1 0 0 0 1.169 1.409l5-1.429A1 1 0 0 0 9 15.571V11a1 1 0 1 1 2 0v4.571a1 1 0 0 0 .725.962l5 1.428a1 1 0 0 0 1.17-1.408l-7-14z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='<']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='-']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M3 10a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='!']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-8a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0V6a1 1 0 0 0-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='*']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a.951.951 0 0 0 .951-.69l1.07-3.292z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='l']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M5.05 4.05a7 7 0 1 1 9.9 9.9L10 18.9l-4.95-4.95a7 7 0 0 1 0-9.9ZM10 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='b']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14l-5-2.5L5 18V4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='i']:checked { background-color: #2563eb; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 512 512"%3E%3Cpath fill="none" stroke="white" stroke-width="40" d="M196 220h64v172M187 396h138"/%3E%3Cpath fill="white" d="M256 160a32 32 0 1 1 32-32a32 32 0 0 1-32 32Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='S']:checked { background-color: #16a34a; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 48 48"%3E%3Cpath fill="white" d="M26 8a2 2 0 1 0-4 0v2a8 8 0 1 0 0 16v8a4 4 0 0 1-3.773-2.666a2 2 0 0 0-3.771 1.332A8 8 0 0 0 22 38v2a2 2 0 1 0 4 0v-2a8 8 0 1 0 0-16v-8a4 4 0 0 1 3.773 2.666a2 2 0 0 0 3.771-1.332A8 8 0 0 0 26 10V8Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='I']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M11 3a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0V3zM15.657 5.757a1 1 0 0 0-1.414-1.414l-.707.707a1 1 0 0 0 1.414 1.414l.707-.707zM18 10a1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 1 1zM8 16v-1h4v1a2 2 0 1 1-4 0zM12 14a4 4 0 1 0-4.954 0c.27.213.462.519.476.859h4.002z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='f']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12.395 2.553a1 1 0 0 0-1.45-.385C7.8 4.3 7.1 8.2 7 10.7A2.6 2.6 0 0 1 5.5 8.2A7 7 0 1 0 15 13c0-3.2-2.2-5.7-2.6-10.4Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='k']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 8a6 6 0 0 1-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1 1 18 8zm-6-4a1 1 0 1 0 0 2 2 2 0 0 1 2 2 1 1 0 1 0 2 0 4 4 0 0 0-4-4z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='w']:checked { color: #7c3aed; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 13v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4a4 4 0 0 1-2 1 3 3 0 0 1-3-2 3 3 0 0 1-6 0 3 3 0 0 1-3 2 4 4 0 0 1-2-1Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='p']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 10.5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 1 1-3 0v-6zM6 10.333v5.43a2 2 0 0 0 1.106 1.79L8 18h6.36a2 2 0 0 0 1.96-1.6l1.2-6A2 2 0 0 0 15.56 8H12V4a2 2 0 0 0-2-2 1 1 0 0 0-1 1v.667a4 4 0 0 1-.8 2.4L6.8 7.933a4 4 0 0 0-.8 2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='c']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M18 9.5a1.5 1.5 0 1 1-3 0v-6a1.5 1.5 0 1 1 3 0v6zM14 9.667v-5.43A2 2 0 0 0 11.9 2H5.64a2 2 0 0 0-1.96 1.6l-1.2 6A2 2 0 0 0 4.44 12H8v4a2 2 0 0 0 2 2 1 1 0 0 0 1-1v-.667a4 4 0 0 0 .8-2.4l1.4-1.866a4 4 0 0 0 .8-2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='u']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 7a1 1 0 1 0 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V8.414l-4.293 4.293a1 1 0 0 1-1.414 0L8 10.414l-4.293 4.293a1 1 0 0 1-1.414-1.414l5-5a1 1 0 0 1 1.414 0L11 10.586 14.586 7H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='d']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 13a1 1 0 1 0 0 2h5a1 1 0 0 0 1-1V9a1 1 0 1 0-2 0v2.586L12.707 7.293a1 1 0 0 0-1.414 0L8 10.586 3.707 6.293a1 1 0 0 0-1.414 1.414l5 5a1 1 0 0 0 1.414 0L11 10.414 14.586 13H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked, .oxpio-task-input[data-task='M']:checked, .oxpio-task-input[data-task='D']:checked { -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.25 2.25 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.25 2.25 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked { color: #16a34a; } .oxpio-task-input[data-task='M']:checked { color: #7c3aed; } .oxpio-task-input[data-task='D']:checked { color: #687385; } .oxpio-task-input[data-task='\"']:checked { border: 0; background-color: #14b8a6; background-size: 75%; background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z'/%3E%3C/svg%3E\"); } .oxpio-task-input[data-task='P']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='M']:checked { color: #7c3aed; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='D']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 1 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0-1.5.75.75 0 0 0-1.5 0ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1-2.5 0Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='c']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M18 9.5a1.5 1.5 0 1 1-3 0v-6a1.5 1.5 0 1 1 3 0v6zM14 9.667v-5.43A2 2 0 0 0 11.9 2H5.64a2 2 0 0 0-1.96 1.6l-1.2 6A2 2 0 0 0 4.44 12H8v4a2 2 0 0 0 2 2 1 1 0 0 0 1-1v-.667a4 4 0 0 0 .8-2.4l1.4-1.866a4 4 0 0 0 .8-2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='M']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='D']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0-1.5.75.75 0 0 0-1.5 0ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1-2.5 0Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='>']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10.894 2.553a1 1 0 0 0-1.788 0l-7 14a1 1 0 0 0 1.169 1.409l5-1.429A1 1 0 0 0 9 15.571V11a1 1 0 1 1 2 0v4.571a1 1 0 0 0 .725.962l5 1.428a1 1 0 0 0 1.17-1.408l-7-14z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='<']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='-']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M3 10a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='!']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-8a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0V6a1 1 0 0 0-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='*']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-1.371-1.81.588-1.81h3.461a.951.951 0 0 0 .951-.69l1.07-3.292z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='l']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M5.05 4.05a7 7 0 1 1 9.9 9.9L10 18.9l-4.95-4.95a7 7 0 0 1 0-9.9ZM10 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='b']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14l-5-2.5L5 18V4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='I']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M11 3a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0V3zM15.657 5.757a1 1 0 0 0-1.414-1.414l-.707.707a1 1 0 0 0 1.414 1.414l.707-.707zM18 10a1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 1 1zM8 16v-1h4v1a2 2 0 1 1-4 0zM12 14a4 4 0 1 0-4.954 0c.27.213.462.519.476.859h4.002z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='f']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12.395 2.553a1 1 0 0 0-1.45-.385C7.8 4.3 7.1 8.2 7 10.7A2.6 2.6 0 0 1 5.5 8.2A7 7 0 1 0 15 13c0-3.2-2.2-5.7-2.6-10.4Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='k']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 8a6 6 0 0 1-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1 1 18 8zm-6-4a1 1 0 1 0 0 2 2 2 0 0 1 2 2 1 1 0 1 0 2 0 4 4 0 0 0-4-4z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='w']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 13v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4a4 4 0 0 1-2 1 3 3 0 0 1-3-2 3 3 0 0 1-6 0 3 3 0 0 1-3 2 4 4 0 0 1-2-1Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='p']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 10.5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 1 1-3 0v-6zM6 10.333v5.43a2 2 0 0 0 1.106 1.79L8 18h6.36a2 2 0 0 0 1.96-1.6l1.2-6A2 2 0 0 0 15.56 8H12V4a2 2 0 0 0-2-2 1 1 0 0 0-1 1v.667a4 4 0 0 1-.8 2.4L6.8 7.933a4 4 0 0 0-.8 2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='u']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 7a1 1 0 1 0 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V8.414l-4.293 4.293a1 1 0 0 1-1.414 0L8 10.414l-4.293 4.293a1 1 0 0 1-1.414-1.414l5-5a1 1 0 0 1 1.414 0L11 10.586 14.586 7H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='d']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 13a1 1 0 1 0 0 2h5a1 1 0 0 0 1-1V9a1 1 0 1 0-2 0v2.586L12.707 7.293a1 1 0 0 0-1.414 0L8 10.586 3.707 6.293a1 1 0 0 0-1.414 1.414l5 5a1 1 0 0 0 1.414 0L11 10.414 14.586 13H12z'/%3E%3C/svg%3E"); } :host([data-theme="dark"]) .oxpio-task-input[data-task='?']:checked, :host-context(html[data-theme="dark"]) .oxpio-task-input[data-task='?']:checked { background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' fill-opacity='.8' d='M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z\"/%3E%3C/svg%3E\"); } :host([data-theme="dark"]) .oxpio-task-input[data-task='\"']:checked, :host-context(html[data-theme="dark"]) .oxpio-task-input[data-task='\"']:checked { background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' fill-opacity='.7' d='M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z'/%3E%3C/svg%3E\"); } @media (prefers-color-scheme: dark) { :host([data-theme="system"]) .oxpio-task-input[data-task='?']:checked { background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 16 16"%3E%3Cpath fill="black" fill-opacity="0.8" d="M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z"/%3E%3C/svg%3E'); } :host([data-theme="system"]) .oxpio-task-input[data-task='\"']:checked { background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 24 24"%3E%3Cpath fill="black" fill-opacity="0.7" d="M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z"/%3E%3C/svg%3E'); } } li:has(> input[data-task='x']:checked), li:has(> input[data-task='X']:checked), li:has(> input[data-task='-']:checked), li:has(> p > input[data-task='x']:checked), li:has(> p > input[data-task='X']:checked), li:has(> p > input[data-task='-']:checked) { text-decoration: line-through solid currentColor 1px; }${this.styles}`;
@@ -1552,7 +1643,7 @@ class LiveRenderedWidget extends WidgetType {
     content.className = "content-preview-content";
     content.innerHTML = this.html;
     const inlineElements = [...content.querySelectorAll("strong, em, del, a, code, img")];
-    const inlineSelectors = {StrongEmphasis: "strong", Emphasis: "em", Strikethrough: "del", Link: "a", Autolink: "a", InlineCode: "code", Image: "img"};
+    const inlineSelectors = renderedInlineSelectors;
     const usedInlineElements = new Set();
     (this.inline || []).forEach(range => {
       const selector = inlineSelectors[range.name];
@@ -1615,7 +1706,7 @@ function liveWidget(from, to, text, className) { return from < to ? Decoration.r
 function findSyntaxNodes(viewState, from, to, names) {
   const nodes = [];
   syntaxTree(viewState).iterate({enter(node) {
-    if (names.has(node.name) && node.from >= from && node.to <= to) nodes.push(node);
+    if (names.has(node.name) && node.from >= from && node.to <= to) nodes.push({from: node.from, to: node.to, name: node.name});
   }});
   return nodes;
 }
@@ -1699,7 +1790,7 @@ function renderedLivePreviewDecorations(viewState, active, rendered) {
     } else if (!activeBlock || block !== activeBlock || isTable) {
       ranges.push(Decoration.replace({widget: new LiveRenderedWidget(block.html, rendered.styles, block.from, block.to, block.name, rendered.source || rendered.body, block.inline), block: true}).range(block.from, block.to));
     } else {
-      ranges.push(...activeSourceDecorations(viewState, active));
+      ranges.push(...activeSourceDecorations(viewState, active, block, rendered.styles));
     }
   }
   return ranges.length ? Decoration.set(ranges.sort((a, b) => a.from - b.from || a.to - b.to), true) : Decoration.none;
@@ -1723,7 +1814,7 @@ const livePreviewDecorations = StateField.define({
       if (effect.is(livePreviewActive)) { active = effect.value; explicitActive = true; }
       if (effect.is(livePreviewCore)) { rendered = effect.value; coreRendered = true; }
     }
-    if (transaction.docChanged) rendered = emptyRenderDocument(transaction.state);
+    if (transaction.docChanged) rendered = preserveRenderedDocument(rendered, transaction);
     if (transaction.selection && !explicitActive) active = findActiveSyntaxNode(transaction.state, transaction.state.selection.main.head);
     if (!transaction.docChanged && !transaction.selection && !explicitActive && !coreRendered) return value;
     return {active, rendered, decorations: buildLivePreviewDecorations(transaction.state, active, rendered)};
@@ -1909,7 +2000,7 @@ document.querySelectorAll("button svg, label svg, .workspace-search svg").forEac
 editor = new EditorView({state: EditorState.create({extensions: editorExtensions()}), parent: $("#editor")});
 editor.dom.addEventListener("click", event => {
   if (state.surface !== "write" || state.mode !== "visual") return;
-  const target = event.target instanceof Element ? event.target.closest(".live-rendered-block") : null;
+  const target = event.target instanceof Element ? event.target.closest(".live-rendered-block, .live-rendered-inline") : null;
   if (!target) return;
   const path = event.composedPath?.() || [];
   const inline = path.find(node => node instanceof Element && node.hasAttribute("data-live-inline-from"));

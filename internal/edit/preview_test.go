@@ -354,12 +354,12 @@ func TestRenderContentPreviewHTMLKeepsArticleContentAndDropsSiteShell(t *testing
 		t.Fatal(err)
 	}
 	html := string(got)
-	for _, want := range []string{"data-oxpio-math", "<h1>Title</h1>", "data-page-content", "data-oxpio-basic-preview", "/assets/style.abc123.css", "Body"} {
+	for _, want := range []string{"data-oxpio-math", "<h1>Title</h1>", "data-page-content", "data-oxpio-basic-preview", "Body"} {
 		if !strings.Contains(html, want) {
 			t.Fatalf("content preview missing %q: %s", want, html)
 		}
 	}
-	for _, unwanted := range []string{"data-oxpio-sidebar", "data-oxpio-popover", "theme.css", "runtime.js"} {
+	for _, unwanted := range []string{"data-oxpio-sidebar", "data-oxpio-popover", "theme.css", "style.abc123.css", "runtime.js"} {
 		if strings.Contains(html, unwanted) {
 			t.Fatalf("content preview retained runtime marker %q: %s", unwanted, html)
 		}
