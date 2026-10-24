@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OXPIO Editor</title>
+  <link rel="icon" href="/_oxpio/favicon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/_oxpio/editor.css">
 </head>
 <body>
@@ -175,7 +176,9 @@
     <form method="dialog" id="file-form" class="new-form">
       <h2 id="file-dialog-title">New file</h2>
       <input id="file-original" type="hidden">
-      <label>Path<input id="file-path" name="path" placeholder="For example: docs/guide.md" required></label>
+      <label>Path<input id="file-path" name="path" aria-describedby="file-model-hint file-parent-warning" placeholder="For example: docs/guide.md" required></label>
+      <p id="file-model-hint" class="dialog-hint" hidden>Folders are sections only when they contain <code>_index.md</code>. Create the Section index before creating an article in a new folder.</p>
+      <p id="file-parent-warning" class="dialog-warning" role="alert" hidden></p>
       <div id="markdown-file-fields">
         <label>Title<input id="file-title" name="title"></label>
         <label>Type<select id="file-type" name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
@@ -189,7 +192,9 @@
   <dialog id="new-dialog">
     <form method="dialog" id="new-form" class="new-form">
       <h2>New article</h2>
-      <label>Path<input name="path" placeholder="For example: news/new.md" required></label>
+      <label>Path<input name="path" aria-describedby="new-model-hint new-parent-warning" placeholder="For example: news/new.md" required></label>
+      <p id="new-model-hint" class="dialog-hint">Folders are sections only when they contain <code>_index.md</code>. Create the Section index before creating an article in a new folder.</p>
+      <p id="new-parent-warning" class="dialog-warning" role="alert" hidden></p>
       <label>Title<input name="title" required></label>
       <label>Type<select name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
       <label id="new-date-wrap">Publish date<input name="date" type="date"></label>
@@ -205,6 +210,7 @@
       <label class="upload-button" title="Upload one Markdown or image file"><svg aria-hidden="true"><use href="#icon-upload"></use></svg> Upload file<input id="media-upload" type="file" accept=".md,.png,.jpg,.jpeg,.webp,.svg,image/*,text/markdown" hidden></label>
     </div>
     <label class="upload-folder">Target folder<input id="upload-folder" type="text" placeholder="Vault root or existing folder"></label>
+    <p id="upload-parent-warning" class="dialog-warning" role="alert" hidden></p>
     <div id="media-list" class="media-list"><p>Loading…</p></div>
   </aside>
 

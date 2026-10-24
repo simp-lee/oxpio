@@ -16,7 +16,7 @@ const state = {
   bodyBaseline: "", formBaseline: {}, sourceChanged: false,
   filePath: "", fileHash: "", fileKind: "", fileSourceKind: "",
   fileDialogMode: "", dirty: false, busy: false, busyCount: 0, busyReason: "", operationController: null, operationOwned: false, operationCommitted: false, operationCancelled: false, loadToken: 0,
-  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", previewToken: "", catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
+  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, fileEntries: null, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", previewToken: "", catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
 };
 const editable = new Compartment();
 let editor;
@@ -916,7 +916,14 @@ async function refreshFilesFromUI() {
 }
 
 async function refreshFiles(preferred = state.filePath) {
-  const data = await responseJSON(await fetchWithTimeout("/_oxpio/files"));
+  let data;
+  try {
+    data = await responseJSON(await fetchWithTimeout("/_oxpio/files"));
+  } catch (error) {
+    state.fileEntries = null;
+    throw error;
+  }
+  state.fileEntries = data.entries;
   const tree = $("#file-tree");
   tree.replaceChildren();
   const selectionPath = preferred;
@@ -970,6 +977,7 @@ async function refreshFiles(preferred = state.filePath) {
     state.fileSourceKind = "";
     state.fileEditable = false;
   }
+  updateUploadGuidance();
   updateFileActions();
 }
 function fileSelectionSnapshot() {
@@ -997,6 +1005,7 @@ function selectFileEntry(entry) {
   state.fileSourceKind = entry.sourceKind || "";
   state.fileEditable = entry.editable !== false;
   $("#upload-folder").value = entry.kind === "folder" ? entry.path : (entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : "");
+  updateUploadGuidance();
   document.querySelectorAll(".file-entry").forEach(item => item.setAttribute("aria-selected", String(item.dataset.path === entry.path)));
   updateFileActions();
   if (entry.sourceKind) loadSource(entry.path).catch(error => {
@@ -1887,6 +1896,7 @@ function insertMedia(path, allowBusy = false) {
 }
 async function openMedia() {
   $("#media-panel").hidden = false;
+  updateUploadGuidance();
   if (state.busy) return loadMedia(true);
   busy(true, "Loading media library…");
   try { await loadMedia(true); }
@@ -1916,9 +1926,26 @@ async function loadMedia(throwOnError = false) {
     if (throwOnError) throw error;
   }
 }
+function uploadTargetPath(file) {
+  const folder = $("#upload-folder").value.trim();
+  return folder ? `${folder}/${file.name}` : file.name;
+}
+function updateUploadGuidance(file = $("#media-upload").files?.[0]) {
+  const warning = $("#upload-parent-warning");
+  const message = file && /\.md$/iu.test(file.name) ? fileMarkdownWarning(uploadTargetPath(file), $("#upload-kind").value) : "";
+  warning.textContent = message;
+  warning.hidden = !message;
+}
 async function uploadMedia(file) {
   if (!file || state.busy) return;
   if (file instanceof FileList && file.length !== 1) { status("Upload exactly one file."); return; }
+  const warning = file instanceof File ? fileMarkdownWarning(uploadTargetPath(file), $("#upload-kind").value) : "";
+  if (warning) {
+    updateUploadGuidance(file);
+    diagnostics([], `Upload blocked: ${warning}`);
+    status(`Upload blocked: ${warning}`);
+    return;
+  }
   busy(true);
   const stopProgress = progressStatus("Upload: validating, building, and saving…");
   try {
@@ -1949,7 +1976,53 @@ async function uploadMedia(file) {
     } else if (isAbortError(error)) status("Upload cancelled.");
     else { diagnostics(error.diagnostics, `Upload failed: ${error.message}`); saveState("failed", "Build failed"); status(`Upload failed: ${error.message}`); }
   }
-  finally { stopProgress(); busy(false); $("#media-upload").value = ""; }
+  finally { stopProgress(); busy(false); $("#media-upload").value = ""; updateUploadGuidance(); }
+}
+function fileSectionIndexPath(parent) {
+  return parent === "." ? "_index.md" : `${parent}/_index.md`;
+}
+function fileParentSectionWarning(relPath) {
+  if (!Array.isArray(state.fileEntries) || !/\.md$/iu.test(relPath)) return "";
+  const isSectionIndex = /(^|\/)[_]index\.md$/iu.test(relPath);
+  const slash = relPath.lastIndexOf("/");
+  let parent = slash < 0 ? "." : relPath.slice(0, slash);
+  if (isSectionIndex) {
+    if (relPath === "_index.md") return "";
+    const parentSlash = parent.lastIndexOf("/");
+    parent = parentSlash < 0 ? "." : parent.slice(0, parentSlash);
+  }
+  const sectionPath = fileSectionIndexPath(parent);
+  const section = state.fileEntries.find(entry => entry.kind === "file" && entry.path === sectionPath && entry.sourceKind === "section");
+  if (section) return "";
+  const folder = parent === "." ? "the vault root" : `folder \"${parent}\"`;
+  return `${folder} is not a section yet. Create \"${sectionPath}\" as a Section index first.`;
+}
+function articleCreationWarning(relPath) {
+  if (/(^|\/)[_]index\.md$/iu.test(relPath)) return "Articles cannot be named _index.md. Use New Markdown and choose Section index instead.";
+  return fileParentSectionWarning(relPath);
+}
+function fileMarkdownWarning(relPath, kind) {
+  const looksLikeSectionIndex = /(^|\/)[_]index\.md$/iu.test(relPath);
+  const exactSectionIndex = /(^|\/)[_]index\.md$/.test(relPath);
+  if (looksLikeSectionIndex && !exactSectionIndex) return "Section index files must use the exact filename _index.md.";
+  if (looksLikeSectionIndex && kind !== "section-index") return "Files named _index.md must use Section index kind.";
+  if (!looksLikeSectionIndex && kind === "section-index") return "Section index files must be named _index.md.";
+  return fileParentSectionWarning(relPath);
+}
+function updateFileDialogGuidance() {
+  const markdown = state.fileDialogMode === "markdown";
+  const warning = $("#file-parent-warning");
+  const message = markdown ? fileMarkdownWarning($("#file-path").value.trim(), $("#file-kind").value) : "";
+  warning.textContent = message;
+  warning.hidden = !message;
+  $("#file-submit").disabled = Boolean(message);
+}
+function updateNewDialogGuidance() {
+  const warning = $("#new-parent-warning");
+  const message = articleCreationWarning($("#new-form input[name=path]").value.trim());
+  warning.textContent = message;
+  warning.hidden = !message;
+  $("#new-submit").disabled = Boolean(message);
 }
 function openFileDialog(mode) {
   if (state.busy) return;
@@ -1963,6 +2036,8 @@ function openFileDialog(mode) {
   $("#file-path").value = mode === "rename" ? state.filePath : "";
   $("#file-path").readOnly = false;
   $("#markdown-file-fields").hidden = !markdown;
+  $("#file-model-hint").hidden = !markdown;
+  $("#file-parent-warning").hidden = true;
   $("#file-title").required = markdown;
   if (markdown) {
     $("#file-title").value = "";
@@ -1970,7 +2045,9 @@ function openFileDialog(mode) {
     $("#file-date").value = "";
     $("#file-kind").value = "article";
   }
+  $("#file-submit").disabled = false;
   dialog.showModal();
+  updateFileDialogGuidance();
 }
 async function runFileMutation(label, action, preferred = state.filePath, reloadSource = true) {
   if (state.busy) return;
@@ -2085,6 +2162,8 @@ $("#toolbar-fullscreen").onclick = event => {
 $("#metadata").oninput = () => { dirty(); scheduleLivePreview(); };
 $("#metadata").onsubmit = event => event.preventDefault();
 $("#file-refresh").onclick = refreshFilesFromUI;
+$("#file-path").oninput = updateFileDialogGuidance;
+$("#file-kind").onchange = updateFileDialogGuidance;
 $("#file-new-folder").onclick = () => openFileDialog("folder");
 $("#file-new-markdown").onclick = () => openFileDialog("markdown");
 $("#file-rename").onclick = () => openFileDialog("rename");
@@ -2108,6 +2187,11 @@ $("#file-form").onsubmit = async event => {
   const mode = state.fileDialogMode;
   const pathValue = $("#file-path").value.trim();
   const dialog = $("#file-dialog");
+  if (mode === "markdown" && fileMarkdownWarning(pathValue, $("#file-kind").value)) {
+    updateFileDialogGuidance();
+    $("#file-path").focus();
+    return;
+  }
   try {
     if (mode === "folder") {
       await runFileMutation("Create folder", () => mutation("POST", "/_oxpio/file/folder", {path: pathValue}, {"X-OXPIO-File-Hash": "absent"}), pathValue, false);
@@ -2132,7 +2216,8 @@ $("#file-form").onsubmit = async event => {
     }
   }
 };
-$("#new").onclick = () => { if (confirmDiscard()) $("#new-dialog").showModal(); };
+$("#new").onclick = () => { if (confirmDiscard()) { $("#new-dialog").showModal(); updateNewDialogGuidance(); } };
+$("#new-form input[name=path]").oninput = updateNewDialogGuidance;
 $("#new-cancel").onclick = () => { $("#new-dialog").close(); $("#new").focus(); };
 $("#new-form").onsubmit = async event => {
   if (event.submitter?.value === "cancel") {
@@ -2144,6 +2229,11 @@ $("#new-form").onsubmit = async event => {
   event.preventDefault();
   if (state.busy) return;
   const form = new URLSearchParams(new FormData(event.target));
+  if (articleCreationWarning(form.get("path")?.trim() || "")) {
+    updateNewDialogGuidance();
+    $("#new-form input[name=path]").focus();
+    return;
+  }
   busy(true);
   const stopProgress = progressStatus("Create: validating, building, and saving…");
   try {
@@ -2179,7 +2269,9 @@ $("#delete").onclick = () => {
 };
 $("#media").onclick = openMedia;
 $("#media-close").onclick = () => { $("#media-panel").hidden = true; };
-$("#media-upload").onchange = event => { if (event.target.files.length !== 1) { saveState("failed", "Upload failed"); diagnostics([], "Upload exactly one file; no files were written."); status("Upload exactly one file; no files were written."); event.target.value = ""; return; } uploadMedia(event.target.files[0]); };
+$("#upload-folder").oninput = () => updateUploadGuidance();
+$("#upload-kind").onchange = () => updateUploadGuidance();
+$("#media-upload").onchange = event => { if (event.target.files.length !== 1) { saveState("failed", "Upload failed"); diagnostics([], "Upload exactly one file; no files were written."); status("Upload exactly one file; no files were written."); event.target.value = ""; return; } updateUploadGuidance(event.target.files[0]); uploadMedia(event.target.files[0]); };
 const mediaDropzone = $("#media-dropzone");
 ["dragenter", "dragover"].forEach(type => mediaDropzone.addEventListener(type, event => { event.preventDefault(); mediaDropzone.classList.add("drag-over"); }));
 ["dragleave", "drop"].forEach(type => mediaDropzone.addEventListener(type, event => { event.preventDefault(); mediaDropzone.classList.remove("drag-over"); }));

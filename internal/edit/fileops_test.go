@@ -46,6 +46,12 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	if folder.SourceHash == AbsentSourceHash || folder.Build != nil {
 		t.Fatalf("directory creation result = %#v, want source-only mutation", folder)
 	}
+	if _, err := coordinator.CreateMarkdown("docs/guide.md", AbsentSourceHash, []byte("---\ntitle: Guide\npublish: false\ntype: doc\n---\nGuide\n")); err == nil || !strings.Contains(err.Error(), `create "docs/_index.md" first`) {
+		t.Fatalf("article in folder without section error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vault, "docs", "guide.md")); !os.IsNotExist(err) {
+		t.Fatalf("failed article create stat = %v", err)
+	}
 	section, err := NewSectionSource("Docs")
 	if err != nil {
 		t.Fatal(err)
@@ -141,6 +147,31 @@ func TestFileManagerOperationsUseCASAndCandidateBuilds(t *testing.T) {
 	}
 }
 
+func TestFileManagerCanCreateRootSectionIndex(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(t.TempDir(), "public")
+	writeEditFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeEditFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\nHome\n")
+	built, err := internalbuild.BuildWithOptions(vault, output, internalbuild.Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	coordinator, err := NewCoordinator(vault, output, built.Catalog)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(vault, "_index.md")); err != nil {
+		t.Fatal(err)
+	}
+	section, err := NewSectionSource("Restored home")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := coordinator.CreateMarkdown("_index.md", AbsentSourceHash, section); err != nil {
+		t.Fatalf("root section create = %v", err)
+	}
+}
+
 func TestFileOperationKeepsCommittedOutputWhenBackupCleanupFails(t *testing.T) {
 	vault := t.TempDir()
 	output := filepath.Join(t.TempDir(), "public")
@@ -202,13 +233,22 @@ func TestUploadFileUsesExistingFolderAndAbsentCAS(t *testing.T) {
 	if _, err := coordinator.UploadFile("docs/pixel.png", AbsentSourceHash, png); err == nil {
 		t.Fatal("duplicate upload succeeded")
 	}
+	if _, err := coordinator.CreateFolder("empty", AbsentSourceHash); err != nil {
+		t.Fatal(err)
+	}
+	markdown := []byte("---\ntitle: Uploaded\npublish: false\ntype: doc\n---\nUploaded\n")
+	if _, err := coordinator.UploadFile("empty/uploaded.md", AbsentSourceHash, markdown); err == nil || !strings.Contains(err.Error(), `create "empty/_index.md" first`) {
+		t.Fatalf("Markdown upload in folder without section error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(vault, "empty", "uploaded.md")); !os.IsNotExist(err) {
+		t.Fatalf("failed Markdown upload stat = %v", err)
+	}
 	if _, err := coordinator.UploadFile("missing/pixel.png", AbsentSourceHash, png); err == nil {
 		t.Fatal("upload created a missing parent folder")
 	}
 	if _, err := coordinator.UploadFile("docs/bad.svg", AbsentSourceHash, []byte(`<svg><image href="https://example.test/x"/></svg>`)); err == nil {
 		t.Fatal("unsafe SVG upload succeeded")
 	}
-	markdown := []byte("---\ntitle: Uploaded\npublish: false\ntype: doc\n---\nUploaded\n")
 	if _, err := coordinator.UploadFile("docs/uploaded.md", AbsentSourceHash, markdown); err != nil {
 		t.Fatal(err)
 	}

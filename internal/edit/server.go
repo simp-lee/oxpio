@@ -284,6 +284,8 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 		s.serveLoginAsset(w, r)
 	case "logo.svg":
 		s.serveLogoAsset(w, r)
+	case "favicon.svg":
+		s.serveFaviconAsset(w, r)
 	case "editor":
 		s.serveEditor(w, r)
 	case "editor.css":
@@ -330,8 +332,8 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveEditor(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -346,7 +348,11 @@ func (s *Server) serveEditor(w http.ResponseWriter, r *http.Request) {
 	}
 	editorBody = injectEditorBasePath(editorBody, s.static.BasePath())
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	_, _ = w.Write(editorBody)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(editorBody)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(editorBody)
+	}
 }
 
 type sourceCatalogResponse struct {
@@ -702,6 +708,14 @@ func (s *Server) redirectUnprefixedControl(w http.ResponseWriter, r *http.Reques
 }
 
 func injectEditorBasePath(data []byte, basePath string) []byte {
+	return injectEditorPath(data, basePath, true)
+}
+
+func injectEditorScriptBasePath(data []byte, basePath string) []byte {
+	return injectEditorPath(data, basePath, false)
+}
+
+func injectEditorPath(data []byte, basePath string, escapeHTML bool) []byte {
 	if strings.TrimSpace(basePath) == "" {
 		basePath = "/"
 	}
@@ -709,7 +723,10 @@ func injectEditorBasePath(data []byte, basePath string) []byte {
 	if strings.HasPrefix(control, "//") {
 		control = control[1:]
 	}
-	data = bytes.ReplaceAll(data, []byte("__OXPIO_BASE_PATH__"), []byte(stdhtml.EscapeString(basePath)))
+	if escapeHTML {
+		data = bytes.ReplaceAll(data, []byte("__OXPIO_BASE_PATH__"), []byte(stdhtml.EscapeString(basePath)))
+		control = stdhtml.EscapeString(control)
+	}
 	data = bytes.ReplaceAll(data, []byte(`"/_oxpio/`), []byte(`"`+control))
 	return bytes.ReplaceAll(data, []byte("`/_oxpio/"), []byte("`"+control))
 }
@@ -847,12 +864,19 @@ func (s *Server) serveLoginAsset(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) serveLogoAsset(w http.ResponseWriter, r *http.Request) {
+	s.serveBrandingAsset(w, r, branding.LogoSVG())
+}
+
+func (s *Server) serveFaviconAsset(w http.ResponseWriter, r *http.Request) {
+	s.serveBrandingAsset(w, r, branding.FaviconSVG())
+}
+
+func (s *Server) serveBrandingAsset(w http.ResponseWriter, r *http.Request, data []byte) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	data := branding.LogoSVG()
 	w.Header().Set("Content-Type", "image/svg+xml; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))

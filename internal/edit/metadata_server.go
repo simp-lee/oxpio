@@ -34,8 +34,8 @@ type sourceMetaResponse struct {
 }
 
 func (s *Server) serveEditorAsset(w http.ResponseWriter, r *http.Request, name, contentType string) {
-	if r.Method != http.MethodGet {
-		w.Header().Set("Allow", "GET")
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -49,11 +49,15 @@ func (s *Server) serveEditorAsset(w http.ResponseWriter, r *http.Request, name, 
 		return
 	}
 	if name == "web/editor.bundle.js" {
-		data = injectEditorBasePath(data, s.static.BasePath())
+		data = injectEditorScriptBasePath(data, s.static.BasePath())
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Cache-Control", "no-store")
-	_, _ = w.Write(data)
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(data)
+	}
 }
 
 func (s *Server) serveSourceMeta(w http.ResponseWriter, r *http.Request) {

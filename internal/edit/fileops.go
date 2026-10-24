@@ -218,6 +218,11 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 		if err := inspectManagedParent(coordinator.vault, parent); err != nil {
 			return TransactionResult{}, err
 		}
+		if isMarkdownCreateMutation(mutation) {
+			if err := coordinator.validateCreateParent(mutation.path); err != nil {
+				return TransactionResult{}, err
+			}
+		}
 	}
 	if mutation.operation == fileMutationFolder || mutation.operation == fileMutationMarkdown || mutation.operation == fileMutationUpload {
 		if current.exists {
@@ -945,6 +950,13 @@ func movePathForCAS(filename, artifactRoot string) (string, error) {
 		return "", err
 	}
 	return temporaryName, nil
+}
+
+func isMarkdownCreateMutation(mutation fileManagerMutation) bool {
+	if mutation.operation == fileMutationMarkdown {
+		return true
+	}
+	return mutation.operation == fileMutationUpload && strings.EqualFold(path.Ext(mutation.path), ".md")
 }
 
 func inspectManagedParent(vault, relPath string) error {

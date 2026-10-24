@@ -387,18 +387,23 @@ func recoverPendingWorkspaceJournal(vault string) error {
 }
 
 func (coordinator *Coordinator) validateCreateParent(relPath string) error {
+	if relPath == "_index.md" {
+		return nil
+	}
 	parent := path.Dir(relPath)
-	if parent == "." {
-		parent = "."
+	if path.Base(relPath) == "_index.md" {
+		parent = path.Dir(parent)
 	}
-	if coordinator.catalog != nil {
-		for _, entry := range coordinator.catalog.Entries {
-			if entry.Kind == "section" && entry.SectionPath == parent {
-				return nil
-			}
-		}
+	sectionIndex := "_index.md"
+	if parent != "." {
+		sectionIndex = path.Join(parent, sectionIndex)
 	}
-	return fmt.Errorf("source parent section %q is not published or does not exist", parent)
+	if _, _, err := internalfsutil.InspectContainedRegularFile(coordinator.vault, filepath.FromSlash(sectionIndex)); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("inspect parent section %q: %w", parent, err)
+	}
+	return fmt.Errorf("source parent folder %q is not a section; create %q first", parent, sectionIndex)
 }
 
 func validateSourceRelPath(relPath string) error {

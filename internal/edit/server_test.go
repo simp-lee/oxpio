@@ -60,6 +60,17 @@ func TestMutationResultReportsPostCommitSourceCleanupWarning(t *testing.T) {
 	}
 }
 
+func TestInjectEditorBasePathEscapesHTMLAndKeepsScriptURLs(t *testing.T) {
+	html := injectEditorBasePath([]byte(`<a href="/_oxpio/editor"><script src="/_oxpio/editor.js"></script><a href="__OXPIO_BASE_PATH__">`), "/a&copy;/")
+	if got := string(html); !strings.Contains(got, `href="/a&amp;copy;/_oxpio/editor"`) || !strings.Contains(got, `href="/a&amp;copy;/"`) {
+		t.Fatalf("HTML base path = %q", got)
+	}
+	script := injectEditorScriptBasePath([]byte("fetch(\"/_oxpio/files\"); fetch(`/_oxpio/csrf`);"), "/a&copy;/")
+	if got := string(script); got != "fetch(\"/a&copy;/_oxpio/files\"); fetch(`/a&copy;/_oxpio/csrf`);" {
+		t.Fatalf("script base path = %q", got)
+	}
+}
+
 func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	vault := t.TempDir()
 	output := t.TempDir()
@@ -75,7 +86,7 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	}
 	login := httptest.NewRecorder()
 	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/docs/_oxpio/login", nil))
-	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `href="/docs/"`) {
+	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `href="/docs/"`) || !strings.Contains(login.Body.String(), `href="/docs/_oxpio/favicon.svg"`) {
 		t.Fatalf("login = %d %s", login.Code, login.Body.String())
 	}
 	server.sessions["test-session"] = session{username: "admin", expires: time.Now().Add(time.Hour)}
@@ -83,8 +94,21 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 	editor := httptest.NewRecorder()
 	server.ServeHTTP(editor, request)
-	if editor.Code != http.StatusOK || !strings.Contains(editor.Body.String(), `href="/docs/"`) {
+	if editor.Code != http.StatusOK || !strings.Contains(editor.Body.String(), `href="/docs/"`) || !strings.Contains(editor.Body.String(), `href="/docs/_oxpio/favicon.svg"`) {
 		t.Fatalf("editor = %d %s", editor.Code, editor.Body.String())
+	}
+	editorHead := httptest.NewRecorder()
+	editorHeadRequest := httptest.NewRequest(http.MethodHead, "/docs/_oxpio/editor", nil)
+	editorHeadRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
+	server.ServeHTTP(editorHead, editorHeadRequest)
+	if editorHead.Code != http.StatusOK || editorHead.Body.Len() != 0 || editorHead.Header().Get("Content-Length") == "" {
+		t.Fatalf("editor HEAD = %d body=%q headers=%v", editorHead.Code, editorHead.Body.String(), editorHead.Header())
+	}
+	favicon := httptest.NewRecorder()
+	faviconRequest := httptest.NewRequest(http.MethodGet, "/docs/_oxpio/favicon.svg", nil)
+	server.ServeHTTP(favicon, faviconRequest)
+	if favicon.Code != http.StatusOK || favicon.Header().Get("Content-Type") != "image/svg+xml; charset=utf-8" || !strings.Contains(favicon.Body.String(), "OXPIO") {
+		t.Fatalf("favicon = %d %s %s", favicon.Code, favicon.Header().Get("Content-Type"), favicon.Body.String())
 	}
 	asset := httptest.NewRecorder()
 	assetRequest := httptest.NewRequest(http.MethodGet, "/docs/_oxpio/editor.js", nil)
@@ -92,6 +116,13 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	server.ServeHTTP(asset, assetRequest)
 	if asset.Code != http.StatusOK || strings.Contains(asset.Body.String(), "`/_oxpio/") || !strings.Contains(asset.Body.String(), "`/docs/_oxpio/") {
 		t.Fatalf("editor asset base path = %d %s", asset.Code, asset.Body.String())
+	}
+	assetHead := httptest.NewRecorder()
+	assetHeadRequest := httptest.NewRequest(http.MethodHead, "/docs/_oxpio/editor.js", nil)
+	assetHeadRequest.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
+	server.ServeHTTP(assetHead, assetHeadRequest)
+	if assetHead.Code != http.StatusOK || assetHead.Body.Len() != 0 || assetHead.Header().Get("Content-Length") == "" {
+		t.Fatalf("editor asset HEAD = %d body=%q headers=%v", assetHead.Code, assetHead.Body.String(), assetHead.Header())
 	}
 	legacy := httptest.NewRecorder()
 	server.ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/_oxpio/login?next=%2Fdocs%2F", nil))

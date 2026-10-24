@@ -747,10 +747,37 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   await page.locator('#file-submit').click();
   await expect(page.locator('.file-entry[data-path="docs"]')).toHaveCount(1);
 
+  const orphanMarkdown = Buffer.from('---\ntitle: Orphan\npublish: false\ntype: doc\n---\nOrphan\n');
+  await page.locator('#write-mode').click();
+  await page.getByRole('button', {name: 'Media library'}).click();
+  await page.locator('#upload-folder').fill('docs');
+  await page.locator('#media-upload').setInputFiles({name: 'orphan.md', mimeType: 'text/markdown', buffer: orphanMarkdown});
+  await expect(page.locator('#upload-parent-warning')).toContainText('docs/_index.md');
+  await expect(page.locator('.file-entry[data-path="docs/orphan.md"]')).toHaveCount(0);
+  await page.locator('#read-mode').click();
+
+  await page.getByRole('button', {name: 'New', exact: true}).click();
+  await page.locator('#new-form input[name="path"]').fill('docs/top-level.md');
+  await expect(page.locator('#new-parent-warning')).toContainText('docs/_index.md');
+  await expect(page.locator('#new-submit')).toBeDisabled();
+  await page.locator('#new-dialog').evaluate(dialog => dialog.close());
+
   await page.getByRole('button', {name: 'New Markdown'}).click();
+  await page.locator('#file-path').fill('docs/guide.md');
+  await expect(page.locator('#file-parent-warning')).toContainText('docs/_index.md');
+  await expect(page.locator('#file-submit')).toBeDisabled();
+  await page.locator('#file-dialog').evaluate(dialog => dialog.close());
+
+  await page.getByRole('button', {name: 'New Markdown'}).click();
+  await page.locator('#file-path').fill('docs/_INDEX.MD');
+  await expect(page.locator('#file-parent-warning')).toHaveText('Section index files must use the exact filename _index.md.');
+  await expect(page.locator('#file-submit')).toBeDisabled();
   await page.locator('#file-path').fill('docs/_index.md');
+  await expect(page.locator('#file-parent-warning')).toHaveText('Files named _index.md must use Section index kind.');
+  await expect(page.locator('#file-submit')).toBeDisabled();
   await page.locator('#file-title').fill('Docs');
   await page.locator('#file-kind').selectOption('section-index');
+  await expect(page.locator('#file-submit')).toBeEnabled();
   await page.locator('#file-submit').click();
   await expect(page.locator('.file-entry[data-path="docs/_index.md"]')).toHaveCount(1);
 

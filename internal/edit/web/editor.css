@@ -143,6 +143,8 @@ dialog { width: min(30rem, calc(100vw - 2rem)); border: 1px solid #aeb7c2; borde
 dialog::backdrop { background: #0006; }
 .new-form { display: grid; gap: .8rem; }
 .new-form h2 { margin: 0; }
+.dialog-hint { margin: -.25rem 0 0; color: #687687; font-size: .8rem; line-height: 1.45; }
+.dialog-warning { margin: -.25rem 0 0; padding: .55rem .65rem; border: 1px solid #e2a4a4; border-radius: .35rem; background: #fff6f6; color: #7d2626; font-size: .8rem; line-height: 1.45; }
 #markdown-file-fields { display: grid; gap: .8rem; }
 .dialog-actions { display: flex; justify-content: flex-end; gap: .5rem; }
 .product-bar, .workspace-tools, .editor-heading, .header-actions { display: flex; align-items: center; gap: .55rem; }
@@ -284,7 +286,8 @@ dialog::backdrop { background: #0006; }
   .editor-tabs button[aria-selected="true"], .preview-actions button[aria-pressed="true"] { background: #303943; }
   .preview-title { color: #c8d4df; }
   .toolbar-separator { background: #3b444e; }
-  .sidebar-help, .search-status, .status, .toolbar-hint, .metadata label, .new-form label, .metadata-advanced summary { color: #c8d4df; }
+  .sidebar-help, .search-status, .status, .toolbar-hint, .dialog-hint, .metadata label, .new-form label, .metadata-advanced summary { color: #c8d4df; }
+  .dialog-warning { background: #3b2528; border-color: #8d4b52; color: #f1b9be; }
   .help-tooltip { background: #282f37; border-color: #4d5966; color: #c8d4df; }
   .preview-empty { color: #aeb7c2; }
   .busy-indicator { color: #8fc7ef; }
@@ -300,7 +303,8 @@ html[data-theme="dark"] .pane-title, html[data-theme="dark"] button, html[data-t
 html[data-theme="dark"] .toolbar { background: #20252b; border-color: #3b444e; }
 html[data-theme="dark"] .editor-tabs button[aria-selected="true"], html[data-theme="dark"] .preview-actions button[aria-pressed="true"] { background: #303943; }
 html[data-theme="dark"] .preview-title { color: #c8d4df; }
-html[data-theme="dark"] .sidebar-help, html[data-theme="dark"] .search-status, html[data-theme="dark"] .status, html[data-theme="dark"] .toolbar-hint, html[data-theme="dark"] .metadata label, html[data-theme="dark"] .new-form label, html[data-theme="dark"] .metadata-advanced summary { color: #c8d4df; }
+html[data-theme="dark"] .sidebar-help, html[data-theme="dark"] .search-status, html[data-theme="dark"] .status, html[data-theme="dark"] .toolbar-hint, html[data-theme="dark"] .dialog-hint, html[data-theme="dark"] .metadata label, html[data-theme="dark"] .new-form label, html[data-theme="dark"] .metadata-advanced summary { color: #c8d4df; }
+html[data-theme="dark"] .dialog-warning { background: #3b2528; border-color: #8d4b52; color: #f1b9be; }
 html[data-theme="dark"] .help-tooltip { background: #282f37; border-color: #4d5966; color: #c8d4df; }
 html[data-theme="dark"] .preview-empty { color: #aeb7c2; }
 html[data-theme="light"] body, html[data-theme="light"] dialog { background: #f4f6f8; color: #20252b; }
