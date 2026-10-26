@@ -12,7 +12,6 @@ import (
 	"github.com/simp-lee/oxpio/internal/asset"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	"github.com/simp-lee/oxpio/internal/diag"
-	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
 	"github.com/simp-lee/oxpio/internal/resourcepath"
 	"github.com/simp-lee/oxpio/internal/vault"
@@ -59,7 +58,7 @@ func planVaultCSS(plan *model.SitePlan, scan, fullScan vault.ScanResult, index *
 		visiting[source] = true
 		defer delete(visiting, source)
 
-		_, data, _, err := internalfsutil.ReadContainedRegularFile(plan.VaultPath, source)
+		data, err := asset.ReadAssetData(plan.VaultPath, source)
 		if err != nil {
 			return nil, err
 		}

@@ -140,11 +140,13 @@ func ValidateDestinationCollisions(vaultRoot string, assets map[string]*model.As
 		asset := assets[source]
 		data, ok := overrides[source]
 		if !ok {
-			_, readData, _, err := internalfsutil.ReadContainedRegularFile(vaultRoot, source)
+			var err error
+			data, err = ReadAssetData(vaultRoot, source)
 			if err != nil {
 				return fmt.Errorf("read asset %q: %w", source, err)
 			}
-			data = readData
+		} else if err := ValidateImageDataLimits(source, data); err != nil {
+			return fmt.Errorf("validate asset %q: %w", source, err)
 		}
 		hash := sha256.Sum256(data)
 		hashValue := fmt.Sprintf("%x", hash)
@@ -161,6 +163,40 @@ func ValidateDestinationCollisions(vaultRoot string, assets map[string]*model.As
 		hashes[asset.DstPath] = hashValue
 	}
 	return nil
+}
+
+// ReadAssetData reads a publishable asset and applies the shared raster-image
+// limits before callers hash or emit the bytes.
+func ReadAssetData(vaultRoot, srcPath string) ([]byte, error) {
+	if isBoundedImagePath(srcPath) {
+		_, data, _, err := internalfsutil.ReadContainedRegularFileLimited(vaultRoot, filepath.FromSlash(srcPath), MaxImageBytes)
+		if err != nil {
+			return nil, err
+		}
+		if err := ValidateImageDataLimits(srcPath, data); err != nil {
+			return nil, err
+		}
+		return data, nil
+	}
+	_, data, _, err := internalfsutil.ReadContainedRegularFile(vaultRoot, filepath.FromSlash(srcPath))
+	return data, err
+}
+
+// ValidateImageDataLimits applies the shared size and dimension limits to a
+// supported image-looking asset. Non-image bytes remain valid generic site
+// resources, while recognized images are checked before they are emitted.
+func ValidateImageDataLimits(srcPath string, data []byte) error {
+	if !isBoundedImagePath(srcPath) {
+		return nil
+	}
+	if _, _, err := DecodeImageConfig(data); errors.Is(err, ErrImageLimit) {
+		return err
+	}
+	return nil
+}
+
+func isBoundedImagePath(srcPath string) bool {
+	return HasImageExtension(srcPath)
 }
 
 func plainAssetPath(srcPath string) string {
@@ -312,11 +348,22 @@ func assetHash(vaultRoot string, srcPath string) (hashHex string, err error) {
 
 func assetHashWithOverrides(vaultRoot string, srcPath string, overrides map[string][]byte) (hashHex string, err error) {
 	if data, ok := overrides[srcPath]; ok {
+		if err := ValidateImageDataLimits(srcPath, data); err != nil {
+			return "", err
+		}
 		hash := sha256.Sum256(data)
 		return hex.EncodeToString(hash[:]), nil
 	}
 	if vaultRoot == "" {
 		return missingAssetHash(srcPath), nil
+	}
+	if isBoundedImagePath(srcPath) {
+		data, err := ReadAssetData(vaultRoot, srcPath)
+		if err != nil {
+			return "", err
+		}
+		hash := sha256.Sum256(data)
+		return hex.EncodeToString(hash[:]), nil
 	}
 
 	_, file, _, err := openAssetSource(vaultRoot, srcPath)

@@ -18,6 +18,9 @@ func render(_ js.Value, args []js.Value) any {
 	if len(args) != 1 {
 		return js.ValueOf(`{"error":"source is required"}`)
 	}
+	if args[0].Type() != js.TypeString {
+		return js.ValueOf(`{"error":"source must be a string"}`)
+	}
 	result, err := livepreview.Render(args[0].String())
 	if err != nil {
 		data, _ := json.Marshal(map[string]string{"error": err.Error()})

@@ -325,6 +325,10 @@ func (snapshot Snapshot) ListDirectory(relPath string, includeUnpublished bool) 
 			continue
 		}
 		if entry.IsDir() {
+			childAbsolute := filepath.Join(snapshot.VaultPath, filepath.FromSlash(child))
+			if internalfsutil.PathWithinRootAfterSymlinks(snapshot.OutputPath, childAbsolute) {
+				continue
+			}
 			if !includeUnpublished && !snapshot.directoryAllowed(child) {
 				continue
 			}

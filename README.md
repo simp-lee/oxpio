@@ -42,7 +42,7 @@ oxpio editor [--vault PATH] [--output PATH] [--port NUM] [--listen ADDRESS] [--s
 oxpio context [--vault PATH] [--output PATH] [--include-unpublished]
 oxpio read|write|edit|move|delete PATH ... [--output PATH]
 oxpio find|ls|grep|tags|related ... [--vault PATH] [--output PATH]
-oxpio upload|mkdir|rename-dir ... [--vault PATH] [--output PATH]
+oxpio upload|mkdir ... [--vault PATH] [--output PATH]
 oxpio config read [--vault PATH]
 oxpio config write|edit ... [--vault PATH] [--output PATH]
 oxpio recover [--vault PATH] [--dry-run]

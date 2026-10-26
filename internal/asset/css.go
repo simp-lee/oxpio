@@ -13,9 +13,48 @@ import (
 )
 
 // RewriteCSSURLs rewrites URL tokens, imports, and CSS image URL strings without
-// changing comments, ordinary strings, or URLs the resolver leaves unchanged.
+// changing comments, ordinary strings, or URLs the resolver leaves unchanged. It
+// rejects malformed url() references.
 func RewriteCSSURLs(data []byte, resolve func(string) (string, error)) ([]byte, error) {
-	return rewriteCSSURLs(data, resolve, nil)
+	return rewriteCSSURLs(data, resolve, rejectMalformedCSSURL)
+}
+
+func rejectMalformedCSSURL(kind css.TokenType, token []byte) error {
+	if kind == css.BadURLToken || kind == css.URLToken && !validCSSURLToken(token) {
+		return fmt.Errorf("malformed CSS url() reference")
+	}
+	return nil
+}
+
+func validCSSURLToken(token []byte) bool {
+	token = bytes.TrimSpace(token)
+	open := bytes.IndexByte(token, '(')
+	if open < 0 || len(token) == 0 || token[len(token)-1] != ')' {
+		return false
+	}
+	quote := byte(0)
+	closed := false
+	for i := open + 1; i < len(token); i++ {
+		if token[i] == '\\' {
+			if i+1 == len(token) {
+				return false
+			}
+			i++
+			continue
+		}
+		if quote != 0 {
+			if token[i] == quote {
+				quote = 0
+			}
+			continue
+		}
+		if token[i] == '\'' || token[i] == '"' {
+			quote = token[i]
+		} else if token[i] == ')' && i == len(token)-1 {
+			closed = true
+		}
+	}
+	return closed && quote == 0
 }
 
 func rewriteCSSURLs(data []byte, resolve func(string) (string, error), inspect func(css.TokenType, []byte) error) ([]byte, error) {
@@ -53,6 +92,7 @@ func rewriteCSSURLs(data []byte, resolve func(string) (string, error), inspect f
 			// Scan raw URL bytes: unlike general CSS tokens, /* is literal
 			// URL content here, not the start of a comment.
 			quote := byte(0)
+			closed := false
 			for input.Err() == nil {
 				b := input.Peek(0)
 				input.Move(1)
@@ -65,11 +105,16 @@ func rewriteCSSURLs(data []byte, resolve func(string) (string, error), inspect f
 				} else if b == '\'' || b == '"' {
 					quote = b
 				} else if b == ')' {
+					closed = true
 					break
 				}
 			}
 			token = append(bytes.Clone(token), input.Shift()...)
-			kind = classifyURLToken(token)
+			if !closed || quote != 0 {
+				kind = css.BadURLToken
+			} else {
+				kind = classifyURLToken(token)
+			}
 		}
 		if inspect != nil {
 			if err := inspect(kind, token); err != nil {

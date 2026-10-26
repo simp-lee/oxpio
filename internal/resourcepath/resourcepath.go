@@ -19,18 +19,17 @@ func LookupPath(note *model.Note, attachmentFolderPath string, rawTarget string,
 		return model.PathLookupResult{}
 	}
 
-	ambiguous := model.PathLookupResult{}
 	for _, candidate := range CandidatePathsWithAttachmentFolder(note, attachmentFolderPath, rawTarget) {
 		result := lookup(candidate)
+		if len(result.Ambiguous) > 0 {
+			return result
+		}
 		if strings.TrimSpace(result.Path) != "" {
 			return result
 		}
-		if len(ambiguous.Ambiguous) == 0 && len(result.Ambiguous) > 0 {
-			ambiguous = result
-		}
 	}
 
-	return ambiguous
+	return model.PathLookupResult{}
 }
 
 // LookupImageEmbedPath applies the shared image-embed lookup rules, including

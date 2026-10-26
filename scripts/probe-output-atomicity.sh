@@ -30,7 +30,7 @@ EOF
       darwin|windows) grep -F '| rejected unless' "$matrix" >/dev/null ;;
       *) grep -F 'OUTPUT_ATOMICITY_UNAVAILABLE' "$matrix" >/dev/null ;;
     esac
-    sh scripts/go-test-nonempty.sh ./internal/workspace >/dev/null
+    sh scripts/go-test-nonempty.sh -count=1 ./internal/workspace >/dev/null
     ;;
   *)
     printf '%s\n' 'usage: scripts/probe-output-atomicity.sh --verify [matrix]' >&2

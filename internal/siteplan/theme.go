@@ -15,7 +15,6 @@ import (
 	"github.com/simp-lee/oxpio/internal/asset"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	"github.com/simp-lee/oxpio/internal/diag"
-	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
 	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	"github.com/simp-lee/oxpio/internal/vault"
@@ -85,7 +84,7 @@ func planThemeAssets(plan *model.SitePlan, scan, fullScan vault.ScanResult, inde
 		vaultVisiting[source] = true
 		defer delete(vaultVisiting, source)
 		plan.CSSInputFiles[source] = struct{}{}
-		_, data, _, err := internalfsutil.ReadContainedRegularFile(plan.VaultPath, source)
+		data, err := asset.ReadAssetData(plan.VaultPath, source)
 		if err != nil {
 			return nil, err
 		}

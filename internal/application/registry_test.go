@@ -45,7 +45,7 @@ func TestContextCapabilitiesIncludeEveryAgentMutation(t *testing.T) {
 	for _, capability := range contextCapabilities() {
 		capabilities[capability] = true
 	}
-	for _, name := range []string{"upload", "import", "mkdir", "rename-dir", "write", "edit"} {
+	for _, name := range []string{"upload", "import", "mkdir", "write", "edit"} {
 		if !capabilities[name] {
 			t.Fatalf("context capabilities omit %q", name)
 		}
@@ -53,10 +53,16 @@ func TestContextCapabilitiesIncludeEveryAgentMutation(t *testing.T) {
 			t.Fatalf("command registry omits %q", name)
 		}
 	}
+	if capabilities["rename-dir"] {
+		t.Fatal("context capabilities expose unavailable rename-dir")
+	}
+	if _, ok := FindCommand("rename-dir"); ok {
+		t.Fatal("command registry exposes unavailable rename-dir")
+	}
 }
 
 func TestMutationCommandsDeclareOutputBoundary(t *testing.T) {
-	for _, name := range []string{"write", "edit", "move", "delete", "upload", "mkdir", "rename-dir", "config write", "config edit", "theme validate", "theme init", "theme write", "theme edit"} {
+	for _, name := range []string{"write", "edit", "move", "delete", "upload", "mkdir", "config write", "config edit", "theme validate", "theme init", "theme write", "theme edit"} {
 		spec, ok := FindCommand(name)
 		if !ok {
 			t.Fatalf("%s is not registered", name)

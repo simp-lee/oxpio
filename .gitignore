@@ -3,6 +3,7 @@
 /memories/
 # Go build and test outputs
 bin/
+/livepreview-wasm
 *.test
 *.out
 coverage.out

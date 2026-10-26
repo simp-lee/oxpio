@@ -20,6 +20,7 @@ import (
 	internalbuild "github.com/simp-lee/oxpio/internal/build"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	"github.com/simp-lee/oxpio/internal/model"
+	internalserver "github.com/simp-lee/oxpio/internal/server"
 )
 
 func TestMutationResultReportsPostCommitOutputCleanupWarning(t *testing.T) {
@@ -128,6 +129,55 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	server.ServeHTTP(legacy, httptest.NewRequest(http.MethodGet, "/_oxpio/login?next=%2Fdocs%2F", nil))
 	if legacy.Code != http.StatusTemporaryRedirect || legacy.Header().Get("Location") != "/docs/_oxpio/login?next=%2Fdocs%2F" {
 		t.Fatalf("legacy editor route = %d location=%q", legacy.Code, legacy.Header().Get("Location"))
+	}
+}
+
+func TestEditServerRangeRequestsBypassPageDecoration(t *testing.T) {
+	output := t.TempDir()
+	html := `<!doctype html><html><body>article page</body></html>`
+	writeEditFile(t, output, "article/index.html", html)
+	static, err := internalserver.New(output, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = static.Close() }()
+
+	server := &Server{
+		static: static,
+		catalog: internalapplication.NewCatalog(&model.SourceCatalog{Entries: []model.SourceCatalogEntry{{
+			RelPath:          "article.md",
+			Route:            "/article/",
+			Kind:             "article",
+			EffectivePublish: true,
+		}}}),
+		sessions: map[string]session{
+			"valid": {username: "admin", expires: time.Now().Add(time.Hour)},
+		},
+	}
+	request := httptest.NewRequest(http.MethodGet, "/article/", nil)
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "valid"})
+	request.Header.Set("Range", "bytes=0-15")
+	response := httptest.NewRecorder()
+	server.ServeHTTP(response, request)
+
+	if response.Code != http.StatusPartialContent {
+		t.Fatalf("range response status = %d, want %d", response.Code, http.StatusPartialContent)
+	}
+	wantRange := "bytes 0-15/" + strconv.Itoa(len(html))
+	if got := response.Header().Get("Content-Range"); got != wantRange {
+		t.Fatalf("range response Content-Range = %q, want %q", got, wantRange)
+	}
+	if got := response.Header().Get("Accept-Ranges"); got != "bytes" {
+		t.Fatalf("range response Accept-Ranges = %q, want bytes", got)
+	}
+	if got := response.Body.String(); got != html[:16] {
+		t.Fatalf("range response body = %q, want %q", got, html[:16])
+	}
+	if strings.Contains(response.Body.String(), "edit-page-link") {
+		t.Fatalf("range response body = %q, do not want edit-page-link", response.Body.String())
+	}
+	if got := response.Header().Get("Content-Length"); got != "16" {
+		t.Fatalf("range response Content-Length = %q, want 16", got)
 	}
 }
 

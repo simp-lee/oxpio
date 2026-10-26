@@ -149,7 +149,7 @@ func TestRealAgentAndThemeWorkflow(t *testing.T) {
 	assertCLIOutputUnchanged(t, output, beforeOutput, "source publication policy")
 
 	// Exercise the remaining source/directory mutation adapters in the same
-	// no-TTY protocol, including a raw upload and a dry-run directory rename.
+	// no-TTY protocol, including a raw upload.
 	upload, _, code := runBlackBoxEnvelope(t, binary, []string{"upload", ".", "--vault", vault, "--file", "-", "--name", "uploaded.md", "--kind", "article", "--if-hash", "absent"}, []byte("---\ntitle: Uploaded\npublish: true\ntype: doc\n---\nUploaded\n"), "upload")
 	if code != 0 || !upload.OK || !fileExists(filepath.Join(vault, "uploaded.md")) {
 		t.Fatalf("upload: code=%d envelope=%#v", code, upload)
@@ -165,21 +165,6 @@ func TestRealAgentAndThemeWorkflow(t *testing.T) {
 	mkdir, _, code := runBlackBoxEnvelope(t, binary, []string{"mkdir", "scratch", "--vault", vault}, nil, "mkdir")
 	if code != 0 || !mkdir.OK || !directoryExists(filepath.Join(vault, "scratch")) {
 		t.Fatalf("mkdir: code=%d envelope=%#v", code, mkdir)
-	}
-	emptyHash := ""
-	if len(mkdir.Changes) == 1 && mkdir.Changes[0].AfterHash != nil {
-		emptyHash = *mkdir.Changes[0].AfterHash
-	}
-	if emptyHash == "" {
-		t.Fatalf("mkdir did not return empty directory hash: %#v", mkdir)
-	}
-	renameDry, _, code := runBlackBoxEnvelope(t, binary, []string{"rename-dir", "scratch", "scratch-dry", "--vault", vault, "--if-hash", emptyHash, "--dry-run"}, nil, "rename-dir")
-	if code != 0 || !renameDry.OK || !directoryExists(filepath.Join(vault, "scratch")) || directoryExists(filepath.Join(vault, "scratch-dry")) {
-		t.Fatalf("rename-dir dry-run: code=%d envelope=%#v", code, renameDry)
-	}
-	rename, _, code := runBlackBoxEnvelope(t, binary, []string{"rename-dir", "scratch", "scratch-renamed", "--vault", vault, "--if-hash", emptyHash}, nil, "rename-dir")
-	if code != 0 || !rename.OK || directoryExists(filepath.Join(vault, "scratch")) || !directoryExists(filepath.Join(vault, "scratch-renamed")) {
-		t.Fatalf("rename-dir: code=%d envelope=%#v", code, rename)
 	}
 	recover, _, code := runBlackBoxEnvelope(t, binary, []string{"recover", "--vault", vault, "--dry-run"}, nil, "recover")
 	if code != 0 || !recover.OK {

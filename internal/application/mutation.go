@@ -38,7 +38,6 @@ const (
 	MutationMove        = "move"
 	MutationDelete      = "delete"
 	MutationMkdir       = "mkdir"
-	MutationRenameDir   = "rename-dir"
 	MutationConfigWrite = "config write"
 	MutationConfigEdit  = "config edit"
 	MutationUpload      = "upload"

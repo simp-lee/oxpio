@@ -254,3 +254,32 @@ func TestResolvePathSupportsAttachmentFolderFallbackWithoutIndex(t *testing.T) {
 		t.Fatalf("LookupPath().Path = %q, want %q", lookup.Path, "assets/uploads/poster.png")
 	}
 }
+
+func TestLookupPathRefusesAttachmentFallbackAfterRelativeAmbiguity(t *testing.T) {
+	t.Parallel()
+
+	note := &model.Note{RelPath: "notes/current.md"}
+	ambiguous := []string{"notes/diagram.png", "notes/DIAGRAM.png"}
+	var calls []string
+	lookup := LookupPath(note, "assets/uploads", "diagram.png", func(candidate string) model.PathLookupResult {
+		calls = append(calls, candidate)
+		if candidate == "notes/diagram.png" {
+			return model.PathLookupResult{Ambiguous: ambiguous}
+		}
+		if candidate == "assets/uploads/diagram.png" {
+			return model.PathLookupResult{Path: candidate}
+		}
+		return model.PathLookupResult{}
+	})
+
+	if lookup.Path != "" {
+		t.Fatalf("LookupPath().Path = %q, want empty after relative ambiguity", lookup.Path)
+	}
+	if !reflect.DeepEqual(lookup.Ambiguous, ambiguous) {
+		t.Fatalf("LookupPath().Ambiguous = %#v, want %#v", lookup.Ambiguous, ambiguous)
+	}
+	wantCalls := []string{"notes/diagram.png"}
+	if !reflect.DeepEqual(calls, wantCalls) {
+		t.Fatalf("LookupPath() probed candidates %#v, want only %#v", calls, wantCalls)
+	}
+}

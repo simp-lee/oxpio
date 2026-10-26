@@ -224,6 +224,26 @@ func TestThemeCompilerAllowsExternalNavigationAndReportsExternalResources(t *tes
 	}
 }
 
+func TestThemeCompilerRejectsLocalSrcsetAssets(t *testing.T) {
+	files, err := InitFiles("minimal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, body := range []string{
+		`{{define "article"}}<img srcset="/images/hero.png 1x, /assets/hero.png?rev=1#banner 2x">{{end}}`,
+		`{{define "article"}}<link rel="preload" as="image" imagesrcset="assets/hero.png 1x">{{end}}`,
+		`{{define "article"}}<img srcset="./assets/hero.png 1x">{{end}}`,
+		`{{define "article"}}<img srcset="../assets/hero.png 1x">{{end}}`,
+	} {
+		files["layouts/article.html"] = []byte(body)
+		source := sourceFromFiles("minimal", files, false)
+		err = ValidateWithAssets(source, ValidationAssets(source), "https://example.test/")
+		if err == nil || !strings.Contains(err.Error(), "must use assetURL") || !strings.Contains(err.Error(), "assets/hero.png") {
+			t.Fatalf("local srcset validation error = %v", err)
+		}
+	}
+}
+
 func TestThemeCompilerRejectsUnknownFunctionAndMissingAsset(t *testing.T) {
 	files, err := InitFiles("minimal")
 	if err != nil {

@@ -14,7 +14,6 @@ import (
 	"image"
 	"image/color"
 	"image/draw"
-	_ "image/jpeg"
 	"strings"
 	"sync"
 	"time"
@@ -22,9 +21,9 @@ import (
 	"golang.org/x/image/font"
 	"golang.org/x/image/font/opentype"
 	"golang.org/x/image/math/fixed"
-	_ "golang.org/x/image/webp"
 
 	"github.com/rivo/uniseg"
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
 )
 
 const (
@@ -131,7 +130,7 @@ func Generate(input Input) (Result, error) {
 	coverHash := ""
 	var cover image.Image
 	if len(input.Cover) > 0 {
-		decoded, format, err := image.Decode(bytes.NewReader(input.Cover))
+		decoded, format, err := internalasset.DecodeImage(input.Cover)
 		if err != nil {
 			return Result{}, fmt.Errorf("decode cover: %w", err)
 		}
@@ -370,12 +369,11 @@ func drawCover(dst *image.RGBA, src image.Image) {
 	}
 	width, height := int(float64(sw)*scale+0.5), int(float64(sh)*scale+0.5)
 	left, top := 768+(432-width)/2, (630-height)/2
-	for y := range height {
-		for x := range width {
+	xStart, xEnd := max(0, 768-left), min(width, 1200-left)
+	yStart, yEnd := max(0, -top), min(height, 630-top)
+	for y := yStart; y < yEnd; y++ {
+		for x := xStart; x < xEnd; x++ {
 			dx, dy := left+x, top+y
-			if dx < 768 || dx >= 1200 || dy < 0 || dy >= 630 {
-				continue
-			}
 			sx := bounds.Min.X + int(float64(x)/scale)
 			sy := bounds.Min.Y + int(float64(y)/scale)
 			pixel := color.NRGBAModel.Convert(src.At(sx, sy)).(color.NRGBA)

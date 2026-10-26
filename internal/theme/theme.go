@@ -8,10 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"html/template"
-	"image"
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
 	"io"
 	"io/fs"
 	"net/url"
@@ -27,9 +23,9 @@ import (
 	"time"
 	"unicode/utf8"
 
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
 	"github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/render/viewmodel"
-	_ "golang.org/x/image/webp"
 	xhtml "golang.org/x/net/html"
 	"golang.org/x/text/unicode/norm"
 	"gopkg.in/yaml.v3"
@@ -623,6 +619,62 @@ func validateThemeTemplateActions(name string, data []byte) error {
 	return nil
 }
 
+func themeSrcsetLocalAsset(data []byte) (string, bool) {
+	for _, indexes := range themeSrcsetAttributePattern.FindAllSubmatchIndex(data, -1) {
+		valueStart, valueEnd := -1, -1
+		for group := 1; group <= 3; group++ {
+			start, end := indexes[group*2], indexes[group*2+1]
+			if start >= 0 {
+				valueStart, valueEnd = start, end
+				break
+			}
+		}
+		if valueStart < 0 {
+			continue
+		}
+		value := data[valueStart:valueEnd]
+		for index := 0; index < len(value); {
+			for index < len(value) && (isThemeSrcsetSpace(value[index]) || value[index] == ',') {
+				index++
+			}
+			start := index
+			for index < len(value) && !isThemeSrcsetSpace(value[index]) && value[index] != ',' {
+				index++
+			}
+			if index > start {
+				resource := string(value[start:index])
+				if suffix := strings.IndexAny(resource, "?#"); suffix >= 0 {
+					resource = resource[:suffix]
+				}
+				resource = path.Clean(resource)
+				for strings.HasPrefix(resource, "../") {
+					resource = strings.TrimPrefix(resource, "../")
+				}
+				lower := strings.ToLower(resource)
+				if (strings.HasPrefix(lower, "assets/") && len(resource) > len("assets/")) ||
+					(strings.HasPrefix(lower, "/assets/") && len(resource) > len("/assets/")) {
+					return resource, true
+				}
+			}
+			if index < len(value) && isThemeSrcsetSpace(value[index]) {
+				for index < len(value) && value[index] != ',' {
+					index++
+				}
+			}
+		}
+	}
+	return "", false
+}
+
+func isThemeSrcsetSpace(value byte) bool {
+	switch value {
+	case ' ', '\t', '\n', '\r', '\f':
+		return true
+	default:
+		return false
+	}
+}
+
 func externalThemeResourceDiagnostic(name string, data []byte) (error, bool) {
 	type candidate struct {
 		offset int
@@ -700,6 +752,9 @@ func ValidateWithAssets(source Source, assets map[string]string, baseURL string)
 		}
 		if diagnostic, ok := externalThemeResourceDiagnostic(name, data); ok {
 			return diagnostic
+		}
+		if resource, ok := themeSrcsetLocalAsset(data); ok {
+			return fmt.Errorf("theme template %s must use assetURL for local asset %q", name, resource)
 		}
 		if match := staticThemeAssetURLPattern.FindSubmatch(data); len(match) == 2 {
 			return fmt.Errorf("theme template %s must use assetURL for local asset %q", name, string(match[1]))
@@ -785,7 +840,7 @@ func ValidateFileData(name string, data []byte) error {
 	valid := false
 	switch ext {
 	case ".png", ".jpg", ".jpeg", ".gif", ".webp":
-		_, format, decodeErr := image.DecodeConfig(bytes.NewReader(data))
+		_, format, decodeErr := internalasset.DecodeImageConfig(data)
 		if decodeErr == nil {
 			want := map[string]bool{"png": ext == ".png", "jpeg": ext == ".jpg" || ext == ".jpeg", "gif": ext == ".gif", "webp": ext == ".webp"}
 			valid = want[format]

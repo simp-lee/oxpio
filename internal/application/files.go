@@ -5,11 +5,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
-	"sort"
 	"strings"
 
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
@@ -21,22 +19,21 @@ import (
 type DirectoryMutationRequest struct {
 	Operation    string
 	Path         string
-	Destination  string
 	ExpectedHash string
 	DryRun       bool
 }
 
-var renameDirectoryNoReplace = internalfsutil.RenameNoReplace
+var mkdirDirectory = internalfsutil.CreateDirectoryRelativeWithinRoot
 
 func MutateDirectory(vaultPath, outputPath string, request DirectoryMutationRequest) (MutationResult, error) {
 	boundary, err := mutationBoundary(vaultPath, outputPath)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	if request.Operation != MutationMkdir && request.Operation != MutationRenameDir {
+	if request.Operation != MutationMkdir {
 		return MutationResult{}, fmt.Errorf("unsupported directory mutation %q", request.Operation)
 	}
-	if request.Operation == MutationMkdir && request.ExpectedHash != AbsentHash {
+	if request.ExpectedHash != AbsentHash {
 		return MutationResult{}, errors.New("mkdir requires --if-hash absent")
 	}
 	if request.DryRun {
@@ -61,163 +58,100 @@ func mutateDirectoryLocked(boundary internalfsutil.VaultOutputBoundary, request 
 	if err != nil {
 		return MutationResult{}, err
 	}
-	if request.Operation == MutationRenameDir {
-		request.Destination, err = normalizeMutationDirectory(request.Destination)
-		if err != nil {
-			return MutationResult{}, err
-		}
-		if path.Dir(pathValue) != path.Dir(request.Destination) {
-			return MutationResult{}, errors.New("rename-dir requires source and destination in the same parent")
-		}
-		if pathValue == request.Destination {
-			return MutationResult{}, errors.New("source and destination paths are identical")
-		}
-	}
 	if err := validateDirectoryBoundary(boundary, pathValue); err != nil {
 		return MutationResult{}, err
 	}
-	if request.Operation == MutationMkdir || request.Operation == MutationRenameDir {
-		if err := validateReservedDirectoryPath(boundary, pathValue, request.Operation == MutationMkdir); err != nil {
-			return MutationResult{}, err
-		}
-	}
-	if request.Operation == MutationRenameDir {
-		if err := validateDirectoryBoundary(boundary, request.Destination); err != nil {
-			return MutationResult{}, err
-		}
-		if err := validateReservedDirectoryPath(boundary, request.Destination, false); err != nil {
-			return MutationResult{}, err
-		}
+	if err := validateReservedDirectoryPath(boundary, pathValue, true); err != nil {
+		return MutationResult{}, err
 	}
 	startFingerprint, err := workspace.Fingerprint(boundary.VaultPath, boundary.OutputPath)
 	if err != nil {
 		return MutationResult{}, err
 	}
 	sourceAbsolute := filepath.Join(boundary.VaultPath, filepath.FromSlash(pathValue))
-	sourceInfo, err := os.Lstat(sourceAbsolute)
-	if request.Operation == MutationMkdir {
-		if !errors.Is(err, os.ErrNotExist) {
-			if err == nil {
-				return MutationResult{}, fmt.Errorf("directory %q already exists", pathValue)
-			}
-			return MutationResult{}, err
+	_, err = os.Lstat(sourceAbsolute)
+	if !errors.Is(err, os.ErrNotExist) {
+		if err == nil {
+			return MutationResult{}, fmt.Errorf("directory %q already exists", pathValue)
 		}
-		if err := requireDirectoryParent(boundary.VaultPath, pathValue); err != nil {
-			return MutationResult{}, err
-		}
-		parentSnapshot, err := captureDirectoryIdentity(filepath.Join(boundary.VaultPath, filepath.FromSlash(path.Dir(pathValue))))
-		if err != nil {
-			return MutationResult{}, err
-		}
-		snapshot := directoryMutationSnapshot{parent: parentSnapshot, source: sourceAbsolute}
-		result := MutationResult{Operation: request.Operation, Path: pathValue, Next: "directory mutation does not publish", Changes: []MutationChange{{Kind: "create", Domain: "source", Path: pathValue, BeforeHash: nil, AfterHash: emptyHashPtr()}}}
-		if request.DryRun {
-			return checkDirectoryDryRun(boundary, startFingerprint, snapshot, result)
-		}
-		if err := verifyDirectoryMutationSnapshot(snapshot); err != nil {
-			return MutationResult{}, err
-		}
-		completedPaths := []workspace.CompletedPath{{Path: sourceAbsolute, AfterHash: directoryEmptyHash()}}
-		if err := workspace.RecordCompleted(boundary.VaultPath, completedPaths); err != nil {
-			cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
-			return MutationResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), cleanupErr)
-		}
-		if err := os.Mkdir(sourceAbsolute, 0o755); err != nil {
-			cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
-			return MutationResult{}, errors.Join(err, cleanupErr)
-		}
-		return checkDirectoryCommit(boundary, startFingerprint, result)
+		return MutationResult{}, err
 	}
+	if err := requireDirectoryParent(boundary.VaultPath, pathValue); err != nil {
+		return MutationResult{}, err
+	}
+	parentAbsolute := filepath.Join(boundary.VaultPath, filepath.FromSlash(path.Dir(pathValue)))
+	parentSnapshot, err := captureDirectoryIdentity(parentAbsolute)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	if request.ExpectedHash == "" {
-		return MutationResult{}, errors.New("--if-hash is required")
+	targetName := filepath.Base(filepath.FromSlash(pathValue))
+	snapshot := directoryMutationSnapshot{parent: parentSnapshot, source: sourceAbsolute}
+	result := MutationResult{Operation: request.Operation, Path: pathValue, Next: "directory mutation does not publish", Changes: []MutationChange{{Kind: "create", Domain: "source", Path: pathValue, BeforeHash: nil, AfterHash: emptyHashPtr()}}}
+	if err := internalfsutil.CheckDirectoryMutationSupport(boundary.VaultPath, parentAbsolute); err != nil {
+		return MutationResult{}, fmt.Errorf("secure directory mutation is unavailable: %w", err)
 	}
-	if err := validateExpectedHash(request.ExpectedHash, false); err != nil {
-		return MutationResult{}, err
+	if err := internalfsutil.CheckDirectoryRollbackSupport(); err != nil {
+		return MutationResult{}, fmt.Errorf("secure directory rollback is unavailable: %w", err)
 	}
-	if sourceInfo.Mode()&os.ModeSymlink != 0 || !sourceInfo.IsDir() {
-		return MutationResult{}, fmt.Errorf("source %q must be a regular directory", pathValue)
-	}
-	entries, err := os.ReadDir(sourceAbsolute)
-	if err != nil {
-		return MutationResult{}, err
-	}
-	if len(entries) != 0 {
-		return MutationResult{}, fmt.Errorf("directory %q must be empty", pathValue)
-	}
-	beforeHash, err := directoryHash(sourceAbsolute)
-	if err != nil {
-		return MutationResult{}, err
-	}
-	if request.ExpectedHash != beforeHash {
-		return MutationResult{}, &ConflictError{Path: pathValue, Expected: request.ExpectedHash, Actual: beforeHash}
-	}
-	destinationAbsolute := filepath.Join(boundary.VaultPath, filepath.FromSlash(request.Destination))
-	if _, err := os.Lstat(destinationAbsolute); err == nil {
-		return MutationResult{}, &ConflictError{Path: request.Destination, Expected: AbsentHash, Actual: "present"}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return MutationResult{}, err
-	}
-	if err := requireDirectoryParent(boundary.VaultPath, request.Destination); err != nil {
-		return MutationResult{}, err
-	}
-	parentSnapshot, err := captureDirectoryIdentity(filepath.Join(boundary.VaultPath, filepath.FromSlash(path.Dir(pathValue))))
-	if err != nil {
-		return MutationResult{}, err
-	}
-	snapshot := directoryMutationSnapshot{parent: parentSnapshot, source: sourceAbsolute, sourceHash: beforeHash, destination: destinationAbsolute}
-	result := MutationResult{Operation: request.Operation, Path: pathValue, Destination: request.Destination, Next: "directory mutation does not publish", Changes: []MutationChange{{Kind: "delete", Domain: "source", Path: pathValue, BeforeHash: stringPtrHash(beforeHash), AfterHash: nil}, {Kind: "create", Domain: "source", Path: request.Destination, BeforeHash: nil, AfterHash: stringPtrHash(beforeHash)}}}
 	if request.DryRun {
 		return checkDirectoryDryRun(boundary, startFingerprint, snapshot, result)
 	}
-	if err := verifyDirectoryMutationSnapshot(snapshot); err != nil {
-		return MutationResult{}, err
-	}
-	latestHash, err := directoryHash(sourceAbsolute)
+	parentDirectory, err := internalfsutil.OpenDirectoryNoFollow(parentAbsolute)
 	if err != nil {
 		return MutationResult{}, err
 	}
-	if latestHash != beforeHash {
-		return MutationResult{}, fmt.Errorf("CONCURRENT_INPUT: directory %q changed during mutation", pathValue)
+	defer func() { _ = parentDirectory.Close() }()
+	if err := verifyDirectoryMutationSnapshot(snapshot); err != nil {
+		return MutationResult{}, err
 	}
-	completedPaths := []workspace.CompletedPath{{Path: sourceAbsolute, AfterHash: AbsentHash}, {Path: destinationAbsolute, AfterHash: beforeHash}}
+	completedPaths := []workspace.CompletedPath{{Path: sourceAbsolute, AfterHash: directoryEmptyHash()}}
 	if err := workspace.RecordCompleted(boundary.VaultPath, completedPaths); err != nil {
 		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
 		return MutationResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), cleanupErr)
 	}
-	if err := renameDirectoryNoReplace(sourceAbsolute, destinationAbsolute); err != nil {
+	createdDirectory, err := mkdirDirectory(boundary.VaultPath, parentDirectory, targetName, 0o755)
+	if err != nil {
+		directoryCleanupErr := cleanupCreatedDirectory(createdDirectory)
 		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
-		if errors.Is(err, os.ErrExist) {
-			return MutationResult{}, errors.Join(&ConflictError{Path: request.Destination, Expected: AbsentHash, Actual: "present"}, cleanupErr)
+		if errors.Is(err, internalfsutil.ErrDirectoryCreated) {
+			err = errors.Join(err, fmt.Errorf("%w: secure directory creation failed after creating the target", workspace.ErrRecovery))
 		}
-		return MutationResult{}, errors.Join(err, cleanupErr)
+		if errors.Is(err, internalfsutil.ErrPathOutsideRoot) {
+			err = errors.Join(err, fmt.Errorf("%w: directory parent left the Vault", workspace.ErrRecovery))
+		}
+		return MutationResult{}, errors.Join(err, directoryCleanupErr, cleanupErr)
 	}
-	if _, sourceErr := os.Lstat(sourceAbsolute); sourceErr != nil && !errors.Is(sourceErr, os.ErrNotExist) {
+	if err := internalfsutil.VerifyDirectoryHandleWithinRoot(boundary.VaultPath, parentDirectory); err != nil {
+		directoryCleanupErr := cleanupCreatedDirectory(createdDirectory)
 		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
-		return MutationResult{}, errors.Join(fmt.Errorf("%w: renamed source state is unavailable", workspace.ErrRecovery), cleanupErr)
-	} else if sourceErr == nil {
-		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
-		return MutationResult{}, errors.Join(fmt.Errorf("%w: renamed source was recreated", workspace.ErrRecovery), cleanupErr)
+		return MutationResult{}, errors.Join(err, fmt.Errorf("%w: created directory parent left the Vault", workspace.ErrRecovery), directoryCleanupErr, cleanupErr)
 	}
-	afterHash, hashErr := directoryHash(destinationAbsolute)
-	if hashErr != nil {
+	if err := verifyCreatedDirectory(createdDirectory.File()); err != nil {
+		directoryCleanupErr := cleanupCreatedDirectory(createdDirectory)
 		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
-		return MutationResult{}, errors.Join(hashErr, fmt.Errorf("%w: renamed directory postcondition is unavailable", workspace.ErrRecovery), cleanupErr)
+		return MutationResult{}, errors.Join(err, fmt.Errorf("%w: created directory postcondition failed", workspace.ErrRecovery), directoryCleanupErr, cleanupErr)
 	}
-	if afterHash != beforeHash {
+	if err := verifyDirectoryParent(snapshot); err != nil {
+		directoryCleanupErr := cleanupCreatedDirectory(createdDirectory)
 		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
-		return MutationResult{}, errors.Join(fmt.Errorf("%w: renamed directory postcondition changed", workspace.ErrRecovery), cleanupErr)
+		return MutationResult{}, errors.Join(err, fmt.Errorf("%w: created directory parent changed", workspace.ErrRecovery), directoryCleanupErr, cleanupErr)
+	}
+	if err := createdDirectory.Verify(); err != nil {
+		directoryCleanupErr := cleanupCreatedDirectory(createdDirectory)
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		return MutationResult{}, errors.Join(err, fmt.Errorf("%w: created directory identity changed", workspace.ErrRecovery), directoryCleanupErr, cleanupErr)
+	}
+	if err := createdDirectory.Close(); err != nil {
+		directoryCleanupErr := cleanupCreatedDirectory(createdDirectory)
+		cleanupErr := workspace.RemoveCompleted(boundary.VaultPath, completedPaths)
+		return MutationResult{}, errors.Join(err, fmt.Errorf("%w: created directory handle could not be closed", workspace.ErrRecovery), directoryCleanupErr, cleanupErr)
 	}
 	return checkDirectoryCommit(boundary, startFingerprint, result)
 }
 
 type directoryMutationSnapshot struct {
-	parent      directoryIdentity
-	source      string
-	sourceHash  string
-	destination string
+	parent directoryIdentity
+	source string
 }
 
 type directoryIdentity struct {
@@ -244,27 +178,10 @@ func (snapshot directoryMutationSnapshot) unchanged() error {
 	if !sameDirectoryIdentity(snapshot.parent, current) {
 		return errors.New("CONCURRENT_INPUT: directory parent changed")
 	}
-	if snapshot.sourceHash == "" {
-		if _, err := os.Lstat(snapshot.source); err == nil {
-			return errors.New("CONCURRENT_INPUT: directory target appeared")
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
-	} else {
-		currentHash, err := directoryHash(snapshot.source)
-		if err != nil {
-			return fmt.Errorf("CONCURRENT_INPUT: source directory changed: %w", err)
-		}
-		if currentHash != snapshot.sourceHash {
-			return errors.New("CONCURRENT_INPUT: source directory changed")
-		}
-	}
-	if snapshot.destination != "" {
-		if _, err := os.Lstat(snapshot.destination); err == nil {
-			return errors.New("CONCURRENT_INPUT: directory destination appeared")
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return err
-		}
+	if _, err := os.Lstat(snapshot.source); err == nil {
+		return errors.New("CONCURRENT_INPUT: directory target appeared")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
 	}
 	return nil
 }
@@ -280,6 +197,17 @@ func verifyDirectoryMutationSnapshot(snapshot directoryMutationSnapshot) error {
 	return snapshot.unchanged()
 }
 
+func verifyDirectoryParent(snapshot directoryMutationSnapshot) error {
+	current, err := captureDirectoryIdentity(snapshot.parent.name)
+	if err != nil {
+		return fmt.Errorf("CONCURRENT_INPUT: directory parent changed: %w", err)
+	}
+	if snapshot.parent.info == nil || current.info == nil || !os.SameFile(snapshot.parent.info, current.info) {
+		return errors.New("CONCURRENT_INPUT: directory parent changed")
+	}
+	return nil
+}
+
 func checkDirectoryDryRun(boundary internalfsutil.VaultOutputBoundary, start string, snapshot directoryMutationSnapshot, result MutationResult) (MutationResult, error) {
 	if err := verifyDirectoryMutationSnapshot(snapshot); err != nil {
 		return MutationResult{}, err
@@ -292,6 +220,34 @@ func checkDirectoryDryRun(boundary internalfsutil.VaultOutputBoundary, start str
 		return MutationResult{}, fmt.Errorf("CONCURRENT_INPUT: Vault inputs changed during dry-run")
 	}
 	return result, nil
+}
+
+func cleanupCreatedDirectory(directory *internalfsutil.CreatedDirectory) error {
+	if directory == nil {
+		return nil
+	}
+	return directory.Rollback()
+}
+
+func verifyCreatedDirectory(directory *os.File) error {
+	if directory == nil {
+		return os.ErrInvalid
+	}
+	info, err := directory.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("created target is not a regular directory")
+	}
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	if len(entries) != 0 {
+		return errors.New("created target directory is not empty")
+	}
+	return nil
 }
 
 func checkDirectoryCommit(boundary internalfsutil.VaultOutputBoundary, start string, result MutationResult) (MutationResult, error) {
@@ -412,60 +368,5 @@ func requireDirectoryParent(vault, rel string) error {
 }
 
 func emptyHashPtr() *string { value := directoryEmptyHash(); return &value }
-
-func directoryHash(root string) (string, error) {
-	info, err := os.Lstat(root)
-	if err != nil {
-		return "", err
-	}
-	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
-		return "", errors.New("directory is not regular")
-	}
-	type item struct{ kind, path, data string }
-	items := make([]item, 0)
-	err = filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if current == root {
-			return nil
-		}
-		rel, err := filepath.Rel(root, current)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if entry.Type()&os.ModeSymlink != 0 {
-			return errors.New("directory contains a symbolic link")
-		}
-		if entry.IsDir() {
-			items = append(items, item{kind: "d", path: rel})
-			return nil
-		}
-		if !entry.Type().IsRegular() {
-			return errors.New("directory contains an unsupported entry")
-		}
-		data, err := os.ReadFile(current)
-		if err != nil {
-			return err
-		}
-		items = append(items, item{kind: "f", path: rel, data: string(data)})
-		return nil
-	})
-	if err != nil {
-		return "", err
-	}
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].path == items[j].path {
-			return items[i].kind < items[j].kind
-		}
-		return items[i].path < items[j].path
-	})
-	hash := sha256.New()
-	for _, item := range items {
-		_, _ = hash.Write([]byte(item.kind + ":" + item.path + "\x00" + item.data + "\x00"))
-	}
-	return hex.EncodeToString(hash.Sum(nil)), nil
-}
 
 func directoryEmptyHash() string { sum := sha256.Sum256(nil); return hex.EncodeToString(sum[:]) }

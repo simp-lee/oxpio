@@ -139,7 +139,7 @@ func LoadContext(vaultPath, outputPath string, includeUnpublished bool) (Context
 }
 
 func contextCapabilities() []string {
-	return []string{"find", "ls", "read", "grep", "tags", "related", "write", "edit", "move", "delete", "mkdir", "rename-dir", "upload", "import", "config", "recover", "validate", "publish", "theme"}
+	return []string{"find", "ls", "read", "grep", "tags", "related", "write", "edit", "move", "delete", "mkdir", "upload", "import", "config", "recover", "validate", "publish", "theme"}
 }
 
 func discoverThemes(vaultPath, selected string) ([]ThemeSummary, error) {

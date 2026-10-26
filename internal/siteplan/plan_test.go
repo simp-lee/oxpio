@@ -382,6 +382,30 @@ func TestBuildWithConfigValidatesHiddenMarkdownBodyBeforePublicProjection(t *tes
 	}
 }
 
+func TestBuildWithConfigKeepsSameLineMissingResourceAlongsideHiddenResource(t *testing.T) {
+	vault := t.TempDir()
+	writePlanFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n[missing](missing.pdf) [hidden](private/secret.pdf)\n")
+	writePlanFile(t, vault, "private/_index.md", "---\ntitle: Private\npublish: false\n---\n")
+	writePlanFile(t, vault, "private/secret.pdf", "secret")
+
+	result, err := BuildWithConfig(vault, model.SiteConfig{Title: "Site", BaseURL: "https://example.test/"})
+	if err == nil {
+		t.Fatal("BuildWithConfig() error = nil, want unresolved resource diagnostics")
+	}
+
+	counts := make(map[string]int)
+	for _, diagnostic := range result.Diagnostics {
+		if diagnostic.Location.Path == "_index.md" && diagnostic.Kind == diag.KindUnresolvedAsset {
+			counts[diagnostic.Target]++
+		}
+	}
+	for _, target := range []string{"missing.pdf", "private/secret.pdf"} {
+		if counts[target] != 1 {
+			t.Fatalf("diagnostics for %q = %d, want exactly one; diagnostics=%#v", target, counts[target], result.Diagnostics)
+		}
+	}
+}
+
 func TestBuildWithConfigPlansVersionCorrespondenceBySourcePathAndFallbacks(t *testing.T) {
 	vault := t.TempDir()
 	writePlanFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
@@ -720,6 +744,60 @@ func TestPlanVaultCSSRejectsExternalAndInvalidUTF8RootStyles(t *testing.T) {
 	planVaultCSS(plan, vault.ScanResult{}, vault.ScanResult{}, nil, collector)
 	if !collector.HasErrors() {
 		t.Fatal("invalid UTF-8 custom CSS was accepted")
+	}
+}
+
+func TestPlanVaultCSSBoundsImageDependencyBeforePlanning(t *testing.T) {
+	root := t.TempDir()
+	writePlanFile(t, root, "styles/style.css", `a { background: url("../images/large.gif"); }`)
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 8193, 1))); err != nil {
+		t.Fatal(err)
+	}
+	writePlanFile(t, root, "images/large.gif", string(encoded.Bytes()))
+	scan, err := vault.Scan(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan := &model.SitePlan{VaultPath: root}
+	index := &model.VaultIndex{Assets: map[string]*model.Asset{"styles/style.css": {}}}
+	collector := diag.NewCollector()
+	planVaultCSS(plan, scan, scan, index, collector)
+	if !collector.HasErrors() || !strings.Contains(diagnosticMessages(collector.Diagnostics()), "dimensions exceed") {
+		t.Fatalf("oversized CSS image diagnostics = %#v", collector.Diagnostics())
+	}
+}
+
+func TestPlanVaultCSSRejectsMalformedURL(t *testing.T) {
+	root := t.TempDir()
+	custom := filepath.Join(root, "custom.css")
+	if err := os.WriteFile(custom, []byte(`a { background: url("missing.png); }`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	plan := &model.SitePlan{VaultPath: root, Config: model.SiteConfig{CustomCSS: custom}}
+	collector := diag.NewCollector()
+	planVaultCSS(plan, vault.ScanResult{}, vault.ScanResult{}, nil, collector)
+	if !collector.HasErrors() || !strings.Contains(diagnosticMessages(collector.Diagnostics()), "malformed CSS url() reference") {
+		t.Fatalf("malformed custom CSS diagnostics = %#v", collector.Diagnostics())
+	}
+	if plan.CustomCSSData != nil {
+		t.Fatalf("malformed custom CSS was planned: %q", plan.CustomCSSData)
+	}
+}
+
+func TestPlanThemeCSSRejectsMalformedURL(t *testing.T) {
+	plan := &model.SitePlan{}
+	inputs := map[string][]byte{
+		"assets/style.css": []byte(`a { background: url(missing.png; }`),
+	}
+	assetSources := map[string]string{"style.css": "assets/style.css"}
+	collector := diag.NewCollector()
+	planThemeAssets(plan, vault.ScanResult{}, vault.ScanResult{}, nil, inputs, assetSources, "", collector)
+	if !collector.HasErrors() || !strings.Contains(diagnosticMessages(collector.Diagnostics()), "malformed CSS url() reference") {
+		t.Fatalf("malformed theme CSS diagnostics = %#v", collector.Diagnostics())
+	}
+	if plan.ThemeAssets["assets/style.css"] != nil {
+		t.Fatalf("malformed theme CSS was planned: %#v", plan.ThemeAssets["assets/style.css"])
 	}
 }
 

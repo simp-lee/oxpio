@@ -497,6 +497,33 @@ func ReadContainedRegularFile(vaultRoot string, candidate string) (resolvedPath 
 	return resolvedPath, data, info, nil
 }
 
+// ReadContainedRegularFileLimited reads a validated vault file without
+// retaining more than maxBytes of content in memory.
+func ReadContainedRegularFileLimited(vaultRoot, candidate string, maxBytes int64) (resolvedPath string, data []byte, info os.FileInfo, err error) {
+	if maxBytes < 0 {
+		return "", nil, nil, fmt.Errorf("maximum file size must not be negative")
+	}
+	resolvedPath, file, info, err := OpenContainedRegularFile(vaultRoot, candidate)
+	if err != nil {
+		return "", nil, nil, err
+	}
+	defer func() {
+		err = errors.Join(err, file.Close())
+	}()
+	if info.Size() > maxBytes {
+		return "", nil, nil, fmt.Errorf("file exceeds %d bytes", maxBytes)
+	}
+
+	data, err = io.ReadAll(io.LimitReader(file, maxBytes+1))
+	if err != nil {
+		return "", nil, nil, err
+	}
+	if int64(len(data)) > maxBytes {
+		return "", nil, nil, fmt.Errorf("file exceeds %d bytes", maxBytes)
+	}
+	return resolvedPath, data, info, nil
+}
+
 // IsPortableSitePath reports whether every slash-separated output component is
 // usable as both a relative URL path and a regular filesystem name on supported platforms.
 func IsPortableSitePath(value string) bool {

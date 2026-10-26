@@ -94,7 +94,7 @@ func nodeRange(node gast.Node, source []byte) (int, int, bool) {
 		if !entering || child.Pos() < 0 {
 			return gast.WalkContinue, nil
 		}
-		value := child.Text(source)
+		value := nodeText(child, source)
 		start := child.Pos()
 		if start < from {
 			from = start
@@ -108,6 +108,26 @@ func nodeRange(node gast.Node, source []byte) (int, int, bool) {
 		return from, to, true
 	}
 	return 0, 0, false
+}
+
+func nodeText(node gast.Node, source []byte) []byte {
+	switch current := node.(type) {
+	case *gast.Text:
+		return current.Value(source)
+	case *gast.String:
+		return current.Value
+	case *gast.RawHTML:
+		return current.Segments.Value(source)
+	case *gast.AutoLink:
+		return current.Label(source)
+	case *passthrough.PassthroughInline:
+		return current.Segment.Value(source)
+	default:
+		if node.Type() == gast.TypeBlock {
+			return node.Lines().Value(source)
+		}
+		return nil
+	}
 }
 
 func nodeContainsMath(node gast.Node) bool {

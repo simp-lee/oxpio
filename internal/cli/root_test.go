@@ -174,6 +174,11 @@ func TestExecuteRejectsUnknownCommand(t *testing.T) {
 	if !strings.Contains(err.Error(), `unknown command "foo" for "oxpio"`) {
 		t.Fatalf("error = %q, want unknown command message", err.Error())
 	}
+
+	_, _, err = executeForTest(t, testCommandDependencies(), []string{"rename-dir"})
+	if err == nil || !strings.Contains(err.Error(), `unknown command "rename-dir" for "oxpio"`) {
+		t.Fatalf("rename-dir error = %v, want unavailable command", err)
+	}
 }
 
 func TestHelpRejectsInvalidFormatEvenWithCobraHelp(t *testing.T) {

@@ -37,6 +37,8 @@ jobs:
         run: scripts/actionlint.sh .github/workflows/*.yml
       - name: Check product boundary
         run: sh scripts/verify-product-boundary.sh
+      - name: Check output atomicity matrix
+        run: sh scripts/probe-output-atomicity.sh --verify
       - name: Check version-shaped builds
         run: sh scripts/verify-version-builds.sh
       - name: Check formatting

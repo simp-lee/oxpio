@@ -61,6 +61,31 @@ func TestListDirectoryHidesCaseVariantManagementPaths(t *testing.T) {
 	}
 }
 
+func TestListDirectoryHidesExistingOutputDirectory(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "site-output")
+	writeApplicationFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")
+	writeApplicationFile(t, vault, "_index.md", "---\ntitle: Home\npublish: true\n---\n")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeApplicationFile(t, vault, "site-output/index.html", "output")
+
+	snapshot, err := OpenSnapshot(vault, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, err := snapshot.ListDirectory(".", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		if entry.Path == "site-output" {
+			t.Fatalf("existing output directory exposed: %#v", entries)
+		}
+	}
+}
+
 func TestListDirectoryPreservesLeadingSpacePathIdentity(t *testing.T) {
 	vault := t.TempDir()
 	writeApplicationFile(t, vault, "oxpio.yaml", "title: Site\nbaseURL: https://example.test/\nnavigation: []\n")

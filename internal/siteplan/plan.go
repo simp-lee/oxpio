@@ -6,9 +6,6 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
-	"image"
-	_ "image/jpeg"
-	_ "image/png"
 	"io/fs"
 	"net/url"
 	"os"
@@ -28,7 +25,6 @@ import (
 	"github.com/simp-lee/oxpio/internal/slug"
 	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	"github.com/simp-lee/oxpio/internal/vault"
-	_ "golang.org/x/image/webp"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -995,13 +991,13 @@ func assetRecord(collector *diag.Collector, owner string, line int, field, targe
 	})
 }
 
-func assetPermissionRecord(collector *diag.Collector, owner string, line int, field string) {
+func assetPermissionRecord(collector *diag.Collector, owner string, line int, field, target string) {
 	if collector == nil {
 		return
 	}
 	collector.Add(diag.Diagnostic{
 		Severity: diag.SeverityError, Kind: diag.KindUnresolvedAsset,
-		Location: diag.Location{Path: owner, Line: line}, Field: field,
+		Location: diag.Location{Path: owner, Line: line}, Field: field, Target: target,
 		Message: "referenced resource is not available to public sources",
 	})
 }
@@ -1049,7 +1045,7 @@ func validatePlannedAssets(vaultRoot, outputPath string, plan *model.SitePlan, s
 			return
 		}
 		if isPublicPlannedAssetOwner(plan, owner) && !vault.IsResourceEffectivelyPublished(source, resourceSections) {
-			assetPermissionRecord(collector, owner, line, kind)
+			assetPermissionRecord(collector, owner, line, kind, source)
 			return
 		}
 		lower := strings.ToLower(source)
@@ -1061,7 +1057,7 @@ func validatePlannedAssets(vaultRoot, outputPath string, plan *model.SitePlan, s
 			assetRecord(collector, owner, line, kind, source, "%s has an unsupported format", kind)
 			return
 		}
-		_, data, _, err := internalfsutil.ReadContainedRegularFile(vaultRoot, source)
+		_, data, _, err := internalfsutil.ReadContainedRegularFileLimited(vaultRoot, source, internalasset.MaxImageBytes)
 		if err != nil {
 			assetRecord(collector, owner, line, kind, source, "%s cannot be read: %v", kind, err)
 			return
@@ -1079,7 +1075,7 @@ func validatePlannedAssets(vaultRoot, outputPath string, plan *model.SitePlan, s
 			}
 			return
 		}
-		if _, format, err := image.Decode(bytes.NewReader(data)); err != nil {
+		if _, format, err := internalasset.DecodeImage(data); err != nil {
 			assetRecord(collector, owner, line, kind, source, "%s cannot be decoded: %v", kind, err)
 		} else if format != "png" && format != "jpeg" && format != "webp" {
 			assetRecord(collector, owner, line, kind, source, "%s decoded as unsupported format %q", kind, format)
@@ -1401,7 +1397,7 @@ func isRenderedResourceDiagnostic(item diag.Diagnostic) bool {
 }
 
 func strictDiagnosticLocationKey(item diag.Diagnostic) string {
-	return fmt.Sprintf("%s\\x00%d", item.Location.Path, item.Location.Line)
+	return fmt.Sprintf("%s\\x00%d\\x00%s", item.Location.Path, item.Location.Line, item.Target)
 }
 
 func sortedStrictTags(tags map[string]*model.Tag) []*model.Tag {

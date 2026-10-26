@@ -654,7 +654,8 @@ func (s *Server) serveDecoratedStatic(w http.ResponseWriter, r *http.Request, en
 	status := recorder.Code
 	body := append([]byte(nil), recorder.Body.Bytes()...)
 	contentType := strings.ToLower(recorder.Header().Get("Content-Type"))
-	if r.Method != http.MethodHead && status >= 200 && status < 300 && strings.Contains(contentType, "text/html") {
+	rewritten := false
+	if r.Method != http.MethodHead && status == http.StatusOK && strings.TrimSpace(r.Header.Get("Range")) == "" && strings.Contains(contentType, "text/html") {
 		link := `<a class="edit-page-link" href="` + s.controlPrefix() + `editor?path=` + url.QueryEscape(entry.RelPath) + `">Edit</a>`
 		lower := strings.ToLower(string(body))
 		if index := strings.LastIndex(lower, "</body>"); index >= 0 {
@@ -662,11 +663,12 @@ func (s *Server) serveDecoratedStatic(w http.ResponseWriter, r *http.Request, en
 		} else {
 			body = append(body, []byte(link)...)
 		}
+		rewritten = true
 	}
 	for name, values := range recorder.Header() {
 		w.Header()[name] = append([]string(nil), values...)
 	}
-	if r.Method != http.MethodHead {
+	if r.Method != http.MethodHead && rewritten {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
 	}
 	w.WriteHeader(status)

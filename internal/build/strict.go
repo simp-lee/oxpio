@@ -7,7 +7,6 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
-	"image"
 	"io"
 	"os"
 	"path"
@@ -343,12 +342,15 @@ func buildStrictSiteWithTransactionTracking(planned *siteplan.Result, vaultPath,
 		var data []byte
 		if planned := strictPlannedAsset(plan, source); planned != nil {
 			data = planned.Data
+			if err := internalasset.ValidateImageDataLimits(source, data); err != nil {
+				return result, fmt.Errorf("validate asset %q: %w", source, err)
+			}
 		} else {
-			_, sourceData, _, readErr := internalfsutil.ReadContainedRegularFile(boundary.VaultPath, source)
+			var readErr error
+			data, readErr = internalasset.ReadAssetData(boundary.VaultPath, source)
 			if readErr != nil {
 				return result, fmt.Errorf("read asset %q: %w", source, readErr)
 			}
-			data = sourceData
 		}
 		hash := sha256.Sum256(data)
 		hashValue := fmt.Sprintf("%x", hash)
@@ -1398,6 +1400,9 @@ func writeStrictCacheManifest(vaultRoot string, plan *model.SitePlan, index *mod
 			return fmt.Errorf("site plan is required for asset dependency %q", source)
 		}
 		if planned := strictPlannedAsset(plan, source); planned != nil {
+			if err := internalasset.ValidateImageDataLimits(source, planned.Data); err != nil {
+				return fmt.Errorf("validate cache dependency asset %q: %w", source, err)
+			}
 			if err := addDependency("asset:"+source, source, struct {
 				Content []byte `json:"content"`
 			}{planned.Data}); err != nil {
@@ -1405,7 +1410,7 @@ func writeStrictCacheManifest(vaultRoot string, plan *model.SitePlan, index *mod
 			}
 			continue
 		}
-		_, content, _, err := internalfsutil.ReadContainedRegularFile(plan.VaultPath, source)
+		content, err := internalasset.ReadAssetData(plan.VaultPath, source)
 		if err != nil {
 			return fmt.Errorf("read cache dependency asset %q: %w", source, err)
 		}
@@ -1804,7 +1809,7 @@ func validateStrictAsset(vaultRoot, raw, kind string) ([]byte, error) {
 	if !allowed {
 		return nil, fmt.Errorf("%s %q has an unsupported format", kind, raw)
 	}
-	_, data, _, err := internalfsutil.ReadContainedRegularFile(vaultRoot, raw)
+	_, data, _, err := internalfsutil.ReadContainedRegularFileLimited(vaultRoot, raw, internalasset.MaxImageBytes)
 	if err != nil {
 		return nil, fmt.Errorf("%s %q: %w", kind, raw, err)
 	}
@@ -1814,7 +1819,7 @@ func validateStrictAsset(vaultRoot, raw, kind string) ([]byte, error) {
 		}
 		return data, nil
 	}
-	if _, format, err := image.Decode(bytes.NewReader(data)); err != nil {
+	if _, format, err := internalasset.DecodeImage(data); err != nil {
 		return nil, fmt.Errorf("%s %q cannot be decoded: %w", kind, raw, err)
 	} else if format != "png" && format != "jpeg" && format != "webp" {
 		return nil, fmt.Errorf("%s %q decoded as unsupported format %q", kind, raw, format)

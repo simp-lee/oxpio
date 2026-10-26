@@ -44,6 +44,28 @@ func TestRewriteCSSURLs(t *testing.T) {
 	}
 }
 
+func TestRewriteCSSURLsRejectsMalformedURL(t *testing.T) {
+	for _, input := range []string{
+		`a { background: url("missing.png); }`,
+		`a { background: url(missing.png; }`,
+		`a { background: url(missing.png bad); }`,
+	} {
+		t.Run(input, func(t *testing.T) {
+			resolved := false
+			_, err := RewriteCSSURLs([]byte(input), func(raw string) (string, error) {
+				resolved = true
+				return raw, nil
+			})
+			if err == nil || !strings.Contains(err.Error(), "malformed CSS url() reference") {
+				t.Fatalf("RewriteCSSURLs() error = %v, want malformed URL error", err)
+			}
+			if resolved {
+				t.Fatal("malformed URL was passed to the resolver")
+			}
+		})
+	}
+}
+
 func TestRewriteCSSURLsDecodesQuotedReferenceOnce(t *testing.T) {
 	const input = `a { fill: url("\\23 gradient"); }`
 	var reference string

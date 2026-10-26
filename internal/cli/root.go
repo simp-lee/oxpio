@@ -514,8 +514,6 @@ func commandForSpec(spec internalapplication.CommandSpec, deps commandDependenci
 		return newImportCommand()
 	case "mkdir":
 		return newMkdirCommand()
-	case "rename-dir":
-		return newRenameDirCommand()
 	case "recover":
 		return newRecoverCommand()
 	case "config read":
@@ -1334,7 +1332,9 @@ func redactHiddenByPrefixes(diagnostics []internalagent.Diagnostic, prefixes []s
 		}
 		if hiddenPath || hiddenTarget {
 			result[index].Target = nil
-			result[index].Message = "target is not available in the selected read scope"
+			if result[index].Code != "UNRESOLVED_ASSET" || result[index].Message != "referenced resource is not available to public sources" {
+				result[index].Message = "target is not available in the selected read scope"
+			}
 		}
 	}
 	return result

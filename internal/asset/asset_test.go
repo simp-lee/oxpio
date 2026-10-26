@@ -13,6 +13,24 @@ import (
 	"github.com/simp-lee/oxpio/internal/model"
 )
 
+func TestValidateDestinationCollisionsRejectsOversizedRasterAsset(t *testing.T) {
+	root := t.TempDir()
+	oversized := pngBytes(t, MaxImageDimension+1, 1)
+	if err := os.WriteFile(filepath.Join(root, "image.png"), oversized, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	assets := map[string]*model.Asset{"image.png": {SrcPath: "image.png", DstPath: "assets/image.png"}}
+	if err := ValidateDestinationCollisions(root, assets, nil, nil); err == nil || !strings.Contains(err.Error(), "dimensions exceed") {
+		t.Fatalf("ValidateDestinationCollisions() error = %v, want raster dimension rejection", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "animation.gif"), oversized, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ReadAssetData(root, "animation.gif"); err == nil || !strings.Contains(err.Error(), "dimensions exceed") {
+		t.Fatalf("ReadAssetData() GIF error = %v, want shared dimension rejection", err)
+	}
+}
+
 func mustNewCollector(t *testing.T, vaultRoot string, indexed map[string]*model.Asset) *AssetCollector {
 	t.Helper()
 

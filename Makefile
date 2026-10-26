@@ -53,5 +53,6 @@ test: live-preview-wasm
 
 audit:
 	sh scripts/verify-product-boundary.sh
+	sh scripts/probe-output-atomicity.sh --verify
 
 check: fmt-check lint test audit

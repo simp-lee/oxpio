@@ -8,6 +8,8 @@ import (
 	"image/color"
 	"image/png"
 	"testing"
+
+	internalasset "github.com/simp-lee/oxpio/internal/asset"
 )
 
 func TestGenerateHasFixedCanonicalInputAndPNGSnapshot(t *testing.T) {
@@ -173,6 +175,17 @@ func TestGenerateDistinguishesUnsupportedUnicodeTitles(t *testing.T) {
 	}
 	if bytes.Equal(grinning.PNG, unicorn.PNG) || grinning.PNGHash == unicorn.PNGHash {
 		t.Fatal("distinct unsupported Unicode titles produced the same PNG")
+	}
+}
+
+func TestGenerateRejectsOversizedCoverBeforeDecoding(t *testing.T) {
+	cover := image.NewRGBA(image.Rect(0, 0, internalasset.MaxImageDimension+1, 1))
+	var encoded bytes.Buffer
+	if err := png.Encode(&encoded, cover); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Generate(Input{CanonicalURL: "https://example.test/oversized-cover/", SiteTitle: "Site", Title: "Title", Cover: encoded.Bytes()}); err == nil {
+		t.Fatal("oversized cover accepted")
 	}
 }
 

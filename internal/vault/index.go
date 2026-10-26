@@ -583,7 +583,7 @@ func extractNoteMetadata(
 				} else if len(resource.Ambiguous) > 0 {
 					registerAmbiguousAssets(assets, resource.Ambiguous)
 				} else if isHiddenResourceTarget(note, scanResult, fullResourceScan, resourceTarget, false) {
-					recordHiddenResourcePermission(diagCollector, note, current, lineStarts, lineOffset)
+					recordHiddenResourcePermission(diagCollector, note, ref.RawTarget, current, lineStarts, lineOffset)
 				}
 			}
 		case *gmwikilink.Node:
@@ -598,13 +598,13 @@ func extractNoteMetadata(
 						registerAmbiguousAssets(assets, imageLookup.Ambiguous)
 						recordAmbiguousImageEmbed(diagCollector, note, embedRef.Target, imageLookup.Ambiguous, current, lineStarts, lineOffset)
 					} else if isHiddenResourceTarget(note, scanResult, fullResourceScan, embedRef.Target, true) {
-						recordHiddenResourcePermission(diagCollector, note, current, lineStarts, lineOffset)
+						recordHiddenResourcePermission(diagCollector, note, embedRef.Target, current, lineStarts, lineOffset)
 					}
 				} else if resourcepath.LooksLikeImage(embedRef.Target) && len(imageLookup.Ambiguous) > 0 {
 					registerAmbiguousAssets(assets, imageLookup.Ambiguous)
 					recordAmbiguousImageEmbed(diagCollector, note, embedRef.Target, imageLookup.Ambiguous, current, lineStarts, lineOffset)
 				} else if isHiddenResourceTarget(note, scanResult, fullResourceScan, embedRef.Target, true) {
-					recordHiddenResourcePermission(diagCollector, note, current, lineStarts, lineOffset)
+					recordHiddenResourcePermission(diagCollector, note, embedRef.Target, current, lineStarts, lineOffset)
 				}
 			} else {
 				note.OutLinks = append(note.OutLinks, extractLinkRef(current, source, lineStarts, lineOffset))
@@ -620,7 +620,7 @@ func extractNoteMetadata(
 				registerAmbiguousAssets(assets, lookup.Ambiguous)
 				recordAmbiguousMarkdownImage(diagCollector, note, rawDestination, lookup.Ambiguous, current, lineStarts, lineOffset)
 			} else if isHiddenResourceTarget(note, scanResult, fullResourceScan, markdown.NormalizeDestination(rawDestination), true) {
-				recordHiddenResourcePermission(diagCollector, note, current, lineStarts, lineOffset)
+				recordHiddenResourcePermission(diagCollector, note, rawDestination, current, lineStarts, lineOffset)
 			} else {
 				recordUnresolvedMarkdownImage(diagCollector, note, rawDestination, current, lineStarts, lineOffset)
 			}
@@ -757,7 +757,7 @@ func extractRawHTMLAssetTargets(note *model.Note, scanResult ScanResult, fullRes
 		}
 		if lookup.Path == "" {
 			if isHiddenResourceTarget(note, scanResult, fullResourceScan, targetPath, false) {
-				recordHiddenResourcePermission(diagCollector, note, node, lineStarts, lineOffset)
+				recordHiddenResourcePermission(diagCollector, note, target, node, lineStarts, lineOffset)
 			} else {
 				recordRawHTMLAssetError(diagCollector, note, target, node, lineStarts, lineOffset, "raw HTML resource %q could not be resolved to a publishable vault asset", target)
 			}
@@ -802,7 +802,7 @@ func isHiddenResourceTarget(note *model.Note, publicScan, fullScan ScanResult, t
 	return fullLookup.Path != "" || len(fullLookup.Ambiguous) > 0
 }
 
-func recordHiddenResourcePermission(diagCollector *diag.Collector, note *model.Note, node gast.Node, lineStarts []int, lineOffset int) {
+func recordHiddenResourcePermission(diagCollector *diag.Collector, note *model.Note, target string, node gast.Node, lineStarts []int, lineOffset int) {
 	if diagCollector == nil || note == nil {
 		return
 	}
@@ -810,6 +810,7 @@ func recordHiddenResourcePermission(diagCollector *diag.Collector, note *model.N
 		Severity: diag.SeverityError,
 		Kind:     diag.KindUnresolvedAsset,
 		Location: diag.Location{Path: note.RelPath, Line: lineNumberForNode(node, lineStarts, lineOffset)},
+		Target:   target,
 		Message:  "referenced resource is not available to public sources",
 	})
 }

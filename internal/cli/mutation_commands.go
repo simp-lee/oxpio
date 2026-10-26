@@ -388,25 +388,6 @@ func newMkdirCommand() *cobra.Command {
 	return cmd
 }
 
-func newRenameDirCommand() *cobra.Command {
-	var vault, output, expected string
-	var dryRun bool
-	cmd := &cobra.Command{Use: "rename-dir SOURCE DEST", Short: "Rename one empty Vault directory", Args: cobra.ExactArgs(2), RunE: func(cmd *cobra.Command, args []string) error {
-		boundary, err := resolveVaultOutputPaths(vault, output)
-		if err != nil {
-			return err
-		}
-		result, err := internalapplication.MutateDirectory(boundary.VaultPath, boundary.OutputPath, internalapplication.DirectoryMutationRequest{Operation: internalapplication.MutationRenameDir, Path: args[0], Destination: args[1], ExpectedHash: expected, DryRun: dryRun})
-		return writeMutationCommandResult(cmd, result, err)
-	}}
-	cmd.Flags().StringVar(&vault, "vault", "", "Path to the Vault")
-	cmd.Flags().StringVar(&output, "output", "", "Formal output boundary")
-	cmd.Flags().StringVar(&expected, "if-hash", "", "Directory SHA-256 hash")
-	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "Do not write")
-	_ = cmd.MarkFlagRequired("if-hash")
-	return cmd
-}
-
 func newRecoverCommand() *cobra.Command {
 	var vault string
 	var dryRun bool

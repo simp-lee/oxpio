@@ -184,6 +184,28 @@ func TestResolveVaultOutputRejectsFinalSymlink(t *testing.T) {
 	}
 }
 
+func TestReadContainedRegularFileLimitedRejectsOversizedInput(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "vault"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "vault", "image.png"), []byte("12345"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, _, err := ReadContainedRegularFileLimited(filepath.Join(root, "vault"), "image.png", 4); err == nil {
+		t.Fatal("ReadContainedRegularFileLimited() accepted oversized input")
+	}
+	resolved, data, _, err := ReadContainedRegularFileLimited(filepath.Join(root, "vault"), "image.png", 5)
+	if err != nil {
+		t.Fatalf("ReadContainedRegularFileLimited() error = %v", err)
+	}
+	if resolved == "" || string(data) != "12345" {
+		t.Fatalf("ReadContainedRegularFileLimited() = %q, %q", resolved, data)
+	}
+}
+
 func TestContainedRegularFileRejectsExternalAndSymlinkInputs(t *testing.T) {
 	t.Parallel()
 	if runtime.GOOS == "windows" {
