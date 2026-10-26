@@ -915,6 +915,9 @@ test('visual local drafts restore metadata changes before save', async ({browser
   page.on('dialog', async dialog => { await dialog.accept(); });
   await page.reload();
   await expect(page.locator('#status')).toContainText('Local draft restored');
+  const statusBox = await page.locator('#status').boundingBox();
+  const metadataBox = await page.locator('#metadata').boundingBox();
+  expect(statusBox.y + statusBox.height).toBeLessThanOrEqual(metadataBox.y);
   await expect(page.locator('[data-field="title"]')).toHaveValue('Visual local title');
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');

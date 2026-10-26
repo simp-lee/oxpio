@@ -393,34 +393,23 @@ button.danger:hover { border-color: var(--danger); background: #fff1ef; }
 
 .workspace { position: relative; padding: .55rem clamp(1rem, 2vw, 1.75rem) 1.5rem; }
 .status {
-  position: absolute;
-  inset-block-start: .55rem;
-  inset-inline-start: clamp(1rem, 2vw, 1.75rem);
-  z-index: 2;
-  pointer-events: none;
+  position: static;
   width: fit-content;
-  max-width: min(32rem, calc(100% - 2rem));
-  margin: 0;
-  padding: .5rem .7rem;
+  max-width: min(32rem, 100%);
+  margin: 0 0 .55rem;
+  padding: .35rem .6rem;
   border: 1px solid var(--line);
-  border-left: 3px solid var(--accent);
-  border-radius: .5rem;
-  background: rgba(255, 253, 250, .68);
+  border-radius: .45rem;
+  background: var(--surface-muted);
   color: var(--muted);
-  font-size: .82rem;
+  font-size: .78rem;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
 }
 .status:empty { display: none; }
 .status[data-visibility="quiet"] {
-  position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  border: 0;
-  clip: rect(0 0 0 0);
-  clip-path: inset(50%);
-  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
 }
 .busy-indicator {
   position: absolute;
