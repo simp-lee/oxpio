@@ -240,6 +240,7 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   await expect(page.frameLocator('#preview-frame').locator('.site-header')).toHaveCount(1);
 
   await page.locator('#file-new-folder').click();
+  await expect(page.locator('#file-dialog')).toHaveAttribute('aria-labelledby', 'file-dialog-title');
   await expect(page.locator('#markdown-file-fields')).toBeHidden();
   await page.locator('#file-dialog').evaluate(dialog => dialog.close());
   await page.locator('#file-rename').click();
@@ -247,6 +248,7 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
   await page.locator('#file-dialog').evaluate(dialog => dialog.close());
   await page.locator('#new').click();
   await expect(page.locator('#new-dialog')).toBeVisible();
+  await expect(page.locator('#new-dialog')).toHaveAttribute('aria-labelledby', 'new-dialog-title');
   await page.locator('#new-dialog').getByRole('button', {name: 'Cancel'}).click();
   await expect(page.locator('#new-dialog')).toBeHidden();
   await expect(page.locator('#new')).toBeFocused();
@@ -364,6 +366,7 @@ test('math live preview renders KaTeX and exposes only the active formula source
   await login(page);
   await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   const editor = page.locator('#editor .cm-content');
+  await expect(editor).toHaveAttribute('contenteditable', 'true');
   await editor.fill('前置 **bold** $x^2$ 和 \\(y^2\\) 后。\n\nNeighbor block');
   await expect(page.locator('#editor .oxpio-math')).toHaveCount(2);
   await expect(page.locator('#editor .oxpio-math .katex')).toHaveCount(2);
@@ -454,23 +457,50 @@ test('live preview fixture uses shared semantic rendering and local high-cost ru
   await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   const editor = page.locator('#editor .cm-content');
   await editor.fill(await fs.readFile(path.join(repoRoot, 'test', 'testdata', 'editor', 'live-preview.md'), 'utf8'));
+  await expect.poll(() => page.evaluate(() => window.__oxpioLivePreviewMetrics?.coreRenders || 0)).toBeGreaterThan(0);
   const renderedHTML = () => page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].map(element => element.shadowRoot?.innerHTML || '').join(''));
-  await expect.poll(renderedHTML).toContain('data-live-inline-name="Math"');
-  const topHTML = await renderedHTML();
-  expect(topHTML).toContain('katex');
   const mermaidBlocks = new Set();
-  for (const fraction of [0, 0.2, 0.4, 0.6, 0.8, 1]) {
-    await page.evaluate(value => {
-      const scroller = document.querySelector('#editor .cm-scroller');
-      if (scroller) scroller.scrollTop = scroller.scrollHeight * value;
+  const scrollPositions = [];
+  let mathHTML = '';
+  let calloutHTML = '';
+  let mermaidErrorFound = false;
+  let katexErrorFound = false;
+  for (const fraction of Array.from({length: 21}, (_, index) => index / 20)) {
+    const scrollState = await page.evaluate(value => {
+      const maxScroll = Math.max(0, document.documentElement.scrollHeight - window.innerHeight);
+      window.scrollTo(0, maxScroll * value);
+      return {maxScroll, scrollY: window.scrollY};
     }, fraction);
+    scrollPositions.push(scrollState.scrollY);
     await page.waitForTimeout(150);
+    const html = await renderedHTML();
+    const visibleState = await page.evaluate(() => {
+      const blocks = [...document.querySelectorAll('#editor .live-rendered-block')];
+      const mathBlocks = blocks.filter(element => element.shadowRoot?.querySelector('[data-live-inline-name="Math"]'));
+      return {
+        mathMounted: mathBlocks.length > 0,
+        mathRendered: mathBlocks.some(element => element.shadowRoot?.querySelector('[data-live-inline-name="Math"] .katex')),
+        katexError: mathBlocks.some(element => element.shadowRoot?.querySelector('.katex-error')),
+        mermaidError: blocks.some(element => element.shadowRoot?.querySelector('svg[aria-roledescription="error"]')),
+      };
+    });
+    mermaidErrorFound ||= visibleState.mermaidError;
+    katexErrorFound ||= visibleState.katexError;
+    if (visibleState.mathMounted) {
+      await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].some(element => element.shadowRoot?.querySelector('[data-live-inline-name="Math"] .katex')))).toBe(true);
+      mathHTML = await renderedHTML();
+    }
+    if (html.includes('callout-note')) calloutHTML = html;
     const mounted = await page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].filter(element => element.shadowRoot?.querySelector('pre.mermaid svg')).map(element => element.dataset.liveBlockFrom));
     mounted.forEach(from => mermaidBlocks.add(from));
   }
+  expect(Math.max(...scrollPositions) - Math.min(...scrollPositions)).toBeGreaterThan(0);
+  expect(mathHTML).toContain('data-live-inline-name="Math"');
+  expect(mathHTML).toContain('<span class="katex">');
+  expect(katexErrorFound).toBe(false);
   expect(mermaidBlocks.size).toBe(2);
-  await expect.poll(renderedHTML).toContain('callout-note');
-  expect(await page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].some(element => element.shadowRoot?.querySelector('svg[aria-roledescription="error"]')))).toBe(false);
+  expect(calloutHTML).toContain('callout-note');
+  expect(mermaidErrorFound).toBe(false);
   await page.screenshot({path: path.join(repoRoot, 'test-results', 'live-preview-syntax-gallery-top.png'), fullPage: true});
   await context.close();
 });
@@ -539,6 +569,8 @@ test('editor dark mode keeps metadata and long file labels readable', async ({br
   const page = await context.newPage();
   await login(page);
   await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  await page.locator('#editor .cm-content').fill('Dark **preview**\n\nNeighbor');
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
   await page.locator('#sidebar-toggle').click();
   await page.locator('#file-refresh').click();
   const label = page.locator('.file-entry-label').filter({hasText: longPath}).first();
@@ -554,6 +586,11 @@ test('editor dark mode keeps metadata and long file labels readable', async ({br
   expect(labelLayout.textOverflow).toBe('ellipsis');
   await expect(page.locator('.metadata-advanced summary')).toHaveCSS('color', 'rgb(200, 212, 223)');
   await expect(page.locator('#document-search-status')).toHaveCSS('color', 'rgb(200, 212, 223)');
+  await expect.poll(() => page.evaluate(() => {
+    const block = document.querySelector('#editor .live-rendered-block');
+    const content = block?.shadowRoot?.querySelector('.content-preview-content');
+    return content ? getComputedStyle(content).color : '';
+  })).toBe('rgb(232, 238, 241)');
   await context.close();
 });
 
@@ -565,14 +602,31 @@ test('editor mobile layout keeps the workspace ahead of navigation', async ({bro
   await page.locator('#editor .cm-content').waitFor();
   await expect(page.locator('.metadata')).toBeVisible();
   await expect(page.locator('.toolbar')).toBeVisible();
+  await expect(page.locator('#settings')).toBeVisible();
+  await expect(page.locator('#settings')).toHaveAttribute('aria-label', 'Editor settings');
+  await page.locator('#settings').click();
+  await expect(page.locator('#settings-dialog')).toBeVisible();
+  await expect(page.locator('#settings-dialog')).toHaveAttribute('aria-labelledby', 'settings-dialog-title');
+  await page.locator('#settings-dialog button[value="cancel"]').click();
   const layout = await page.evaluate(() => {
     const workspace = document.querySelector('.workspace').getBoundingClientRect();
     const sidebar = document.querySelector('.source-sidebar').getBoundingClientRect();
     const editor = document.querySelector('#editor').getBoundingClientRect();
-    return {workspaceTop: workspace.top, sidebarTop: sidebar.top, editorWidth: editor.width, viewportWidth: innerWidth};
+    const editorGrid = document.querySelector('.editor-preview-grid');
+    const pane = document.querySelector('.editor-pane');
+    return {
+      workspaceTop: workspace.top,
+      sidebarTop: sidebar.top,
+      editorWidth: editor.width,
+      viewportWidth: innerWidth,
+      editorGridMinHeight: parseFloat(getComputedStyle(editorGrid).minHeight),
+      paneMinHeight: parseFloat(getComputedStyle(pane).minHeight),
+    };
   });
   expect(layout.workspaceTop).toBeLessThan(layout.sidebarTop);
   expect(layout.editorWidth).toBeLessThanOrEqual(layout.viewportWidth);
+  expect(layout.editorGridMinHeight).toBeLessThan(608);
+  expect(layout.paneMinHeight).toBeLessThan(608);
   await context.close();
 });
 
