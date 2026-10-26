@@ -482,10 +482,12 @@ test('live preview fixture uses shared semantic rendering and local high-cost ru
         mathRendered: mathBlocks.some(element => element.shadowRoot?.querySelector('[data-live-inline-name="Math"] .katex')),
         katexError: mathBlocks.some(element => element.shadowRoot?.querySelector('.katex-error')),
         mermaidError: blocks.some(element => element.shadowRoot?.querySelector('svg[aria-roledescription="error"]')),
+        normalWhitespace: blocks.every(element => getComputedStyle(element).whiteSpace === 'normal'),
       };
     });
     mermaidErrorFound ||= visibleState.mermaidError;
     katexErrorFound ||= visibleState.katexError;
+    expect(visibleState.normalWhitespace).toBe(true);
     if (visibleState.mathMounted) {
       await expect.poll(() => page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].some(element => element.shadowRoot?.querySelector('[data-live-inline-name="Math"] .katex')))).toBe(true);
       mathHTML = await renderedHTML();
