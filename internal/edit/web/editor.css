@@ -408,8 +408,16 @@ button.danger:hover { border-color: var(--danger); background: #fff1ef; }
 }
 .status:empty { display: none; }
 .status[data-visibility="quiet"] {
-  opacity: 0;
-  pointer-events: none;
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  clip: rect(0 0 0 0);
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 .busy-indicator {
   position: absolute;

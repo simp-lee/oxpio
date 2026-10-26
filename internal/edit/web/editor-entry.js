@@ -26,7 +26,7 @@ const requestTimeout = 30000;
 function status(message) {
   const target = $("#status");
   target.textContent = message;
-  target.dataset.visibility = /^Loaded\b/u.test(message) ? "quiet" : message ? "visible" : "empty";
+  target.dataset.visibility = /^(?:Loading|Loaded|Local draft restored)\b/u.test(message) ? "quiet" : message ? "visible" : "empty";
 }
 function isAbortError(error) { return error && error.name === "AbortError"; }
 function markOperationCommitted(label = "Operation") {
@@ -564,6 +564,7 @@ async function offerDraft(path, hash, token) {
     }
     updateMode();
     dirty(true);
+    saveState("draft", "Draft restored");
     status("Local draft restored; save to publish it.");
     return true;
   }
