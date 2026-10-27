@@ -55,7 +55,7 @@ pre code { padding: 0; background: transparent; }
 table { width: 100%; border-collapse: collapse; }
 th, td { padding: .45rem .6rem; border: 1px solid #dce1e6; text-align: left; }
 th { background: #f0f4f7; }
-pre.mermaid { overflow-x: auto; background: #f8fafb; color: #20252b; border: 1px dashed #aeb7c2; }
+pre.mermaid { overflow-x: auto; background: transparent; color: #20252b; border: 1px dashed #aeb7c2; }
 @media (max-width: 42rem) { body { padding: 1rem; } }
 `
 

@@ -49,7 +49,7 @@
 [^1]: 周树人
 [^2]: 绍兴人
 
-Inline **strong**, *emphasis*, ~~strike~~, [link](https://example.test), ![image](image.png), and `code`.
+Inline **strong**, *emphasis*, ~~strike~~, [link](https://example.test), and `code`.
 
 Inline math: $E = mc^2$, chemistry: $\ce{H_2O}$, escaped delimiters: \(a^2 + b^2 = c^2\), and `code`.
 
@@ -120,8 +120,6 @@ pie
 [^3]: A second footnote definition.
 
 ---
-
-![image](image.png)
 
 ```go
 func localPreview() string { return "WASM" }
