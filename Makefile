@@ -32,7 +32,7 @@ fmt:
 
 live-preview-wasm:
 	cp "$$($(GO) env GOROOT)/lib/wasm/wasm_exec.js" internal/edit/web/wasm_exec.js
-	GOOS=js GOARCH=wasm $(GO) build -trimpath -ldflags='-s -w' -o internal/edit/web/live-preview.wasm ./cmd/livepreview-wasm
+	GOOS=js GOARCH=wasm $(GO) build -trimpath -ldflags='-s -w -buildid=' -o internal/edit/web/live-preview.wasm ./cmd/livepreview-wasm
 
 fmt-check:
 	@command -v $(GOIMPORTS) >/dev/null 2>&1 || { echo "$(GOIMPORTS) not found; run: make tools"; exit 1; }
