@@ -448,7 +448,7 @@ button.danger:hover { border-color: var(--danger); background: #fff1ef; }
   color: var(--ink);
 }
 .metadata input:focus, .metadata select:focus, .new-form input:focus, .new-form select:focus { border-color: var(--accent); box-shadow: 0 0 0 .2rem rgba(36, 104, 215, .12); outline: 0; }
-.publish-field { padding: .45rem .65rem .45rem .5rem; border: 1px solid var(--line); border-radius: .5rem; background: var(--surface-muted); }
+.publish-field { padding: 0; border: 0; border-radius: 0; background: transparent; }
 .metadata-advanced { border-top-color: var(--line); }
 .metadata-advanced summary { color: var(--muted); }
 .state-badge.published { color: #236641; background: #e0f3e7; }
