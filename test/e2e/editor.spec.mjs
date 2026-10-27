@@ -468,6 +468,7 @@ test('live preview fixture uses shared semantic rendering and local high-cost ru
     const list = blocks.find(element => element.dataset.liveBlockName === 'List' && element.dataset.liveBlockFrom === '78');
     return heading && list ? list.getBoundingClientRect().top - heading.getBoundingClientRect().bottom : 999;
   })).toBeLessThan(48);
+  await expect(page.locator('#editor .cm-gutters')).toBeHidden();
   const renderedHTML = () => page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].map(element => element.shadowRoot?.innerHTML || '').join(''));
   const mermaidBlocks = new Set();
   const scrollPositions = [];

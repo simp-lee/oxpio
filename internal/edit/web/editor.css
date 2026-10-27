@@ -498,6 +498,7 @@ button.danger:hover { border-color: var(--danger); background: #fff1ef; }
 #editor { background: var(--surface); }
 .cm-editor { background: var(--surface); color: var(--ink); }
 .cm-editor .cm-gutters { border-right-color: var(--line); background: var(--surface-muted); color: #8a9698; }
+.workspace[data-mode="write"] .cm-gutters { visibility: hidden; }
 .cm-editor .cm-activeLineGutter { background: var(--accent-soft); color: var(--accent-strong); }
 .live-callout { background: #f0f5ff; }
 .live-callout-label { background: #dbe8ff; color: var(--accent-strong); }
