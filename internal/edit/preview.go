@@ -21,6 +21,7 @@ import (
 	internalapplication "github.com/simp-lee/oxpio/internal/application"
 	internalconfig "github.com/simp-lee/oxpio/internal/config"
 	internalserver "github.com/simp-lee/oxpio/internal/server"
+	internaltheme "github.com/simp-lee/oxpio/internal/theme"
 	xhtml "golang.org/x/net/html"
 )
 
@@ -46,7 +47,7 @@ blockquote { padding: .2rem 1rem; border-left: .25rem solid #aeb7c2; color: #495
 details.callout > summary { cursor: pointer; }
 ul:has(> li > .oxpio-task-input), ul:has(> li > p > .oxpio-task-input) { list-style: none; padding-left: 0; }
 .oxpio-task-input { appearance: none; width: 1.1em; height: 1.1em; margin: 0 .35em 0 0; vertical-align: -.15em; border: 1px solid #aeb7c2; border-radius: .25em; background: #fff; }
-.oxpio-task-input:checked { border-color: #1769aa; background: #1769aa; box-shadow: inset 0 0 0 .2em #fff; }
+.oxpio-task-input:checked { border-color: #1769aa; background: #1769aa; }
 li:has(> .oxpio-task-input[data-task='x']:checked), li:has(> .oxpio-task-input[data-task='X']:checked), li:has(> .oxpio-task-input[data-task='-']:checked), li:has(> p > .oxpio-task-input[data-task='x']:checked), li:has(> p > .oxpio-task-input[data-task='X']:checked), li:has(> p > .oxpio-task-input[data-task='-']:checked) { text-decoration: line-through solid currentColor 1px; }
 pre { overflow-x: auto; padding: 1rem; border-radius: .35rem; background: #20252b; color: #f5f7fa; }
 code { padding: .1rem .25rem; border-radius: .2rem; background: #eef1f4; }
@@ -202,6 +203,18 @@ func renderPreviewPage(static *internalserver.Server, requestPath string) ([]byt
 	return append([]byte(nil), recorder.Body.Bytes()...), nil
 }
 
+func previewStyles() (string, error) {
+	files, err := internaltheme.BaseFiles()
+	if err != nil {
+		return "", err
+	}
+	taskStatusCSS, ok := files["assets/style.css"]
+	if !ok {
+		return "", errors.New("base theme task status stylesheet is missing")
+	}
+	return basicPreviewCSS + "\n" + string(taskStatusCSS), nil
+}
+
 func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 	document, err := xhtml.Parse(bytes.NewReader(fullPage))
 	if err != nil {
@@ -262,8 +275,12 @@ func renderContentPreviewHTML(fullPage []byte) ([]byte, error) {
 	if title := findPreviewElement(headRoot, func(node *xhtml.Node) bool { return node.Type == xhtml.ElementNode && node.Data == "title" }); title != nil {
 		previewHead.AppendChild(clonePreviewNode(title))
 	}
+	previewStylesheet, err := previewStyles()
+	if err != nil {
+		return nil, err
+	}
 	basicStyle := &xhtml.Node{Type: xhtml.ElementNode, Data: "style", Attr: []xhtml.Attribute{{Key: "data-oxpio-basic-preview", Val: ""}}}
-	basicStyle.AppendChild(&xhtml.Node{Type: xhtml.TextNode, Data: basicPreviewCSS})
+	basicStyle.AppendChild(&xhtml.Node{Type: xhtml.TextNode, Data: previewStylesheet})
 	previewHead.AppendChild(basicStyle)
 	for child := headRoot.FirstChild; child != nil; child = child.NextSibling {
 		if child.Type != xhtml.ElementNode {

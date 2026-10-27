@@ -766,6 +766,9 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   await expect(semanticPreview.locator('.oxpio-task-input')).toHaveCount(2);
   await expect(semanticPreview.locator('.oxpio-task-input').first()).toBeChecked();
   await expect(semanticPreview.locator('.oxpio-task-input').nth(1)).toBeChecked();
+  const previewTaskStyle = await semanticPreview.locator('.oxpio-task-input').first().evaluate(element => ({backgroundImage: getComputedStyle(element).backgroundImage, boxShadow: getComputedStyle(element).boxShadow}));
+  expect(previewTaskStyle.backgroundImage).toContain('data:image/svg+xml');
+  expect(previewTaskStyle.boxShadow).toBe('none');
   await expect(semanticPreview.locator('li').filter({hasText: 'Question'})).toHaveCSS('text-decoration-line', 'none');
   await page.locator('#write-mode').click();
 
