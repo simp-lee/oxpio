@@ -394,7 +394,7 @@ button.danger:hover { border-color: var(--danger); background: #fff1ef; }
 .file-manager { border-top-color: var(--line); }
 .file-actions button { border-radius: .45rem; }
 
-.workspace { position: relative; padding: .55rem clamp(1rem, 2vw, 1.75rem) 1.5rem; }
+.workspace { position: relative; padding: 1rem 1rem 1.5rem; }
 .editor-footer .status {
   display: block;
   min-width: 0;
@@ -522,7 +522,7 @@ dialog { border-color: var(--line-strong); border-radius: .8rem; background: var
   .product-nav button span { display: none; }
   .product-nav a { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
   #sidebar-toggle { flex: 0 0 auto; margin-left: auto; }
-  .workspace { padding: .55rem .75rem 1.5rem; }
+  .workspace { padding: 1rem 1rem 1.5rem; }
   .source-sidebar.drawer-open { padding: .8rem .75rem 1rem; }
   .metadata { padding: .9rem; }
   .editor-tabs { overflow-x: auto; scrollbar-width: none; }
