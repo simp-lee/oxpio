@@ -111,7 +111,8 @@ body.editor-fullscreen .editor-preview-grid { min-height: calc(100vh - 4.25rem);
 .cm-line.live-blockquote { padding-left: .75rem; border-left: 3px solid #aeb7c2; color: #495665; }
 .cm-line.live-callout { border-left-color: #2d75b9; background: #f3f8fc; }
 .cm-line.live-list { padding-left: .25rem; }
-.cm-line.live-code-fence, .cm-line.live-hidden-line { min-height: .35rem; color: transparent; }
+.cm-line.live-code-fence { min-height: .35rem; color: transparent; }
+.cm-line.live-hidden-line { height: .35rem; min-height: .35rem; padding-block: 0; color: transparent; line-height: .35rem; }
 .live-preview-token { display: inline-block; color: #1769aa; }
 .live-rendered-block { display: block; width: 100%; min-width: 0; padding-inline: .6rem; font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
 .live-link { color: #1769aa; text-decoration: underline; }

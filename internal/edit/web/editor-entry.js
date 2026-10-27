@@ -1798,6 +1798,18 @@ function renderedLivePreviewDecorations(viewState, active, rendered) {
   const blocks = rendered.blocks;
   const activeBlock = blocks.find(block => active && block.from <= active.from && block.to >= active.to);
   const ranges = [];
+  const hiddenLines = new Set();
+  for (const block of blocks) {
+    if (block.name !== "HTMLBlock") continue;
+    const firstLine = viewState.doc.lineAt(block.from).number;
+    const lastLine = viewState.doc.lineAt(Math.max(block.from, block.to - 1)).number;
+    for (const lineNumber of [firstLine - 1, lastLine + 1]) {
+      if (lineNumber < 1 || lineNumber > viewState.doc.lines) continue;
+      const line = viewState.doc.line(lineNumber);
+      if (!line.text.trim()) hiddenLines.add(line.from);
+    }
+  }
+  hiddenLines.forEach(from => ranges.push(Decoration.line({class: "live-hidden-line"}).range(from)));
   const revealAll = viewState.selection.main.from === 0 && viewState.selection.main.to === viewState.doc.length;
   for (const block of blocks) {
     const isTable = block.name === "Table";

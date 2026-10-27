@@ -461,6 +461,13 @@ test('live preview fixture uses shared semantic rendering and local high-cost ru
   const editor = page.locator('#editor .cm-content');
   await editor.fill(await fs.readFile(path.join(repoRoot, 'test', 'testdata', 'editor', 'live-preview.md'), 'utf8'));
   await expect.poll(() => page.evaluate(() => window.__oxpioLivePreviewMetrics?.coreRenders || 0)).toBeGreaterThan(0);
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await expect.poll(() => page.evaluate(() => {
+    const blocks = [...document.querySelectorAll('#editor .live-rendered-block')];
+    const heading = blocks.find(element => element.dataset.liveBlockName === 'Heading' && element.dataset.liveBlockFrom === '0');
+    const list = blocks.find(element => element.dataset.liveBlockName === 'List' && element.dataset.liveBlockFrom === '78');
+    return heading && list ? list.getBoundingClientRect().top - heading.getBoundingClientRect().bottom : 999;
+  })).toBeLessThan(48);
   const renderedHTML = () => page.evaluate(() => [...document.querySelectorAll('#editor .live-rendered-block')].map(element => element.shadowRoot?.innerHTML || '').join(''));
   const mermaidBlocks = new Set();
   const scrollPositions = [];
