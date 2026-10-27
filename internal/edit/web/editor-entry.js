@@ -26,7 +26,7 @@ const requestTimeout = 30000;
 function status(message) {
   const target = $("#status");
   target.textContent = message;
-  target.dataset.visibility = /^(?:Loading|Loaded|Local draft restored)\b/u.test(message) ? "quiet" : message ? "visible" : "empty";
+  target.dataset.visibility = /^(?:Loading|Loaded)\b/u.test(message) ? "quiet" : message ? "visible" : "empty";
 }
 function isAbortError(error) { return error && error.name === "AbortError"; }
 function markOperationCommitted(label = "Operation") {
@@ -38,7 +38,12 @@ function markOperationCommitted(label = "Operation") {
 }
 function saveState(value, label = "") {
   const target = $("#save-state");
-  if (target) { target.dataset.state = value; target.textContent = label || value; }
+  const icon = $("#save-state-icon");
+  const iconByState = {saved: "#icon-check-circle", unsaved: "#icon-circle-dot", draft: "#icon-circle-dot", saving: "#icon-loader", failed: "#icon-alert-circle"};
+  if (target) target.dataset.state = value;
+  if (icon) icon.setAttribute("href", iconByState[value] || "#icon-circle-dot");
+  const targetLabel = $("#save-state-label");
+  if (targetLabel) targetLabel.textContent = value === "draft" ? "Unsaved" : (label || value);
   const footer = $("#draft-indicator");
   if (footer) footer.textContent = label || value;
 }
@@ -564,7 +569,6 @@ async function offerDraft(path, hash, token) {
     }
     updateMode();
     dirty(true);
-    saveState("draft", "Draft restored");
     status("Local draft restored; save to publish it.");
     return true;
   }
@@ -584,7 +588,6 @@ function loadPreferences() {
     document.documentElement.dataset.theme = preferences.theme && preferences.theme !== "system" ? preferences.theme : "";
     document.documentElement.style.colorScheme = preferences.theme === "dark" ? "dark" : preferences.theme === "light" ? "light" : "";
     syncRenderedTheme();
-    $("#indent-setting").textContent = `Indent: ${state.indent} spaces`;
     $("#preference-theme").value = preferences.theme || "system";
     $("#preference-indent").value = state.indent;
     $("#preference-preview").checked = state.keepPreview;
@@ -605,7 +608,6 @@ function storePreferences() {
   document.documentElement.dataset.theme = preferences.theme === "system" ? "" : preferences.theme;
   document.documentElement.style.colorScheme = preferences.theme === "dark" ? "dark" : preferences.theme === "light" ? "light" : "";
   syncRenderedTheme();
-  $("#indent-setting").textContent = `Indent: ${state.indent} spaces`;
   applyIndentPreference();
 }function dateInputValue(value) {
   const match = String(value ?? "").trim().match(/^(\d{4}-\d{2}-\d{2})/);
@@ -1146,7 +1148,6 @@ function updateMode() {
   $(".editor-preview-grid").dataset.mode = state.surface;
   $(".editor-preview-grid").setAttribute("aria-labelledby", activeTab?.id || "write-mode");
   $(".workspace").dataset.mode = state.surface;
-  $("#editor-pane-title").textContent = state.surface === "write" ? "Write" : "Markdown";
   $("#preview-refresh").hidden = state.surface !== "read";
   const pagePreview = $("#page-preview");
   if (pagePreview) {

@@ -383,6 +383,9 @@ test('write preview keeps layout stable and exposes local render metrics', async
   await login(page);
   await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   const editor = page.locator('#editor .cm-content');
+  const toolbarBox = await page.locator('.toolbar').boundingBox();
+  const editorPaneBox = await page.locator('.editor-pane').boundingBox();
+  expect(Math.abs((toolbarBox.y + toolbarBox.height) - editorPaneBox.y)).toBeLessThan(0.5);
   await page.evaluate(() => {
     window.__oxpioLayoutShifts = 0;
     if (window.PerformanceObserver) new PerformanceObserver(list => { window.__oxpioLayoutShifts += list.getEntries().filter(entry => !entry.hadRecentInput).reduce((sum, entry) => sum + entry.value, 0); }).observe({type: 'layout-shift', buffered: true});
@@ -915,8 +918,8 @@ test('visual local drafts restore metadata changes before save', async ({browser
   page.on('dialog', async dialog => { await dialog.accept(); });
   await page.reload();
   await expect(page.locator('#status')).toContainText('Local draft restored');
-  await expect(page.locator('#status')).toHaveAttribute('data-visibility', 'quiet');
-  await expect(page.locator('#save-state')).toHaveText('Draft restored');
+  await expect(page.locator('#editor-footer #status')).toBeVisible();
+  await expect(page.locator('#save-state')).toHaveText('Unsaved');
   await expect(page.locator('[data-field="title"]')).toHaveValue('Visual local title');
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
