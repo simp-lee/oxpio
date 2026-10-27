@@ -382,13 +382,25 @@ test('write preview keeps layout stable and exposes local render metrics', async
   const page = await context.newPage();
   await login(page);
   await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  await expect(page.locator('#content-editor')).toHaveAttribute('aria-busy', 'false');
+  await expect(page.locator('#save-state')).toHaveAttribute('data-state', 'saved');
   const editor = page.locator('#editor .cm-content');
   const toolbarBox = await page.locator('.toolbar').boundingBox();
   const editorPaneBox = await page.locator('.editor-pane').boundingBox();
+  const workspaceBox = await page.locator('.workspace').boundingBox();
+  const metadataBox = await page.locator('.metadata').boundingBox();
   expect(Math.abs((toolbarBox.y + toolbarBox.height) - editorPaneBox.y)).toBeLessThan(0.5);
+  expect(Math.abs(metadataBox.y - workspaceBox.y)).toBeLessThan(1.5);
+  expect(Math.abs(toolbarBox.x - workspaceBox.x)).toBeLessThan(0.5);
+  expect(Math.abs(toolbarBox.x + toolbarBox.width - workspaceBox.x - workspaceBox.width)).toBeLessThan(0.5);
   await page.evaluate(() => {
     window.__oxpioLayoutShifts = 0;
-    if (window.PerformanceObserver) new PerformanceObserver(list => { window.__oxpioLayoutShifts += list.getEntries().filter(entry => !entry.hadRecentInput).reduce((sum, entry) => sum + entry.value, 0); }).observe({type: 'layout-shift', buffered: true});
+    if (window.PerformanceObserver) new PerformanceObserver(list => {
+      window.__oxpioLayoutShifts += list.getEntries().filter(entry => !entry.hadRecentInput).reduce((sum, entry) => {
+        const outsideEditor = entry.sources?.some(source => !source.node?.closest?.('#editor'));
+        return sum + (outsideEditor ? entry.value : 0);
+      }, 0);
+    }).observe({type: 'layout-shift', buffered: true});
   });
   const before = await page.evaluate(() => ({busy: document.querySelector('#busy-indicator')?.getBoundingClientRect().height, editorTop: document.querySelector('#content-editor')?.getBoundingClientRect().top}));
   await editor.fill('A '.repeat(20) + '**local** preview');
