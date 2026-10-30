@@ -3,7 +3,8 @@
 
   var root = document.documentElement;
   var basePath = root.getAttribute("data-oxpio-base-path") || "/";
-  var storageKey = "oxpio.theme.v1:" + basePath;
+  var storageKey = "oxpio.theme.v1";
+  var legacyStorageKey = "oxpio.theme.v1:" + basePath;
   var media = window.matchMedia ? window.matchMedia("(prefers-color-scheme: dark)") : null;
   var runtimeScript = document.currentScript;
   var vendorBaseURL = runtimeScript && runtimeScript.src ? new URL("../oxpio-runtime/", runtimeScript.src) : null;
@@ -17,21 +18,33 @@
   }
 
   function isStoredTheme(value) {
-    return value === "light" || value === "dark";
+    return value === "system" || value === "light" || value === "dark";
   }
 
   function readStoredTheme() {
     try {
       var value = window.localStorage.getItem(storageKey);
-      return isStoredTheme(value) ? value : "";
+      if (isStoredTheme(value)) {
+        return value;
+      }
+      var legacy = window.localStorage.getItem(legacyStorageKey);
+      if (legacy === "light" || legacy === "dark") {
+        window.localStorage.setItem(storageKey, legacy);
+        return legacy;
+      }
+      var editorPreferences = JSON.parse(window.localStorage.getItem("oxpio-editor-preferences") || "{}");
+      if (isStoredTheme(editorPreferences.theme)) {
+        window.localStorage.setItem(storageKey, editorPreferences.theme);
+        return editorPreferences.theme;
+      }
     } catch (error) {
       report("warn", "Unable to read the saved color mode.", error);
-      return "";
     }
+    return "system";
   }
 
   function resolveTheme(preference) {
-    if (isStoredTheme(preference)) {
+    if (preference === "light" || preference === "dark") {
       return preference;
     }
     return media && media.matches ? "dark" : "light";
@@ -39,7 +52,7 @@
 
   function applyTheme(preference) {
     var resolved = resolveTheme(preference);
-    if (isStoredTheme(preference)) {
+    if (preference === "light" || preference === "dark") {
       root.setAttribute("data-theme", preference);
     } else {
       root.removeAttribute("data-theme");
@@ -55,15 +68,21 @@
     }
   }
 
+  function themeLabel(preference) {
+    return preference === "light" ? "Light" : preference === "dark" ? "Dark" : "Follow system";
+  }
+
   function syncThemeToggle(toggle, preference) {
     if (!toggle) {
       return;
     }
     var resolved = resolveTheme(preference);
-    setToggleText(toggle, "[data-theme-toggle-value]", resolved === "dark" ? "Dark" : "Light");
+    var label = themeLabel(preference);
+    setToggleText(toggle, "[data-theme-toggle-value]", label);
     setToggleText(toggle, "[data-theme-toggle-state]", "Current mode " + resolved + ".");
-    setToggleText(toggle, "[data-theme-toggle-source]", preference ? "Theme locked to " + preference + "." : "Following system preference.");
-    toggle.setAttribute("aria-pressed", String(resolved === "dark"));
+    setToggleText(toggle, "[data-theme-toggle-source]", "Theme preference: " + label + ".");
+    toggle.setAttribute("aria-label", "Theme preference: " + label);
+    toggle.removeAttribute("aria-pressed");
     toggle.hidden = false;
   }
 
@@ -75,6 +94,10 @@
     }
   }
 
+  function nextTheme(preference) {
+    return preference === "system" ? "light" : preference === "light" ? "dark" : "system";
+  }
+
   function initThemeToggle() {
     var toggle = document.querySelector("[data-theme-toggle]");
     if (!toggle || toggle.getAttribute("data-theme-toggle-ready") === "true") {
@@ -82,7 +105,7 @@
     }
     toggle.setAttribute("data-theme-toggle-ready", "true");
     toggle.addEventListener("click", function () {
-      var next = resolveTheme(readStoredTheme()) === "dark" ? "light" : "dark";
+      var next = nextTheme(readStoredTheme());
       writeStoredTheme(next);
       applyTheme(next);
       syncThemeToggle(toggle, next);
@@ -892,9 +915,9 @@
 
   if (media) {
     var handleSystemThemeChange = function () {
-      if (!readStoredTheme()) {
-        applyTheme("");
-        syncThemeToggle(document.querySelector("[data-theme-toggle]"), "");
+      if (readStoredTheme() === "system") {
+        applyTheme("system");
+        syncThemeToggle(document.querySelector("[data-theme-toggle]"), "system");
       }
     };
     if (typeof media.addEventListener === "function") {
@@ -903,6 +926,15 @@
       media.addListener(handleSystemThemeChange);
     }
   }
+
+  window.addEventListener("storage", function (event) {
+    if (event.key !== storageKey) {
+      return;
+    }
+    var preference = isStoredTheme(event.newValue) ? event.newValue : "system";
+    applyTheme(preference);
+    syncThemeToggle(document.querySelector("[data-theme-toggle]"), preference);
+  });
 
   onReady(function () {
     initThemeToggle();

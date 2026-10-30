@@ -35,11 +35,13 @@ const (
 var fileManagerRemoveAll = os.RemoveAll
 
 type fileManagerMutation struct {
-	operation   string
-	path        string
-	destination string
-	expected    string
-	content     []byte
+	operation        string
+	path             string
+	destination      string
+	expected         string
+	content          []byte
+	referenceUpdates map[string][]byte
+	referenceBefore  map[string]string
 }
 
 type fileManagerState struct {
@@ -130,6 +132,9 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 		return TransactionResult{}, err
 	}
 	if mutation.operation == fileMutationRename {
+		if strings.EqualFold(mutation.path, internalconfig.CustomCSSFilename) || strings.EqualFold(mutation.destination, internalconfig.CustomCSSFilename) {
+			return TransactionResult{}, fmt.Errorf("path %q is reserved", internalconfig.CustomCSSFilename)
+		}
 		if err := validateManagedRelPath(mutation.destination); err != nil {
 			return TransactionResult{}, err
 		}
@@ -143,6 +148,8 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 			if strings.EqualFold(path.Base(mutation.destination), "_index.md") {
 				return TransactionResult{}, fmt.Errorf("cannot rename an article to a section source")
 			}
+		} else if strings.EqualFold(path.Ext(mutation.destination), ".md") {
+			return TransactionResult{}, fmt.Errorf("resources cannot be renamed to Markdown sources")
 		}
 	}
 	if mutation.operation != fileMutationFolder && mutation.operation != fileMutationMarkdown && mutation.operation != fileMutationUpload && mutation.operation != fileMutationRename && mutation.operation != fileMutationDelete {
@@ -181,9 +188,6 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 		if err := validateManagedBoundary(coordinator.vault, coordinator.output, mutation.destination); err != nil {
 			return TransactionResult{}, err
 		}
-		if err := validateManagedDirectoryTarget(coordinator.vault, coordinator.output, mutation.destination); err != nil {
-			return TransactionResult{}, err
-		}
 	}
 
 	current, err := inspectFileManagerState(coordinator.vault, mutation.path)
@@ -192,6 +196,11 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 	}
 	if current.hash != mutation.expected {
 		return TransactionResult{}, &ConflictError{Path: mutation.path, Expected: mutation.expected, Actual: current.hash}
+	}
+	if mutation.operation == fileMutationRename && current.isDir {
+		if err := validateManagedDirectoryTarget(coordinator.vault, coordinator.output, mutation.destination); err != nil {
+			return TransactionResult{}, err
+		}
 	}
 
 	var destinationState fileManagerState
@@ -235,11 +244,14 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 		}
 	}
 	if current.exists {
+		if mutation.operation == fileMutationDelete && !current.isDir && strings.EqualFold(mutation.path, internalconfig.CustomCSSFilename) {
+			return TransactionResult{}, fmt.Errorf("path %q is reserved", internalconfig.CustomCSSFilename)
+		}
 		if mutation.operation == fileMutationRename || mutation.operation == fileMutationDelete {
 			if err := coordinator.validateEditableFileManagerTarget(mutation.path, current.isDir); err != nil {
 				return TransactionResult{}, err
 			}
-			if !current.isDir {
+			if !current.isDir && strings.EqualFold(path.Ext(mutation.path), ".md") {
 				var preflightErr error
 				if mutation.operation == fileMutationRename {
 					preflightErr = internalapplication.ValidateEditorArticleMove(coordinator.vault, coordinator.output, mutation.path, mutation.destination)
@@ -253,6 +265,31 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 		}
 		if err := validateManagedSubtree(coordinator.vault, coordinator.output, mutation.path, current.isDir); err != nil {
 			return TransactionResult{}, err
+		}
+		if !current.isDir && !strings.EqualFold(path.Ext(mutation.path), ".md") {
+			switch mutation.operation {
+			case fileMutationDelete:
+				usages, usageErr := ResourceUsages(coordinator.vault, mutation.path)
+				if usageErr != nil {
+					return TransactionResult{}, usageErr
+				}
+				if len(usages) > 0 {
+					return TransactionResult{}, &ResourceUsageConflictError{Path: mutation.path, Usages: usages}
+				}
+			case fileMutationRename:
+				updates, before, _, updateErr := resourceRenameUpdates(coordinator.vault, mutation.path, mutation.destination)
+				if updateErr != nil {
+					return TransactionResult{}, updateErr
+				}
+				if data, ok := updates[mutation.path]; ok {
+					delete(updates, mutation.path)
+					updates[mutation.destination] = data
+					delete(before, mutation.path)
+					before[mutation.destination] = current.hash
+				}
+				mutation.referenceUpdates = updates
+				mutation.referenceBefore = before
+			}
 		}
 	}
 	if latest, latestErr := inspectFileManagerState(coordinator.vault, mutation.path); latestErr != nil {
@@ -280,7 +317,7 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 			}
 			return TransactionResult{}, errors.Join(fmt.Errorf("watch suppression marker could not be recorded: %w", err), finalizeErr)
 		}
-		return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, SourceCleanupError: finalize()}, nil
+		return TransactionResult{SourceHash: expectedAfter.hash, RelPath: fileManagerResultPath(mutation), SourceCleanupError: finalize()}, nil
 	}
 
 	inputFingerprint, err := workspace.Fingerprint(coordinator.vault, coordinator.output)
@@ -298,6 +335,19 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 	_, _, candidateExpected, err := applyFileManagerMutation(candidateRoot, mutation, current, "")
 	if err != nil {
 		return TransactionResult{}, err
+	}
+	if _, err := applyFileManagerReferenceUpdates(candidateRoot, mutation.referenceUpdates, nil); err != nil {
+		return TransactionResult{}, err
+	}
+	if len(mutation.referenceUpdates) > 0 {
+		pathValue := mutation.path
+		if mutation.operation == fileMutationRename {
+			pathValue = mutation.destination
+		}
+		candidateExpected, err = inspectFileManagerState(candidateRoot, pathValue)
+		if err != nil {
+			return TransactionResult{}, err
+		}
 	}
 	if err := verifyFileManagerMutation(candidateRoot, mutation, candidateExpected); err != nil {
 		return TransactionResult{}, err
@@ -355,9 +405,14 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 		}
 		backupPath = artifactRoot
 	}
+	referenceChanges, err := referenceJournalChanges(coordinator.vault, mutation, current, artifactRoot)
+	if err != nil {
+		return TransactionResult{}, err
+	}
 	seed, predictedPath, predictedAfter := predictedFileManagerJournal(coordinator.vault, mutation, current)
 	seed.BackupPath = backupPath
 	seed.CleanupPaths = []string{stageRoot}
+	seed.ReferenceChanges = referenceChanges
 	transaction, err := internalapplication.AdoptCandidateStaging(coordinator.vault, coordinator.output, stageOutput, internalapplication.CandidatePublishOptions{
 		Durable:          true,
 		InputFingerprint: inputFingerprint,
@@ -392,8 +447,35 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 		preserveErr := transaction.PreserveForRecovery()
 		return TransactionResult{}, errors.Join(err, preserveErr, fmt.Errorf("%w: source mutation recovery required", workspace.ErrRecovery))
 	}
-	rollbackMutation := func(operationErr error) (TransactionResult, error) {
+	referenceRollback, referenceErr := applyFileManagerReferenceUpdates(coordinator.vault, mutation.referenceUpdates, mutation.referenceBefore)
+	if referenceErr != nil {
 		rollbackErr := rollback()
+		if rollbackErr != nil {
+			keepArtifacts = true
+			preserveErr := transaction.PreserveForRecovery()
+			return TransactionResult{}, errors.Join(referenceErr, rollbackErr, preserveErr, fmt.Errorf("%w: source rollback failed", workspace.ErrRecovery))
+		}
+		return TransactionResult{}, errors.Join(referenceErr, transaction.Abort())
+	}
+	if len(mutation.referenceUpdates) > 0 {
+		pathValue := mutation.path
+		if mutation.operation == fileMutationRename {
+			pathValue = mutation.destination
+		}
+		expectedAfter, err = inspectFileManagerState(coordinator.vault, pathValue)
+		if err != nil {
+			rollbackErr := errors.Join(referenceRollback(), rollback())
+			if rollbackErr != nil {
+				keepArtifacts = true
+				preserveErr := transaction.PreserveForRecovery()
+				return TransactionResult{}, errors.Join(err, rollbackErr, preserveErr, fmt.Errorf("%w: source rollback failed", workspace.ErrRecovery))
+			}
+			return TransactionResult{}, errors.Join(err, transaction.Abort())
+		}
+	}
+	rollbackMutation := func(operationErr error) (TransactionResult, error) {
+		referenceRollbackErr := referenceRollback()
+		rollbackErr := errors.Join(referenceRollbackErr, rollback())
 		if rollbackErr != nil {
 			keepArtifacts = true
 			preserveErr := transaction.PreserveForRecovery()
@@ -442,7 +524,68 @@ func (coordinator *Coordinator) mutateFile(ctx context.Context, mutation fileMan
 		built.OutputCleanupError = postCommitWarning
 	}
 	coordinator.catalog = cloneCatalog(built.Catalog)
-	return TransactionResult{SourceHash: expectedAfter.hash, RelPath: mutation.path, Build: built, SourceCleanupError: sourceCleanupErr}, nil
+	return TransactionResult{SourceHash: expectedAfter.hash, RelPath: fileManagerResultPath(mutation), ReferenceDocumentCount: len(mutation.referenceUpdates), Build: built, SourceCleanupError: sourceCleanupErr}, nil
+}
+
+func fileManagerResultPath(mutation fileManagerMutation) string {
+	if mutation.operation == fileMutationRename {
+		return mutation.destination
+	}
+	return mutation.path
+}
+
+func referenceJournalChanges(vault string, mutation fileManagerMutation, current fileManagerState, artifactRoot string) ([]workspace.SourceChange, error) {
+	paths := make([]string, 0, len(mutation.referenceUpdates))
+	for relPath := range mutation.referenceUpdates {
+		paths = append(paths, relPath)
+	}
+	sort.Strings(paths)
+	changes := make([]workspace.SourceChange, 0, len(paths))
+	for index, relPath := range paths {
+		data := mutation.referenceUpdates[relPath]
+		before := mutation.referenceBefore[relPath]
+		if before == "" {
+			continue
+		}
+		selfReference := mutation.operation == fileMutationRename && relPath == mutation.destination && before == current.hash
+		filename := filepath.Join(vault, filepath.FromSlash(relPath))
+		var original []byte
+		if !selfReference {
+			state, err := inspectFileManagerState(vault, relPath)
+			if err != nil {
+				return nil, err
+			}
+			if !state.exists || state.isDir {
+				return nil, fmt.Errorf("reference document %q is not a regular file", relPath)
+			}
+			if state.hash != before {
+				return nil, &ConflictError{Path: relPath, Expected: before, Actual: state.hash}
+			}
+			original, err = os.ReadFile(filename)
+			if err != nil {
+				return nil, err
+			}
+		}
+		beforePath := ""
+		if !selfReference {
+			beforePath = filepath.Join(artifactRoot, fmt.Sprintf("reference-%03d-before", index))
+			if err := workspace.AtomicWriteFile(beforePath, original, 0o600); err != nil {
+				return nil, err
+			}
+		}
+		afterPath := filepath.Join(artifactRoot, fmt.Sprintf("reference-%03d-after", index))
+		if err := workspace.AtomicWriteFile(afterPath, data, 0o600); err != nil {
+			return nil, err
+		}
+		beforeHash := before
+		if selfReference {
+			beforeHash = fileManagerHashAbsent
+		}
+		changes = append(changes, workspace.SourceChange{
+			Path: filepath.Join(vault, filepath.FromSlash(relPath)), BeforeHash: beforeHash, AfterHash: hashResourceBytes(data), BeforePath: beforePath, AfterPath: afterPath,
+		})
+	}
+	return changes, nil
 }
 
 func completedFileManagerPaths(vault string, mutation fileManagerMutation, expected fileManagerState) []workspace.CompletedPath {
@@ -469,6 +612,9 @@ func completedFileManagerBeforePaths(vault string, mutation fileManagerMutation,
 
 func (coordinator *Coordinator) validateEditableFileManagerTarget(relPath string, isDir bool) error {
 	if !isDir {
+		if !strings.EqualFold(path.Ext(relPath), ".md") {
+			return nil
+		}
 		entry := catalogEntry(coordinator.catalog, relPath)
 		if entry == nil || entry.Kind != "article" {
 			return fmt.Errorf("only ordinary article sources can be renamed or deleted: %q", relPath)
@@ -500,6 +646,9 @@ func predictedFileManagerJournal(vault string, mutation fileManagerMutation, cur
 	case fileMutationRename:
 		pathValue = mutation.destination
 		afterHash = current.hash
+		if data, ok := mutation.referenceUpdates[mutation.destination]; ok {
+			afterHash = hashResourceBytes(data)
+		}
 	case fileMutationDelete:
 		afterHash = fileManagerHashAbsent
 	case fileMutationFolder:
@@ -732,6 +881,75 @@ func verifyFileManagerMutation(vault string, mutation fileManagerMutation, expec
 		}
 	}
 	return nil
+}
+
+func applyFileManagerReferenceUpdates(vault string, updates map[string][]byte, before map[string]string) (func() error, error) {
+	if len(updates) == 0 {
+		return func() error { return nil }, nil
+	}
+	paths := make([]string, 0, len(updates))
+	for relPath := range updates {
+		paths = append(paths, relPath)
+	}
+	sort.Strings(paths)
+	type changedReference struct {
+		path      string
+		original  []byte
+		afterHash string
+	}
+	changed := make([]changedReference, 0, len(paths))
+	rollback := func() error {
+		var rollbackErr error
+		for index := len(changed) - 1; index >= 0; index-- {
+			item := changed[index]
+			filename := filepath.Join(vault, filepath.FromSlash(item.path))
+			state, stateErr := inspectFileManagerState(vault, item.path)
+			if stateErr != nil {
+				rollbackErr = errors.Join(rollbackErr, stateErr)
+				continue
+			}
+			if !state.exists || state.hash != item.afterHash {
+				rollbackErr = errors.Join(rollbackErr, &ConflictError{Path: item.path, Expected: item.afterHash, Actual: state.hash})
+				continue
+			}
+			rollbackErr = errors.Join(rollbackErr, workspace.AtomicWriteFile(filename, item.original, 0o644))
+		}
+		return rollbackErr
+	}
+	fail := func(err error) (func() error, error) {
+		return func() error { return nil }, errors.Join(err, rollback())
+	}
+	for _, relPath := range paths {
+		filename := filepath.Join(vault, filepath.FromSlash(relPath))
+		state, err := inspectFileManagerState(vault, relPath)
+		if err != nil {
+			return fail(err)
+		}
+		if !state.exists || state.isDir {
+			return fail(fmt.Errorf("reference document %q is not a regular file", relPath))
+		}
+		if expected := before[relPath]; expected != "" && state.hash != expected {
+			return fail(&ConflictError{Path: relPath, Expected: expected, Actual: state.hash})
+		}
+		original, err := os.ReadFile(filename)
+		if err != nil {
+			return fail(err)
+		}
+		data := updates[relPath]
+		if bytes.Equal(original, data) {
+			continue
+		}
+		if expected := before[relPath]; expected != "" {
+			err = workspace.AtomicWriteFileCAS(filename, expected, data, 0o644)
+		} else {
+			err = workspace.AtomicWriteFile(filename, data, 0o644)
+		}
+		if err != nil {
+			return fail(err)
+		}
+		changed = append(changed, changedReference{path: relPath, original: original, afterHash: hashResourceBytes(data)})
+	}
+	return rollback, nil
 }
 
 func restoreDisplacedPath(displaced, original string) error {

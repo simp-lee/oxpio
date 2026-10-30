@@ -183,6 +183,7 @@ async function capturePublic(browser) {
   }
   await page.goto(`${staticOrigin}/feature/guide/article/`);
   await page.locator('[data-theme-toggle]').click();
+  await page.locator('[data-theme-toggle]').click();
   await page.waitForTimeout(200);
   await capture(page, 'public-article-dark.png', 'Article page in explicit dark mode.');
   await context.close();
@@ -194,6 +195,11 @@ async function capturePublic(browser) {
   await mobilePage.waitForTimeout(150);
   await capture(mobilePage, 'public-mobile-sidebar.png', 'Mobile navigation drawer open.', {fullPage: false});
   await mobile.close();
+}
+
+async function openMoreActions(page) {
+  const menu = page.locator('#more-actions');
+  if (!(await menu.getAttribute('open'))) await menu.locator('summary').click();
 }
 
 async function login(page) {
@@ -214,6 +220,12 @@ async function captureEditor(browser) {
   await page.locator('#editor .cm-content').waitFor();
   await page.locator('#editor .live-rendered-block').first().waitFor({state: 'visible'});
   await capture(page, 'editor-visual.png', 'Authenticated visual editor with metadata, toolbar, source list, and file manager.');
+  await openMoreActions(page);
+  await page.locator('#settings').click();
+  await page.locator('#settings-dialog').waitFor({state: 'visible'});
+  await capture(page, 'editor-theme-settings.png', 'Editor theme settings with the shared three-state preference.');
+  await page.locator('#settings-dialog button[value="cancel"]').click();
+  await openMoreActions(page);
   await page.locator('#new').click();
   await page.locator('#new-dialog').waitFor({state: 'visible'});
   await capture(page, 'editor-new-article.png', 'New article draft dialog.');
@@ -277,17 +289,13 @@ async function captureEditor(browser) {
 
   await page.goto(`${editorOrigin}/_oxpio/editor?path=article.md`, {waitUntil: 'domcontentloaded'});
   await page.locator('#editor .cm-content').waitFor();
-  await page.locator('#file-new-markdown').click();
-  await page.locator('#file-dialog').waitFor({state: 'visible'});
-  await capture(page, 'editor-new-markdown.png', 'File manager New Markdown dialog.');
-  await page.locator('#file-dialog').evaluate(dialog => dialog.close());
   await page.locator('#file-new-folder').click();
   await page.locator('#file-dialog').waitFor({state: 'visible'});
-  await capture(page, 'editor-new-folder.png', 'File manager New folder dialog.');
+  await capture(page, 'editor-new-folder.png', 'Assets and files New folder dialog.');
   await page.locator('#file-dialog').evaluate(dialog => dialog.close());
-  await page.locator('#file-rename').click();
+  await page.locator('#content-rename').click();
   await page.locator('#file-dialog').waitFor({state: 'visible'});
-  await capture(page, 'editor-rename.png', 'File manager Rename dialog with CAS-protected selected path.');
+  await capture(page, 'editor-content-rename.png', 'Content rename dialog with CAS-protected selected path.');
   await page.locator('#file-dialog').evaluate(dialog => dialog.close());
   const storageState = await context.storageState();
   const mobile = await browser.newContext({storageState, viewport: {width: 390, height: 844}, colorScheme: 'light'});

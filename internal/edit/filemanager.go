@@ -15,19 +15,14 @@ type fileManagerEntryResponse struct {
 	Path       string `json:"path"`
 	Name       string `json:"name"`
 	Kind       string `json:"kind"`
-	SourceKind string `json:"sourceKind,omitempty"`
-	Editable   bool   `json:"editable"`
 	Hash       string `json:"hash"`
 	Size       int64  `json:"size,omitempty"`
+	UsageCount int    `json:"usageCount,omitempty"`
 }
 
 type fileManagerMutationRequest struct {
 	Path        string `json:"path"`
 	Destination string `json:"destination"`
-	Title       string `json:"title"`
-	Type        string `json:"type"`
-	Date        string `json:"date"`
-	Kind        string `json:"kind"`
 }
 
 func (s *Server) serveFiles(w http.ResponseWriter, r *http.Request) {
@@ -40,12 +35,39 @@ func (s *Server) serveFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "authentication required", http.StatusUnauthorized)
 		return
 	}
-	entries, err := s.fileManagerEntries()
+	entries, err := s.fileManagerEntries(r.URL.Query().Get("usage") == "unused")
 	if err != nil {
 		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "could not list files"})
 		return
 	}
 	writeJSON(w, map[string]any{"entries": entries})
+}
+
+func (s *Server) serveFileUsages(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		w.Header().Set("Allow", "GET")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if _, ok := s.sessionForRequest(r); !ok {
+		http.Error(w, "authentication required", http.StatusUnauthorized)
+		return
+	}
+	relPath := r.URL.Query().Get("path")
+	if err := validateManagedRelPath(relPath); err != nil {
+		http.Error(w, "invalid resource path", http.StatusBadRequest)
+		return
+	}
+	usages, err := ResourceUsages(s.vault, relPath)
+	if err != nil {
+		writeJSONStatus(w, http.StatusInternalServerError, map[string]string{"error": "could not scan resource usages"})
+		return
+	}
+	documents := make(map[string]struct{}, len(usages))
+	for _, usage := range usages {
+		documents[usage.Document] = struct{}{}
+	}
+	writeJSON(w, map[string]any{"path": relPath, "count": len(usages), "documentCount": len(documents), "usages": usages})
 }
 
 func (s *Server) serveFileFolder(w http.ResponseWriter, r *http.Request) {
@@ -70,59 +92,6 @@ func (s *Server) serveFileFolder(w http.ResponseWriter, r *http.Request) {
 	if result.Build != nil {
 		s.NotifyReload()
 	}
-	s.writeMutationResult(w, result)
-}
-
-func (s *Server) serveFileMarkdown(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		w.Header().Set("Allow", "POST")
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	if !s.authorizeMutation(w, r) {
-		return
-	}
-	var request fileManagerMutationRequest
-	if err := decodeFileManagerRequest(r, &request); err != nil {
-		http.Error(w, "invalid Markdown request", http.StatusBadRequest)
-		return
-	}
-	if err := validateManagedMarkdownPath(request.Path); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	var (
-		content []byte
-		err     error
-	)
-	kind := strings.ToLower(strings.TrimSpace(request.Kind))
-	switch kind {
-	case "section-index":
-		if path.Base(request.Path) != "_index.md" {
-			http.Error(w, "section-index Markdown files must be named _index.md", http.StatusBadRequest)
-			return
-		}
-		content, err = NewSectionSource(request.Title)
-	case "article":
-		if path.Base(request.Path) == "_index.md" {
-			http.Error(w, "_index.md uploads require section-index kind", http.StatusBadRequest)
-			return
-		}
-		content, err = NewArticleSource(request.Title, request.Type, request.Date)
-	default:
-		http.Error(w, "kind must be article or section-index", http.StatusBadRequest)
-		return
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	result, err := s.coordinator.CreateMarkdownContext(r.Context(), request.Path, fileHashHeader(r), content)
-	if err != nil {
-		s.writeMutationError(w, err)
-		return
-	}
-	s.NotifyReload()
 	s.writeMutationResult(w, result)
 }
 
@@ -182,11 +151,13 @@ func decodeFileManagerRequest(r *http.Request, request *fileManagerMutationReque
 	return json.Unmarshal(data, request)
 }
 
-func (s *Server) fileManagerEntries() ([]fileManagerEntryResponse, error) {
-	sourceKinds := make(map[string]string)
-	if catalog := s.applicationCatalog(); catalog != nil {
-		for _, entry := range catalog.Entries(true) {
-			sourceKinds[entry.RelPath] = entry.Kind
+func (s *Server) fileManagerEntries(includeUsage bool) ([]fileManagerEntryResponse, error) {
+	var usageCounts map[string]int
+	if includeUsage {
+		var err error
+		usageCounts, err = ResourceUsageCounts(s.vault)
+		if err != nil {
+			return nil, err
 		}
 	}
 	output, err := filepath.Abs(s.output)
@@ -226,11 +197,13 @@ func (s *Server) fileManagerEntries() ([]fileManagerEntryResponse, error) {
 			if hashErr != nil {
 				return hashErr
 			}
-			editable := s.editableFileManagerTarget(rel, true)
-			entries = append(entries, fileManagerEntryResponse{Path: rel, Name: path.Base(rel), Kind: "folder", Editable: editable, Hash: hash})
+			entries = append(entries, fileManagerEntryResponse{Path: rel, Name: path.Base(rel), Kind: "folder", Hash: hash})
 			return nil
 		}
 		if entry.Type()&os.ModeType != 0 || !entry.Type().IsRegular() || fileManagerPathHidden(rel) {
+			return nil
+		}
+		if strings.EqualFold(path.Ext(rel), ".md") {
 			return nil
 		}
 		info, err := entry.Info()
@@ -242,8 +215,8 @@ func (s *Server) fileManagerEntries() ([]fileManagerEntryResponse, error) {
 			return err
 		}
 		entries = append(entries, fileManagerEntryResponse{
-			Path: rel, Name: path.Base(rel), Kind: "file", SourceKind: sourceKinds[rel],
-			Editable: sourceKinds[rel] == "article", Hash: hash, Size: info.Size(),
+			Path: rel, Name: path.Base(rel), Kind: "file",
+			Hash: hash, Size: info.Size(), UsageCount: usageCounts[rel],
 		})
 		return nil
 	})
@@ -261,14 +234,6 @@ func (s *Server) fileManagerEntries() ([]fileManagerEntryResponse, error) {
 		return entries[i].Path < entries[j].Path
 	})
 	return entries, nil
-}
-
-func (s *Server) editableFileManagerTarget(relPath string, isDir bool) bool {
-	if isDir {
-		return s.coordinator == nil || s.coordinator.validateEditableFileManagerTarget(relPath, true) == nil
-	}
-	entry := s.catalogEntryByRelPath(relPath)
-	return entry != nil && entry.Kind == "article"
 }
 
 func fileManagerPathHidden(relPath string) bool {

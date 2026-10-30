@@ -62,6 +62,64 @@ func TestThemeRuntimeContractRequiresEnabledMounts(t *testing.T) {
 	}
 }
 
+func TestBaseThemeRendersArticleTagsAsTagLinks(t *testing.T) {
+	source, err := BaseSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer, err := Compile(source, nil, "https://example.test/docs/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := renderer.Render("article", viewmodel.Page{
+		Schema: viewmodel.SchemaVersion,
+		Kind:   "article",
+		Site:   viewmodel.Site{Title: "Site", Language: "en"},
+		Title:  "Article",
+		Article: &viewmodel.Article{
+			Title: "Article",
+			Tags:  []string{"go", "parent/child"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		`<li><a href="https://example.test/docs/tags/go/">go</a></li>`,
+		`<li><a href="https://example.test/docs/tags/parent/child/">parent/child</a></li>`,
+	} {
+		if !strings.Contains(string(output), want) {
+			t.Fatalf("article tag link missing %q: %s", want, output)
+		}
+	}
+}
+
+func TestBaseThemeRendersVersionedArticleTagsUnderVersionRoot(t *testing.T) {
+	source, err := BaseSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	renderer, err := Compile(source, nil, "https://example.test/docs/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output, err := renderer.Render("article", viewmodel.Page{
+		Schema:      viewmodel.SchemaVersion,
+		Kind:        "article",
+		VersionID:   "v2",
+		VersionRoot: "/v2/",
+		Site:        viewmodel.Site{Title: "Site", Language: "en"},
+		Title:       "Article",
+		Article:     &viewmodel.Article{Title: "Article", Tags: []string{"Go Tools"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(output), `href="https://example.test/docs/v2/tags/go-tools/">Go Tools</a>`) {
+		t.Fatalf("versioned article tag link missing: %s", output)
+	}
+}
+
 func TestBaseThemeHasStableContractAndRendersAllPageKinds(t *testing.T) {
 	source, err := BaseSource()
 	if err != nil {

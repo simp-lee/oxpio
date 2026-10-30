@@ -9,6 +9,7 @@ import (
 
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 	"github.com/simp-lee/oxpio/internal/model"
+	internalrender "github.com/simp-lee/oxpio/internal/render"
 	"github.com/simp-lee/oxpio/internal/vault"
 )
 
@@ -31,6 +32,46 @@ type sourceMetaResponse struct {
 	Frontmatter editorFrontmatter `json:"frontmatter"`
 	SourceHash  string            `json:"sourceHash"`
 	ParseError  string            `json:"parseError,omitempty"`
+}
+
+func (s *Server) serveThemeAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data, err := editorWeb.ReadFile("web/theme.js")
+	if err != nil {
+		http.Error(w, "theme asset unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/javascript; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(data)
+	}
+}
+
+func (s *Server) serveSharedTokensAsset(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	data, err := internalrender.SharedTokensCSS()
+	if err != nil {
+		http.Error(w, "shared tokens unavailable", http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "text/css; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(data)))
+	w.WriteHeader(http.StatusOK)
+	if r.Method == http.MethodGet {
+		_, _ = w.Write(data)
+	}
 }
 
 func (s *Server) serveEditorAsset(w http.ResponseWriter, r *http.Request, name, contentType string) {

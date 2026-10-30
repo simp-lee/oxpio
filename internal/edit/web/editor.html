@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>OXPIO Editor</title>
   <link rel="icon" href="/_oxpio/favicon.svg" type="image/svg+xml">
+  <script src="/_oxpio/theme.js"></script>
+  <link rel="stylesheet" href="/_oxpio/tokens.css">
   <link rel="stylesheet" href="/_oxpio/editor.css">
 </head>
 <body>
@@ -18,6 +20,7 @@
     <symbol id="icon-eye" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M2.062 12.348a1 1 0 0 1 0-.696 10.75 10.75 0 0 1 19.876 0 1 1 0 0 1 0 .696 10.75 10.75 0 0 1-19.876 0"/><circle cx="12" cy="12" r="3"/></g></symbol>
     <symbol id="icon-fullscreen" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></g></symbol>
     <symbol id="icon-help" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3M12 17h.01"/></g></symbol>
+    <symbol id="icon-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="2"/></symbol>
     <symbol id="icon-code" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></g></symbol>
     <symbol id="icon-search" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/></g></symbol>
     <symbol id="icon-user" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M19 21v-2a4 4 0 0 0-4-4H9a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></g></symbol>
@@ -30,6 +33,7 @@
     <symbol id="icon-rename" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497zM15 5l4 4"/></g></symbol>
     <symbol id="icon-delete" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M10 11v6M14 11v6M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></g></symbol>
     <symbol id="icon-upload" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12 3v12M17 8l-5-5-5 5M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/></g></symbol>
+    <symbol id="icon-clock" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></g></symbol>
     <symbol id="icon-calendar" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M8 2v3M16 2v3"/><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/></g></symbol>
     <symbol id="icon-author" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><circle cx="12" cy="8" r="5"/><path d="M20 21a8 8 0 0 0-16 0"/></g></symbol>
     <symbol id="icon-status" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="m16 9-5.5 5.5L8 12"/></g></symbol>
@@ -51,47 +55,83 @@
     <symbol id="icon-description" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2zM14 2v5a1 1 0 0 0 1 1h5M10 9H8M16 13H8M16 17H8"/></g></symbol>
     <symbol id="icon-tags" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M13.172 2a2 2 0 0 1 1.414.586l6.71 6.71a2.4 2.4 0 0 1 0 3.408l-4.592 4.592a2.4 2.4 0 0 1-3.408 0l-6.71-6.71A2 2 0 0 1 6 9.172V3a1 1 0 0 1 1-1zM2 7v6.172a2 2 0 0 0 .586 1.414l6.71 6.71a2.4 2.4 0 0 0 3.191.193"/><circle cx="10.5" cy="6.5" r=".5" fill="currentColor"/></g></symbol>
     <symbol id="icon-layers" viewBox="0 0 24 24"><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"><path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83zM2 12a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 12M2 17a1 1 0 0 0 .58.91l8.6 3.91a2 2 0 0 0 1.65 0l8.58-3.9A1 1 0 0 0 22 17"/></g></symbol>
+    <symbol id="icon-chevron-left" viewBox="0 0 24 24"><path d="m15 18-6-6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></symbol>
+    <symbol id="icon-panel-left" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/><path d="M9 3v18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></symbol>
+    <symbol id="icon-panel-left-collapsed" viewBox="0 0 24 24"><rect width="18" height="18" x="3" y="3" rx="2" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/><path d="M7 3v18" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></symbol>
+    <symbol id="icon-chevron-right" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></symbol>
     <symbol id="icon-chevron-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></symbol>
     <symbol id="icon-chevron-down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" stroke-width="2"/></symbol>
   </svg>
 
   <header class="editor-header">
-    <div class="product-bar">
-      <a class="brand" href="__OXPIO_BASE_PATH__" aria-label="OXPIO home" title="OXPIO home"><img src="/_oxpio/logo.svg" alt="OXPIO"></a>
-      <nav class="product-nav" aria-label="Editor products"><a class="active" href="#content-editor"><svg aria-hidden="true"><use href="#icon-write"></use></svg><span>Content editor</span></a><button id="settings" type="button" aria-label="Editor settings" title="Editor settings"><svg aria-hidden="true"><use href="#icon-settings"></use></svg><span>Settings</span></button></nav>
-      <button id="sidebar-toggle" type="button" class="icon-button" aria-expanded="false" aria-label="Open documents" title="Open documents"><svg aria-hidden="true"><use href="#icon-menu"></use></svg></button>
+    <div class="global-bar">
+      <div class="product-bar">
+        <a class="brand" href="__OXPIO_BASE_PATH__" aria-label="OXPIO home" title="OXPIO home"><img src="/_oxpio/logo.svg" alt="OXPIO"></a>
+        <nav class="product-nav" aria-label="Editor products"><a class="active" href="#content-editor"><svg aria-hidden="true"><use href="#icon-write"></use></svg><span>Content editor</span></a></nav>
+        <button id="sidebar-toggle" type="button" class="icon-button" aria-expanded="false" aria-label="Open documents" title="Open documents"><svg aria-hidden="true"><use href="#icon-menu"></use></svg></button>
+      </div>
+      <a class="back-link" href="__OXPIO_BASE_PATH__"><svg aria-hidden="true"><use href="#icon-arrow-left"></use></svg><span>Back to site</span></a>
+      <div class="workspace-tools">
+        <details id="user-menu"><summary><svg aria-hidden="true"><use href="#icon-user"></use></svg><span>User</span></summary><button id="logout" type="button">Log out</button></details>
+      </div>
     </div>
-    <div class="editor-heading"><a class="back-link" href="__OXPIO_BASE_PATH__"><svg aria-hidden="true"><use href="#icon-arrow-left"></use></svg><span>Back to site</span></a><h1 class="visually-hidden">Content editor</h1></div>
-    <div class="workspace-tools">
-      <label class="workspace-search" aria-label="Search documents"><svg aria-hidden="true"><use href="#icon-search"></use></svg><input id="document-search" type="search" placeholder="Search Documents"></label>
-      <details id="user-menu"><summary><svg aria-hidden="true"><use href="#icon-user"></use></svg><span>User</span></summary><button id="logout" type="button">Log out</button></details>
-    </div>
-    <div class="header-actions">
-      <span id="save-state" class="save-state" data-state="saved"><svg aria-hidden="true"><use id="save-state-icon" href="#icon-check-circle"></use></svg><span id="save-state-label">Saved</span></span>
-      <button id="save" type="button" class="primary button-with-icon" aria-label="Save" title="Save"><svg aria-hidden="true"><use href="#icon-save"></use></svg><span>Save</span></button>
-      <button id="new" type="button" class="button-with-icon" aria-label="New" title="New"><svg aria-hidden="true"><use href="#icon-plus"></use></svg><span>New</span></button>
-      <button id="delete" type="button" class="danger button-with-icon" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#icon-delete"></use></svg><span>Delete</span></button>
+    <div class="document-bar">
+      <div class="document-heading">
+        <div class="document-title"><span class="eyebrow">Document</span><div class="document-title-line"><h1 id="document-heading">Current source</h1><span id="publish-badge" class="state-badge draft">Draft</span></div></div>
+      </div>
+      <div class="header-actions">
+        <span id="save-state" class="save-state" data-state="saved"><svg aria-hidden="true"><use id="save-state-icon" href="#icon-check-circle"></use></svg><span id="save-state-label">Saved</span></span>
+        <button id="save" type="button" class="primary button-with-icon" aria-label="Save" title="Save"><svg aria-hidden="true"><use href="#icon-save"></use></svg><span>Save</span></button>
+        <details id="more-actions" class="more-actions">
+          <summary class="button-with-icon" aria-label="More actions" title="More actions"><svg aria-hidden="true"><use href="#icon-menu"></use></svg><span>More</span></summary>
+          <div class="more-actions-menu">
+            <button id="settings" type="button" class="button-with-icon" aria-label="Editor settings" title="Editor settings"><svg aria-hidden="true"><use href="#icon-settings"></use></svg><span>Settings</span></button>
+            <button id="new" type="button" class="button-with-icon" aria-label="New" title="New"><svg aria-hidden="true"><use href="#icon-plus"></use></svg><span>New</span></button>
+            <button id="delete" type="button" class="danger button-with-icon" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#icon-delete"></use></svg><span>Delete</span></button>
+          </div>
+        </details>
+      </div>
     </div>
   </header>
 
   <main id="content-editor" class="editor-layout">
-    <aside class="source-sidebar" aria-label="Document list">
-      <div class="sidebar-content">
-      <div class="sidebar-title"><strong>Documents</strong><div class="sidebar-title-tools"><span class="sidebar-hint">Markdown</span><span class="tooltip-anchor"><button id="help-tooltip" type="button" class="icon-button" aria-label="Editor help" title="Editor help" aria-expanded="false" aria-controls="help-tooltip-content"><svg aria-hidden="true"><use href="#icon-help"></use></svg></button><span id="help-tooltip-content" class="help-tooltip" role="tooltip" aria-hidden="true">Content documents are editable article and section sources. Write mode keeps Markdown rendered; click a rendered block to edit its source. Vault files support folders and file operations. Click a rendered block or inline format to reveal only its Markdown source. Full builds run before saving; drafts are not published. Shortcuts: Ctrl/Cmd+B, Ctrl/Cmd+I, Ctrl/Cmd+K, Ctrl/Cmd+S.</span></span></div></div>
-      <label for="source">Content documents</label>
+    <aside class="source-sidebar" aria-label="Content and resources">
+      <div class="sidebar-controls">
+        <div class="sidebar-title">
+          <strong>Content</strong>
+          <div class="sidebar-title-tools">
+            <button id="content-rename" type="button" class="icon-button" aria-label="Rename content" title="Rename content" disabled><svg aria-hidden="true"><use href="#icon-rename"></use></svg></button>
+            <span class="tooltip-anchor"><button id="help-tooltip" type="button" class="icon-button" aria-label="Editor help" title="Editor help" aria-expanded="false" aria-controls="help-tooltip-content"><svg aria-hidden="true"><use href="#icon-help"></use></svg></button><span id="help-tooltip-content" class="help-tooltip" role="tooltip" aria-hidden="true">Content is the only place to open and edit articles and sections. Assets &amp; files contains images, attachments, and other resources. Write mode keeps Markdown rendered; click a rendered block to edit its source. Full builds run before saving; drafts are not published. Shortcuts: <span id="shortcut-hint-help">Ctrl/Cmd+B · Ctrl/Cmd+I · Ctrl/Cmd+K · Ctrl/Cmd+S</span>.</span></span>
+            <button id="sidebar-collapse" type="button" class="sidebar-collapse icon-button" data-state="expanded" aria-expanded="true" aria-controls="sidebar-content" aria-label="Collapse document panel" title="Collapse document panel"><svg aria-hidden="true"><use id="sidebar-collapse-icon" href="#icon-panel-left"></use></svg></button>
+          </div>
+        </div>
+      </div>
+      <div id="sidebar-resizer" class="sidebar-resizer" role="separator" tabindex="0" aria-orientation="vertical" aria-valuemin="14" aria-valuemax="30" aria-valuenow="17" aria-label="Resize document panel"></div>
+      <div id="sidebar-content" class="sidebar-content">
+      <div class="sidebar-hint">Articles &amp; sections</div>
+      <label class="visually-hidden" for="source">Articles and sections</label>
+      <label class="workspace-search" aria-label="Search documents"><svg aria-hidden="true"><use href="#icon-search"></use></svg><input id="document-search" type="search" aria-label="Search documents" placeholder="Search Documents"></label>
       <p id="document-search-status" class="search-status" aria-live="polite"></p>
-      <div id="source-tree" class="source-tree" role="tree" aria-label="Markdown source tree"></div>
+      <ul id="source-tree" class="source-tree" aria-label="Markdown source list"></ul>
       <select id="source" size="14" aria-label="Select content document" hidden></select>
       <button id="refresh" type="button" class="button-with-icon"><svg aria-hidden="true"><use href="#icon-refresh"></use></svg><span>Refresh list</span></button>
-      <section class="file-manager" aria-label="Vault files">
-        <div class="file-manager-header"><strong>Vault files</strong><button id="file-refresh" type="button" class="icon-button" aria-label="Refresh files" title="Refresh files"><svg aria-hidden="true"><use href="#icon-refresh"></use></svg></button></div>
-        <div id="file-tree" class="file-tree" role="tree"></div>
+      <section class="file-manager" aria-label="Assets and files">
+        <div class="file-manager-header"><strong>Assets &amp; files</strong><button id="file-refresh" type="button" class="icon-button" aria-label="Refresh assets and files" title="Refresh assets and files"><svg aria-hidden="true"><use href="#icon-refresh"></use></svg></button></div>
+        <label class="resource-filter"><span>Show</span><select id="resource-filter" aria-label="Filter resources"><option value="all">All resources</option><option value="unused">Unused resources</option></select></label>
+        <ul id="file-tree" class="file-tree" aria-label="Assets and files"></ul>
         <div class="file-actions">
-          <button id="file-new-folder" type="button" aria-label="New folder" title="New folder"><svg aria-hidden="true"><use href="#icon-folder"></use></svg> New folder</button>
-          <button id="file-new-markdown" type="button" aria-label="New Markdown" title="New Markdown"><svg aria-hidden="true"><use href="#icon-file"></use></svg> New Markdown</button>
-          <button id="file-rename" type="button" aria-label="Rename" title="Rename"><svg aria-hidden="true"><use href="#icon-rename"></use></svg> Rename</button>
-          <button id="file-delete" type="button" class="danger" aria-label="Delete" title="Delete"><svg aria-hidden="true"><use href="#icon-delete"></use></svg> Delete</button>
+          <button id="file-new-folder" type="button" aria-label="New folder" title="New resource folder"><svg aria-hidden="true"><use href="#icon-folder"></use></svg> New folder</button>
         </div>
+        <details id="file-resource-actions" class="resource-actions" hidden>
+          <summary><svg aria-hidden="true"><use href="#icon-layers"></use></svg><span id="resource-action-label">Resource</span></summary>
+          <div class="resource-actions-menu">
+            <button id="resource-copy-path" type="button" class="button-with-icon"><svg aria-hidden="true"><use href="#icon-copy"></use></svg><span>Copy path</span></button>
+            <button id="resource-rename" type="button" class="button-with-icon"><svg aria-hidden="true"><use href="#icon-rename"></use></svg><span>Rename</span></button>
+            <button id="resource-show-usages" type="button" class="button-with-icon"><svg aria-hidden="true"><use href="#icon-search"></use></svg><span>Show usages</span></button>
+            <button id="resource-delete" type="button" class="danger button-with-icon"><svg aria-hidden="true"><use href="#icon-delete"></use></svg><span>Delete</span></button>
+            <small id="resource-usage-count"></small>
+          </div>
+        </details>
       </section>
       </div>
     </aside>
@@ -100,7 +140,7 @@
       <div id="busy-indicator" class="busy-indicator" role="status" aria-live="polite" hidden><span id="busy-message">Working… controls are temporarily disabled.</span><button id="cancel-operation" type="button" class="cancel-operation" hidden>Cancel</button></div>
 
       <form id="metadata" class="metadata" autocomplete="off">
-        <div class="metadata-card-heading"><div><span class="eyebrow">Metadata</span><strong id="metadata-title">Current source</strong></div><span id="publish-badge" class="state-badge draft">Draft</span><span id="type-badge" class="type-badge">Document</span><button id="metadata-toggle" type="button" class="icon-button metadata-toggle" aria-expanded="true" aria-controls="metadata-fields" aria-label="Hide metadata" title="Hide metadata"><svg aria-hidden="true"><use id="metadata-toggle-icon" href="#icon-chevron-up"></use></svg></button></div>
+        <div class="metadata-card-heading"><div><span class="eyebrow">Metadata</span><strong id="metadata-title">Current source</strong></div><span id="type-badge" class="type-badge">Document</span><button id="metadata-toggle" type="button" class="icon-button metadata-toggle" aria-expanded="true" aria-controls="metadata-fields" aria-label="Hide metadata" title="Hide metadata"><svg aria-hidden="true"><use id="metadata-toggle-icon" href="#icon-chevron-up"></use></svg></button></div>
         <div id="metadata-fields" class="metadata-grid">
           <label class="wide"><span class="field-label"><svg aria-hidden="true"><use href="#icon-write"></use></svg><span>Title</span></span><input data-field="title" required></label>
           <label class="publish-field"><input data-field="publish" type="checkbox"><span class="field-label"><span>Publish</span></span></label>
@@ -110,7 +150,7 @@
           <label data-field-wrap="date"><span class="field-label"><svg aria-hidden="true"><use href="#icon-calendar"></use></svg><span>Publish date</span></span><input data-field="date" type="date"></label>
           <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-description"></use></svg><span>Description</span></span><input data-field="description"></label>
           <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-author"></use></svg><span>Author</span></span><input data-field="author"></label>
-          <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-refresh"></use></svg><span>Updated</span></span><input data-field="updated" type="date"></label>
+          <label><span class="field-label"><svg aria-hidden="true"><use href="#icon-clock"></use></svg><span>Updated</span></span><input data-field="updated" type="date"></label>
           <details class="metadata-advanced">
             <summary>More metadata</summary>
             <div class="metadata-advanced-grid">
@@ -131,7 +171,7 @@
         </div>
       </form>
 
-      <div class="editor-tabs" role="tablist" aria-label="Editor mode"><button id="write-mode" type="button" role="tab" aria-selected="true" aria-controls="editor-mode-panel" tabindex="0"><svg aria-hidden="true"><use href="#icon-write"></use></svg><span>Write</span></button><button id="source-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1"><svg aria-hidden="true"><use href="#icon-source"></use></svg><span>Source</span></button><button id="read-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1"><svg aria-hidden="true"><use href="#icon-eye"></use></svg><span>Preview</span></button><button id="diff-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1"><svg aria-hidden="true"><use href="#icon-diff"></use></svg><span>Diff</span></button></div>
+      <div class="editor-tabs" role="tablist" aria-label="Editor mode"><button id="write-mode" type="button" role="tab" aria-selected="true" aria-controls="editor-mode-panel" tabindex="0" title="Write — edit near the final result"><svg aria-hidden="true"><use href="#icon-write"></use></svg><span>Write</span></button><button id="source-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1" title="Source — edit complete Markdown and frontmatter"><svg aria-hidden="true"><use href="#icon-source"></use></svg><span>Source</span></button><button id="read-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1" title="Preview — inspect the rendered page"><svg aria-hidden="true"><use href="#icon-eye"></use></svg><span>Preview</span></button><button id="diff-mode" type="button" role="tab" aria-selected="false" aria-controls="editor-mode-panel" tabindex="-1" title="Diff — review changes before saving"><svg aria-hidden="true"><use href="#icon-diff"></use></svg><span>Diff</span></button></div>
       <div class="toolbar" role="toolbar" aria-label="Markdown toolbar">
         <div class="toolbar-group">
           <button class="toolbar-button text-icon" type="button" data-command="bold" aria-label="Bold" title="Bold">B</button>
@@ -153,18 +193,19 @@
         </div>
         <span class="toolbar-separator" role="separator"></span>
         <div class="toolbar-group">
-          <button class="toolbar-button" id="toolbar-fullscreen" type="button" aria-label="Toggle fullscreen" title="Toggle fullscreen"><svg aria-hidden="true"><use href="#icon-fullscreen"></use></svg></button>
+          <button class="toolbar-button" id="toolbar-fullscreen" type="button" aria-pressed="false" aria-label="Enter fullscreen" title="Enter fullscreen"><svg aria-hidden="true"><use href="#icon-fullscreen"></use></svg></button>
         </div>
-        <span class="toolbar-hint">Ctrl/Cmd+B · Ctrl/Cmd+I · Ctrl/Cmd+K · Ctrl/Cmd+S</span>
+        <span id="toolbar-shortcut-hint" class="toolbar-hint">Ctrl/Cmd+B · Ctrl/Cmd+I · Ctrl/Cmd+K · Ctrl/Cmd+S</span>
       </div>
 
       <div id="editor-mode-panel" class="editor-preview-grid" role="tabpanel" aria-labelledby="write-mode" tabindex="0">
         <div class="editor-pane">
+          <div id="live-preview-hint" class="live-preview-hint" data-reserve="true" role="note" hidden><svg aria-hidden="true"><use href="#icon-help"></use></svg><div><strong>Why can I click this?</strong><span>Write mode renders Markdown as you type. Click a rendered block to reveal and edit its source; move the cursor into Markdown syntax to see its original markers.</span></div><button id="live-preview-hint-close" type="button" class="icon-button" aria-label="Dismiss Write mode tip" title="Dismiss tip"><svg aria-hidden="true"><use href="#icon-close"></use></svg></button></div>
           <div id="editor" aria-label="Markdown editor"></div>
           <div id="editor-footer" class="editor-footer"><span id="line-count">Lines: 0</span><span id="word-count">Words: 0</span><span id="file-info">No file</span><span>Markdown</span><span id="status" class="status" data-visibility="quiet" role="status">Loading document catalog…</span><span id="draft-indicator">Saved</span></div>
         </div>
         <div class="preview-pane">
-          <div class="pane-title preview-controls"><div class="preview-title"><svg aria-hidden="true"><use id="preview-title-icon" href="#icon-eye"></use></svg><span id="preview-title">Preview</span></div><div class="preview-actions"><button id="preview-refresh" type="button" class="icon-button" aria-label="Refresh content preview" title="Refresh content preview"><svg aria-hidden="true"><use href="#icon-refresh"></use></svg></button><button id="page-preview" type="button" class="button-with-icon" aria-pressed="false" aria-label="Show complete page preview" title="Show complete page preview" hidden><svg aria-hidden="true"><use href="#icon-external"></use></svg><span>Page</span></button><button id="diff-wrap" type="button" class="button-with-icon" aria-pressed="false" aria-label="Wrap long lines" title="Wrap long lines" hidden><svg aria-hidden="true"><use href="#icon-wrap"></use></svg><span>Wrap lines</span></button></div></div>
+          <div class="pane-title preview-controls"><div class="preview-title"><svg aria-hidden="true"><use id="preview-title-icon" href="#icon-eye"></use></svg><span id="preview-title">Preview</span></div><div class="preview-actions"><button id="preview-refresh" type="button" class="icon-button" aria-label="Refresh content preview" title="Refresh content preview"><svg aria-hidden="true"><use href="#icon-refresh"></use></svg></button><button id="page-preview" type="button" class="button-with-icon" aria-pressed="false" aria-label="Show complete page preview" title="Show complete page preview" hidden><svg aria-hidden="true"><use href="#icon-external"></use></svg><span>Complete page</span></button><button id="diff-wrap" type="button" class="button-with-icon" aria-pressed="false" aria-label="Wrap long lines" title="Wrap long lines" hidden><svg aria-hidden="true"><use href="#icon-wrap"></use></svg><span>Wrap lines</span></button></div></div>
           <iframe id="preview-frame" title="Rendered content preview" hidden></iframe>
           <div id="diff-editor" class="diff-editor" hidden></div>
           <div id="preview-empty" class="preview-empty">Select Preview to render a complete preview.</div>
@@ -178,15 +219,8 @@
     <form method="dialog" id="file-form" class="new-form">
       <h2 id="file-dialog-title">New file</h2>
       <input id="file-original" type="hidden">
-      <label>Path<input id="file-path" name="path" aria-describedby="file-model-hint file-parent-warning" placeholder="For example: docs/guide.md" required></label>
-      <p id="file-model-hint" class="dialog-hint" hidden>Folders are sections only when they contain <code>_index.md</code>. Create the Section index before creating an article in a new folder.</p>
+      <label>Path<input id="file-path" name="path" aria-describedby="file-parent-warning" placeholder="For example: assets/images" required></label>
       <p id="file-parent-warning" class="dialog-warning" role="alert" hidden></p>
-      <div id="markdown-file-fields">
-        <label>Title<input id="file-title" name="title"></label>
-        <label>Type<select id="file-type" name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
-        <label>Publish date<input id="file-date" name="date" type="date"></label>
-        <label>Source kind<select id="file-kind" name="kind"><option value="article">Article</option><option value="section-index">Section index</option></select></label>
-      </div>
       <div class="dialog-actions"><button value="cancel">Cancel</button><button id="file-submit" value="default" class="primary">Create</button></div>
     </form>
   </dialog>
@@ -194,29 +228,31 @@
   <dialog id="new-dialog" aria-labelledby="new-dialog-title">
     <form method="dialog" id="new-form" class="new-form">
       <h2 id="new-dialog-title">New article</h2>
+      <label>Content kind<select id="new-kind" name="kind"><option value="article">Article</option><option value="section-index">Section</option></select></label>
       <label>Path<input name="path" aria-describedby="new-model-hint new-parent-warning" placeholder="For example: news/new.md" required></label>
-      <p id="new-model-hint" class="dialog-hint">Folders are sections only when they contain <code>_index.md</code>. Create the Section index before creating an article in a new folder.</p>
+      <p id="new-model-hint" class="dialog-hint">Sections must use the exact filename <code>_index.md</code>. Create the Section index before creating an article in a new folder.</p>
       <p id="new-parent-warning" class="dialog-warning" role="alert" hidden></p>
       <label>Title<input name="title" required></label>
-      <label>Type<select name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
+      <label id="new-type-wrap">Type<select name="type"><option value="doc">Document</option><option value="post">Post</option><option value="page">Page</option></select></label>
       <label id="new-date-wrap">Publish date<input name="date" type="date"></label>
       <div class="dialog-actions"><button id="new-cancel" type="button">Cancel</button><button id="new-submit" value="default" class="primary">Create draft</button></div>
     </form>
   </dialog>
 
-  <aside id="media-panel" class="media-panel" hidden aria-label="Media library">
-    <div class="media-header"><h2>Media library</h2><button id="media-close" type="button">Close</button></div>
+  <dialog id="media-panel" class="media-panel" aria-labelledby="media-panel-title" aria-describedby="media-drop-hint">
+    <div class="media-header"><h2 id="media-panel-title">Media library</h2><button id="media-close" type="button">Close</button></div>
     <div id="media-dropzone" class="media-dropzone" tabindex="0" aria-describedby="media-drop-hint">
-      <p id="media-drop-hint">Drop one Markdown or image file here, or choose a file.</p>
-      <label class="upload-kind">Markdown source kind<select id="upload-kind"><option value="article">Article</option><option value="section-index">Section index</option></select></label>
-      <label class="upload-button" title="Upload one Markdown or image file"><svg aria-hidden="true"><use href="#icon-upload"></use></svg> Upload file<input id="media-upload" type="file" accept=".md,.png,.jpg,.jpeg,.webp,.svg,image/*,text/markdown" hidden></label>
+      <p id="media-drop-hint">Drop an image file here, or choose a file. Markdown content belongs in the Content tree.</p>
+      <label class="upload-button" title="Upload an image file"><svg aria-hidden="true"><use href="#icon-upload"></use></svg> Upload image<input id="media-upload" type="file" accept=".png,.jpg,.jpeg,.webp,.svg,image/*" hidden></label>
     </div>
     <label class="upload-folder">Target folder<input id="upload-folder" type="text" placeholder="Vault root or existing folder"></label>
     <p id="upload-parent-warning" class="dialog-warning" role="alert" hidden></p>
     <div id="media-list" class="media-list"><p>Loading…</p></div>
-  </aside>
+  </dialog>
 
-  <dialog id="settings-dialog" aria-labelledby="settings-dialog-title"><form method="dialog" class="new-form"><h2 id="settings-dialog-title">Editor settings</h2><label>Theme<select id="preference-theme"><option value="system">System</option><option value="light">Light</option><option value="dark">Dark</option></select></label><label>Indent spaces<input id="preference-indent" type="number" min="1" max="8" value="2"></label><label><input id="preference-preview" type="checkbox" checked> Keep preview open</label><div class="dialog-actions"><button value="cancel">Close</button><button id="settings-save" value="default" class="primary">Save preferences</button></div></form></dialog>
+  <dialog id="resource-dialog" aria-labelledby="resource-dialog-title"><form method="dialog" class="new-form"><h2 id="resource-dialog-title">Resource usages</h2><p id="resource-dialog-summary" class="dialog-hint"></p><div id="resource-dialog-list" class="resource-usage-list"></div><div class="dialog-actions"><button value="cancel">Close</button></div></form></dialog>
+
+  <dialog id="settings-dialog" aria-labelledby="settings-dialog-title"><form method="dialog" class="new-form"><h2 id="settings-dialog-title">Editor settings</h2><label>Theme<select id="preference-theme" data-theme-select><option value="system">Follow system</option><option value="light">Light</option><option value="dark">Dark</option></select></label><label>Indent spaces<input id="preference-indent" type="number" min="1" max="8" value="2"></label><label><input id="preference-preview" type="checkbox" checked> Keep preview open</label><div class="dialog-actions"><button value="cancel">Close</button><button id="settings-save" value="default" class="primary">Save preferences</button></div></form></dialog>
   <script type="module" src="/_oxpio/editor.js"></script>
 </body>
 </html>

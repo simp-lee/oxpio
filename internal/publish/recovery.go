@@ -111,6 +111,9 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 			return result, fmt.Errorf("%w: source-batch journal has an output-after hash", workspace.ErrRecovery)
 		}
 		if journal.OutputAfterHash != "" && directoryHash(journal.TargetPath) == journal.OutputAfterHash {
+			if err := completeReferenceChanges(vault, journal, true); err != nil {
+				return result, err
+			}
 			if err := validatePreparedOutput(journal); err != nil {
 				return result, err
 			}
@@ -172,6 +175,9 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		}
 		if journal.CommitKind == "source+output" && journal.SourcePath != "" {
 			if sourceCommittedAfterPrepared(journal) {
+				if err := completeReferenceChanges(vault, journal, true); err != nil {
+					return result, err
+				}
 				journal.Phase = "source-committed"
 				if err := workspace.WriteJournal(vault, journal); err != nil {
 					return result, fmt.Errorf("%w: finalize source commit after prepared phase: %v", workspace.ErrRecovery, err)
@@ -186,6 +192,11 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 				break
 			}
 			if err := validatePreparedSource(journal); err != nil {
+				return result, err
+			}
+		}
+		if journal.CommitKind == "source+output" && journal.SourcePath != "" {
+			if err := completeReferenceChanges(vault, journal, false); err != nil {
 				return result, err
 			}
 		}
@@ -248,6 +259,9 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 				beforePath = journal.SourcePath
 			}
 			if fileHash(beforePath) == journal.SourceBeforeHash {
+				if err := completeReferenceChanges(vault, journal, false); err != nil {
+					return result, err
+				}
 				if filepath.Clean(beforePath) != filepath.Clean(journal.SourcePath) && fileHash(journal.SourcePath) != "absent" {
 					return result, fmt.Errorf("%w: source-committed destination was recreated", workspace.ErrRecovery)
 				}
@@ -270,6 +284,9 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		if err := validateSourceAfter(journal); err != nil {
 			return result, err
 		}
+		if err := completeReferenceChanges(vault, journal, true); err != nil {
+			return result, err
+		}
 		if err := continueOutputCommit(vault, journal); err != nil {
 			return result, err
 		}
@@ -278,6 +295,9 @@ func Recover(vault string, dryRun bool) (RecoveryResult, error) {
 		}
 		result.Action, result.Changed = "complete-output", true
 	case "output-committed", "completed":
+		if err := completeReferenceChanges(vault, journal, true); err != nil {
+			return result, err
+		}
 		want := journal.OutputAfterHash
 		if want == "" {
 			want = journal.AfterHash
@@ -546,6 +566,21 @@ func inspectRecoveryJournal(vault string, journal workspace.Journal) error {
 			return err
 		}
 	}
+	for _, change := range journal.ReferenceChanges {
+		if err := validateReferenceChangePath(vault, outputPath, change); err != nil {
+			return err
+		}
+		if change.BeforePath != "" {
+			if err := validateReferenceArtifactPath(vault, journal.TargetPath, journal.BackupPath, change.BeforePath); err != nil {
+				return err
+			}
+		}
+		if change.AfterPath != "" {
+			if err := validateReferenceArtifactPath(vault, journal.TargetPath, journal.BackupPath, change.AfterPath); err != nil {
+				return err
+			}
+		}
+	}
 	for _, cleanupPath := range journal.CleanupPaths {
 		if err := validateTransactionPath(vault, journal.TargetPath, cleanupPath); err != nil {
 			return err
@@ -579,6 +614,24 @@ func validateJournalCompleteness(journal workspace.Journal) error {
 	} {
 		if err := require(field.value, field.name); err != nil {
 			return err
+		}
+	}
+	for _, change := range journal.ReferenceChanges {
+		if err := require(change.Path, "referenceChange.path"); err != nil {
+			return err
+		}
+		if change.BeforeHash != "absent" {
+			if err := require(change.BeforePath, "referenceChange.beforePath"); err != nil {
+				return err
+			}
+		}
+		if change.AfterHash != "absent" {
+			if err := require(change.AfterPath, "referenceChange.afterPath"); err != nil {
+				return err
+			}
+		}
+		if !validFileStateHash(change.BeforeHash) || !validFileStateHash(change.AfterHash) {
+			return fmt.Errorf("%w: reference change proof is unavailable", workspace.ErrRecovery)
 		}
 	}
 	switch journal.Phase {
@@ -796,6 +849,34 @@ func validateRecoverySourcePath(vault, output, name string, allowConfig bool) er
 	return nil
 }
 
+func validateReferenceChangePath(vault, output string, change workspace.SourceChange) error {
+	if err := validateRecoverySourcePath(vault, output, change.Path, true); err != nil {
+		return fmt.Errorf("%w: reference change path: %v", workspace.ErrRecovery, err)
+	}
+	return nil
+}
+
+func validateReferenceArtifactPath(vault, target, backup, artifact string) error {
+	if strings.TrimSpace(backup) == "" || strings.TrimSpace(artifact) == "" {
+		return fmt.Errorf("%w: reference change artifact is missing", workspace.ErrRecovery)
+	}
+	if err := validateTransactionPath(vault, target, backup); err != nil {
+		return err
+	}
+	backup, err := filepath.Abs(backup)
+	if err != nil {
+		return fmt.Errorf("%w: reference change backup path: %v", workspace.ErrRecovery, err)
+	}
+	artifact, err = filepath.Abs(artifact)
+	if err != nil || !internalfsutil.PathWithinRoot(backup, artifact) || filepath.Clean(backup) == filepath.Clean(artifact) {
+		return fmt.Errorf("%w: reference change artifact is outside its backup", workspace.ErrRecovery)
+	}
+	if err := internalfsutil.EnsureNoSymlinkComponents(filepath.Dir(artifact)); err != nil {
+		return fmt.Errorf("%w: reference change artifact parent: %v", workspace.ErrRecovery, err)
+	}
+	return nil
+}
+
 func validateSourceBatchPath(vault, target string, change workspace.SourceChange) error {
 	name := change.Path
 	if !strings.EqualFold(filepath.Ext(name), ".md") {
@@ -964,15 +1045,87 @@ func continueOutputCommit(vault string, journal workspace.Journal) error {
 	return nil
 }
 
+func referenceChangesBefore(vault string, journal workspace.Journal) bool {
+	for _, change := range journal.ReferenceChanges {
+		if fileHash(change.Path) != change.BeforeHash {
+			return false
+		}
+	}
+	return true
+}
+
+func referenceChangesAfter(vault string, journal workspace.Journal) bool {
+	for _, change := range journal.ReferenceChanges {
+		if fileHash(change.Path) != change.AfterHash {
+			return false
+		}
+	}
+	return true
+}
+
+func completeReferenceChanges(vault string, journal workspace.Journal, after bool) error {
+	for _, change := range journal.ReferenceChanges {
+		expected := change.BeforeHash
+		other := change.AfterHash
+		artifact := change.BeforePath
+		if after {
+			expected = change.AfterHash
+			other = change.BeforeHash
+			artifact = change.AfterPath
+		}
+		var data []byte
+		if artifact != "" {
+			var err error
+			data, err = os.ReadFile(artifact)
+			if err != nil {
+				return fmt.Errorf("%w: read reference recovery artifact: %v", workspace.ErrRecovery, err)
+			}
+			if fmt.Sprintf("%x", sha256Sum(data)) != expected {
+				return fmt.Errorf("%w: reference recovery artifact hash does not match", workspace.ErrRecovery)
+			}
+		}
+		current := fileHash(change.Path)
+		if current == expected {
+			continue
+		}
+		if current != other && (!after || change.Path != journal.SourcePath || current != journal.SourceBeforeHash) {
+			return fmt.Errorf("%w: reference %q changed outside the transaction", workspace.ErrRecovery, change.Path)
+		}
+		if len(data) == 0 && expected != "absent" {
+			return fmt.Errorf("%w: reference recovery artifact is missing", workspace.ErrRecovery)
+		}
+		if expected == "absent" {
+			return fmt.Errorf("%w: cannot restore absent reference %q", workspace.ErrRecovery, change.Path)
+		}
+		if err := workspace.AtomicWriteFileCAS(change.Path, current, data, 0o644); err != nil {
+			return fmt.Errorf("%w: restore reference %q: %v", workspace.ErrRecovery, change.Path, err)
+		}
+		if fileHash(change.Path) != expected {
+			return fmt.Errorf("%w: restored reference %q has an unexpected hash", workspace.ErrRecovery, change.Path)
+		}
+	}
+	return nil
+}
+
 func sourceCommittedAfterPrepared(journal workspace.Journal) bool {
-	if journal.SourcePath == "" || journal.SourceAfterHash == "" || fileHash(journal.SourcePath) != journal.SourceAfterHash {
+	if journal.SourcePath == "" {
 		return false
 	}
-	beforePath := journal.SourceBeforePath
-	if beforePath == "" || filepath.Clean(beforePath) == filepath.Clean(journal.SourcePath) {
-		return true
+	current := fileHash(journal.SourcePath)
+	if journal.SourceAfterHash != "" && current == journal.SourceAfterHash {
+		beforePath := journal.SourceBeforePath
+		if beforePath == "" || filepath.Clean(beforePath) == filepath.Clean(journal.SourcePath) {
+			return true
+		}
+		return fileHash(beforePath) == "absent"
 	}
-	return fileHash(beforePath) == "absent"
+	for _, change := range journal.ReferenceChanges {
+		if change.Path == journal.SourcePath && journal.SourceBeforeHash != "" && current == journal.SourceBeforeHash {
+			beforePath := journal.SourceBeforePath
+			return beforePath != "" && filepath.Clean(beforePath) != filepath.Clean(journal.SourcePath) && fileHash(beforePath) == "absent"
+		}
+	}
+	return false
 }
 
 func validatePreparedSource(journal workspace.Journal) error {
@@ -1081,6 +1234,9 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 	switch journal.Phase {
 	case "prepared":
 		if journal.OutputAfterHash != "" && directoryHash(journal.TargetPath) == journal.OutputAfterHash {
+			if !referenceChangesAfter(vault, journal) {
+				return fmt.Errorf("%w: prepared output has incomplete reference updates", workspace.ErrRecovery)
+			}
 			return validatePreparedOutput(journal)
 		}
 		if journal.OutputBeforeHash != "" && directoryHash(journal.TargetPath) != journal.OutputBeforeHash {
@@ -1099,7 +1255,18 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 			return validateSourceBatchPrepared(vault, journal)
 		}
 		if journal.CommitKind == "source+output" && journal.SourcePath != "" {
-			return validatePreparedSource(journal)
+			if sourceCommittedAfterPrepared(journal) {
+				if !referenceChangesAfter(vault, journal) {
+					return fmt.Errorf("%w: prepared source commit has incomplete reference updates", workspace.ErrRecovery)
+				}
+				return nil
+			}
+			if err := validatePreparedSource(journal); err != nil {
+				return err
+			}
+			if !referenceChangesBefore(vault, journal) {
+				return fmt.Errorf("%w: prepared transaction has incomplete reference updates", workspace.ErrRecovery)
+			}
 		}
 		return nil
 	case "source-committed":
@@ -1126,6 +1293,9 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 				beforePath = journal.SourcePath
 			}
 			if fileHash(beforePath) == journal.SourceBeforeHash {
+				if !referenceChangesBefore(vault, journal) {
+					return fmt.Errorf("%w: source-committed transaction has incomplete reference updates", workspace.ErrRecovery)
+				}
 				if filepath.Clean(beforePath) != filepath.Clean(journal.SourcePath) && fileHash(journal.SourcePath) != "absent" {
 					return fmt.Errorf("%w: source-committed destination was recreated", workspace.ErrRecovery)
 				}
@@ -1138,11 +1308,17 @@ func validateRecoveryReadOnly(vault string, journal workspace.Journal) error {
 				return nil
 			}
 		}
+		if !referenceChangesAfter(vault, journal) {
+			return fmt.Errorf("%w: source-committed transaction has incomplete reference updates", workspace.ErrRecovery)
+		}
 		if journal.OutputAfterHash != "" && directoryHash(journal.TargetPath) == journal.OutputAfterHash {
 			return validateAlreadySwappedOutput(vault, journal)
 		}
 		return validateOutputContinuation(vault, journal)
 	case "output-committed", "completed":
+		if !referenceChangesAfter(vault, journal) {
+			return fmt.Errorf("%w: committed output has incomplete reference updates", workspace.ErrRecovery)
+		}
 		want := journal.OutputAfterHash
 		if want == "" {
 			want = journal.AfterHash

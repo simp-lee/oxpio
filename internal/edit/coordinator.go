@@ -54,9 +54,10 @@ func (err *CandidateBuildError) Unwrap() error { return err.Err }
 
 // TransactionResult describes a successfully published source mutation.
 type TransactionResult struct {
-	SourceHash string
-	RelPath    string
-	Build      *internalbuild.BuildResult
+	SourceHash             string
+	RelPath                string
+	ReferenceDocumentCount int
+	Build                  *internalbuild.BuildResult
 	// SourceCleanupError reports temporary source/backup cleanup failure after
 	// a successful commit. The mutation is still published and must not be retried.
 	SourceCleanupError error

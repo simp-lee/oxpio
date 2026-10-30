@@ -102,6 +102,7 @@ type (
 		Pagination     Pagination
 		SEO            SEO
 		VersionID      string
+		VersionRoot    string
 		HasMath        bool
 		HasMermaid     bool
 		NotFound       bool

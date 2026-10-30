@@ -23,6 +23,18 @@ import (
 	internalserver "github.com/simp-lee/oxpio/internal/server"
 )
 
+func TestMutationErrorReportsResourceUsagesAsConflict(t *testing.T) {
+	server := &Server{}
+	recorder := httptest.NewRecorder()
+	server.writeMutationError(recorder, &ResourceUsageConflictError{Path: "assets/hero.png", Usages: []ResourceUsage{{Document: "article.md", Field: "cover", Kind: "frontmatter", Line: 3}}})
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("response status = %d, want %d", recorder.Code, http.StatusConflict)
+	}
+	if !strings.Contains(recorder.Body.String(), `"document":"article.md"`) || !strings.Contains(recorder.Body.String(), `"field":"cover"`) {
+		t.Fatalf("response = %s, want structured usage", recorder.Body.String())
+	}
+}
+
 func TestMutationResultReportsPostCommitOutputCleanupWarning(t *testing.T) {
 	server := &Server{}
 	recorder := httptest.NewRecorder()
@@ -87,7 +99,7 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	}
 	login := httptest.NewRecorder()
 	server.ServeHTTP(login, httptest.NewRequest(http.MethodGet, "/docs/_oxpio/login", nil))
-	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `href="/docs/"`) || !strings.Contains(login.Body.String(), `href="/docs/_oxpio/favicon.svg"`) {
+	if login.Code != http.StatusOK || !strings.Contains(login.Body.String(), `href="/docs/"`) || !strings.Contains(login.Body.String(), `href="/docs/_oxpio/favicon.svg"`) || !strings.Contains(login.Body.String(), `href="/docs/_oxpio/tokens.css"`) {
 		t.Fatalf("login = %d %s", login.Code, login.Body.String())
 	}
 	server.sessions["test-session"] = session{username: "admin", expires: time.Now().Add(time.Hour)}
@@ -95,7 +107,7 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "test-session"})
 	editor := httptest.NewRecorder()
 	server.ServeHTTP(editor, request)
-	if editor.Code != http.StatusOK || !strings.Contains(editor.Body.String(), `href="/docs/"`) || !strings.Contains(editor.Body.String(), `href="/docs/_oxpio/favicon.svg"`) {
+	if editor.Code != http.StatusOK || !strings.Contains(editor.Body.String(), `href="/docs/"`) || !strings.Contains(editor.Body.String(), `href="/docs/_oxpio/favicon.svg"`) || !strings.Contains(editor.Body.String(), `href="/docs/_oxpio/tokens.css"`) {
 		t.Fatalf("editor = %d %s", editor.Code, editor.Body.String())
 	}
 	editorHead := httptest.NewRecorder()
@@ -105,6 +117,13 @@ func TestEditorPagesUseConfiguredPublicBasePath(t *testing.T) {
 	if editorHead.Code != http.StatusOK || editorHead.Body.Len() != 0 || editorHead.Header().Get("Content-Length") == "" {
 		t.Fatalf("editor HEAD = %d body=%q headers=%v", editorHead.Code, editorHead.Body.String(), editorHead.Header())
 	}
+	tokens := httptest.NewRecorder()
+	tokensRequest := httptest.NewRequest(http.MethodGet, "/docs/_oxpio/tokens.css", nil)
+	server.ServeHTTP(tokens, tokensRequest)
+	if tokens.Code != http.StatusOK || tokens.Header().Get("Content-Type") != "text/css; charset=utf-8" || !strings.Contains(tokens.Body.String(), "--color-canvas") {
+		t.Fatalf("tokens = %d %s", tokens.Code, tokens.Body.String())
+	}
+
 	favicon := httptest.NewRecorder()
 	faviconRequest := httptest.NewRequest(http.MethodGet, "/docs/_oxpio/favicon.svg", nil)
 	server.ServeHTTP(favicon, faviconRequest)

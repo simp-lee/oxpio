@@ -8,25 +8,65 @@ import {Decoration, EditorView, WidgetType, keymap} from "@codemirror/view";
 import {MergeView} from "@codemirror/merge";
 
 const $ = selector => document.querySelector(selector);
+const shortcutKeys = {bold: "B", italic: "I", link: "K", save: "S"};
 const fields = [...document.querySelectorAll("[data-field]")];
 const sectionFields = new Set(["title", "publish", "description", "order", "banner", "bannerAlt"]);
 const state = {
   path: new URLSearchParams(location.search).get("path") || "",
   kind: "article", mode: "visual", surface: "write", source: "", baselineSource: "", hash: "",
   bodyBaseline: "", formBaseline: {}, sourceChanged: false,
-  filePath: "", fileHash: "", fileKind: "", fileSourceKind: "",
+  filePath: "", fileHash: "", fileKind: "", fileUsageCount: 0, resourceUsageToken: 0, resourceFilter: "all",
   fileDialogMode: "", dirty: false, busy: false, busyCount: 0, busyReason: "", operationController: null, operationOwned: false, operationCommitted: false, operationCancelled: false, loadToken: 0,
-  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEditable: false, fileEntries: null, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", previewToken: "", catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
+  draftTimer: 0, diffView: null, diffWrap: false, previewURL: "", previewContentURL: "", previewPageURL: "", previewKind: "content", previewResizeObserver: null, fileEntries: null, indent: 2, keepPreview: true, previewOpen: false, suppressPreview: false, previewPending: "", previewToken: "", livePreviewHintDismissed: false, catalogSources: [], sourceTreeInitialized: false, collapsedFolders: new Set(), collapsedSourceFolders: new Set(),
 };
 const editable = new Compartment();
 let editor;
 let suppressChanges = false;
+let sidebarResize = null;
+let mediaFocusPending = false;
 const requestTimeout = 30000;
 
 function status(message) {
   const target = $("#status");
   target.textContent = message;
   target.dataset.visibility = /^(?:Loading|Loaded)\b/u.test(message) ? "quiet" : message ? "visible" : "empty";
+}
+function shortcutHint() {
+  return "Ctrl/Cmd+B · Ctrl/Cmd+I · Ctrl/Cmd+K · Ctrl/Cmd+S";
+}
+function syncShortcutHints() {
+  const hint = shortcutHint();
+  [$("#toolbar-shortcut-hint"), $("#shortcut-hint-help")].filter(Boolean).forEach(element => { element.textContent = hint; });
+  for (const [commandName, key] of Object.entries(shortcutKeys)) {
+    const button = commandName === "save" ? $("#save") : document.querySelector(`[data-command="${commandName}"]`);
+    if (button) button.title = `${button.getAttribute("aria-label") || commandName} (${hint.split(" · ").find(value => value.endsWith(`+${key}`))})`;
+  }
+}
+function syncFullscreenControl() {
+  const button = $("#toolbar-fullscreen");
+  if (!button) return;
+  const fullscreen = document.body.classList.contains("editor-fullscreen");
+  const label = fullscreen ? "Exit fullscreen" : "Enter fullscreen";
+  button.setAttribute("aria-pressed", String(fullscreen));
+  button.setAttribute("aria-label", label);
+  button.title = label;
+}
+function setFullscreen(fullscreen) {
+  document.body.classList.toggle("editor-fullscreen", fullscreen);
+  syncFullscreenControl();
+}
+function syncLivePreviewHint() {
+  const hint = $("#live-preview-hint");
+  if (!hint) return;
+  let dismissed = state.livePreviewHintDismissed;
+  try { dismissed = dismissed || localStorage.getItem("oxpio-editor-live-preview-hint-seen") === "true"; } catch { /* local storage is optional */ }
+  hint.dataset.reserve = state.path ? "false" : "true";
+  hint.hidden = dismissed || state.surface !== "write" || state.mode !== "visual" || !state.path;
+}
+function dismissLivePreviewHint() {
+  state.livePreviewHintDismissed = true;
+  try { localStorage.setItem("oxpio-editor-live-preview-hint-seen", "true"); } catch { /* local storage is optional */ }
+  syncLivePreviewHint();
 }
 function isAbortError(error) { return error && error.name === "AbortError"; }
 function markOperationCommitted(label = "Operation") {
@@ -257,9 +297,14 @@ function activeSourceDecorations(viewState, active, renderedBlock = null, render
   const ranges = [];
   const activeBlock = directBlockNodes(viewState).find(node => active && node.from <= active.from && node.to >= active.to);
   if (activeBlock) {
-    const line = viewState.doc.lineAt(activeBlock.from);
+    const firstLine = viewState.doc.lineAt(activeBlock.from).number;
+    const lastLine = viewState.doc.lineAt(Math.max(activeBlock.from, activeBlock.to - 1)).number;
     const heading = /^ATXHeading[1-6]$/u.test(activeBlock.name);
-    if (heading) ranges.push(Decoration.line({class: `live-heading live-heading-${activeBlock.name.slice(-1)}`}).range(line.from));
+    for (let lineNumber = firstLine; lineNumber <= lastLine; lineNumber++) {
+      const line = viewState.doc.line(lineNumber);
+      ranges.push(Decoration.line({class: "live-active-block"}).range(line.from));
+      if (lineNumber === firstLine && heading) ranges.push(Decoration.line({class: `live-heading live-heading-${activeBlock.name.slice(-1)}`}).range(line.from));
+    }
   }
   const nodes = [];
   syntaxTree(viewState).iterate({enter(node) {
@@ -277,6 +322,9 @@ function activeSourceDecorations(viewState, active, renderedBlock = null, render
   for (const node of nodes.sort((a, b) => a.from - b.from || b.to - a.to)) {
     if (covered.some(range => node.from >= range.from && node.to <= range.to)) continue;
     const containsActive = !!active && node.from <= active.from && node.to >= active.to;
+    if (activeNodeMatches(node, active)) {
+      ranges.push(Decoration.mark({class: "live-active-syntax"}).range(node.from, node.to));
+    }
     if (!activeNodeMatches(node, active) && !containsActive && renderedBlock) {
       const html = renderedInlineHTML(renderedBlock, node);
       if (html) {
@@ -452,11 +500,13 @@ function busy(value, reason = "Working… controls are temporarily disabled.") {
     }
     state.operationCommitted = false;
   }
-  document.querySelectorAll(".header-actions button, #source, #refresh, #file-refresh, .file-actions button, .toolbar button, .editor-tabs button, .preview-actions button, .source-tree-entry, .file-entry, .workspace-search input, .new-form input, .new-form select, .new-form button, #metadata input, #metadata select, #media-panel button, #media-panel input, #media-panel select").forEach(input => { input.disabled = state.busy; });
+  document.querySelectorAll(".header-actions button, #content-rename, #source, #refresh, #file-refresh, #resource-filter, .file-actions button, #file-resource-actions button, .toolbar button, .editor-tabs button, .preview-actions button, .source-tree-entry, .file-entry, .workspace-search input, .new-form input, .new-form select, .new-form button, #metadata input, #metadata select, #media-panel button:not(#media-close), #media-panel input, #media-panel select").forEach(input => { input.disabled = state.busy; });
+  if (!state.busy && mediaFocusPending) focusMediaTrigger();
   $("#content-editor").setAttribute("aria-busy", String(state.busy));
   syncBusyIndicator();
   $("#delete").disabled = state.busy || state.kind !== "article";
-  updateFileActions();
+  updateContentActions();
+  updateResourceActions();
   editor.dispatch({effects: editable.reconfigure(EditorView.editable.of(!state.busy))});
   if (!state.busy) flushPendingPreview();
 }
@@ -583,14 +633,13 @@ function applyIndentPreference() {
 function loadPreferences() {
   try {
     const preferences = JSON.parse(localStorage.getItem("oxpio-editor-preferences") || "{}");
+    const theme = window.OXPIOTheme?.getPreference() || "system";
     state.indent = Math.max(1, Math.min(8, Number(preferences.indent) || 2));
     state.keepPreview = preferences.keepPreview !== false;
-    document.documentElement.dataset.theme = preferences.theme && preferences.theme !== "system" ? preferences.theme : "";
-    document.documentElement.style.colorScheme = preferences.theme === "dark" ? "dark" : preferences.theme === "light" ? "light" : "";
-    syncRenderedTheme();
-    $("#preference-theme").value = preferences.theme || "system";
+    $("#preference-theme").value = theme;
     $("#preference-indent").value = state.indent;
     $("#preference-preview").checked = state.keepPreview;
+    syncRenderedTheme();
     applyIndentPreference();
   } catch { /* browser preferences are best effort and never enter the vault */ }
 }
@@ -601,12 +650,12 @@ function syncRenderedTheme() {
   });
 }
 function storePreferences() {
-  const preferences = {theme: $("#preference-theme").value, indent: Number($("#preference-indent").value) || 2, keepPreview: $("#preference-preview").checked};
+  const theme = $("#preference-theme").value;
+  const preferences = {indent: Number($("#preference-indent").value) || 2, keepPreview: $("#preference-preview").checked};
   state.indent = Math.max(1, Math.min(8, preferences.indent));
   state.keepPreview = preferences.keepPreview;
   localStorage.setItem("oxpio-editor-preferences", JSON.stringify({...preferences, indent: state.indent}));
-  document.documentElement.dataset.theme = preferences.theme === "system" ? "" : preferences.theme;
-  document.documentElement.style.colorScheme = preferences.theme === "dark" ? "dark" : preferences.theme === "light" ? "light" : "";
+  window.OXPIOTheme?.setPreference(theme);
   syncRenderedTheme();
   applyIndentPreference();
 }function dateInputValue(value) {
@@ -625,6 +674,18 @@ function formValues() {
   }
   return result;
 }
+function updateDocumentHeading(title) {
+  const heading = $("#document-heading");
+  if (!heading) return;
+  const value = String(title ?? fields.find(input => input.dataset.field === "title")?.value ?? "").trim();
+  heading.textContent = value || state.path || "Current source";
+}
+function updatePublishBadge(published) {
+  const badge = $("#publish-badge");
+  if (!badge) return;
+  badge.textContent = published ? "Published" : "Draft";
+  badge.className = `state-badge ${published ? "published" : "draft"}`;
+}
 function showForm(metadata) {
   const advanced = document.querySelector(".metadata-advanced");
   if (advanced) advanced.hidden = state.kind === "section";
@@ -638,11 +699,11 @@ function showForm(metadata) {
     input.closest("label").hidden = state.kind === "section" && !sectionFields.has(name);
   }
   state.formBaseline = formValues();
+  updateDocumentHeading(metadata.title);
   $("#metadata-title").textContent = metadata.title || state.path || "Current source";
   const catalogSource = state.catalogSources.find(source => source.relPath === state.path);
   const published = catalogSource ? catalogSource.effectivePublish === true : metadata.publish === true;
-  $("#publish-badge").textContent = published ? "Published" : "Draft";
-  $("#publish-badge").className = `state-badge ${published ? "published" : "draft"}`;
+  updatePublishBadge(published);
   const labels = {doc: "Document", post: "Post", page: "Page"};
   $("#type-badge").textContent = labels[metadata.type] || (state.kind === "section" ? "Section" : "Document");
 }
@@ -688,6 +749,8 @@ async function responseJSON(response) {
   if (!response.ok) {
     const error = new Error(data.error || body || `Request failed (${response.status})`);
     error.diagnostics = data.diagnostics || [];
+    error.usages = data.usages || [];
+    error.status = response.status;
     throw error;
   }
   return data;
@@ -765,13 +828,15 @@ function renderSourceTree() {
     for (let index = 1; index < segments.length; index++) folders.add(segments.slice(0, index).join("/"));
   }
   const appendSource = (source, depth, parent) => {
+    const listItem = document.createElement("li");
+    listItem.className = "source-tree-item";
     const item = document.createElement("button");
     item.type = "button";
     item.className = "source-tree-entry";
     item.disabled = state.busy;
     item.dataset.path = source.relPath;
-    item.setAttribute("role", "treeitem");
-    item.setAttribute("aria-selected", String(source.relPath === state.path));
+    item.dataset.selected = String(source.relPath === state.path);
+    if (source.relPath === state.path) item.setAttribute("aria-current", "page");
     item.style.paddingLeft = `${0.35 + depth * 0.45}rem`;
     const icon = document.createElement("span");
     icon.className = "source-tree-icon";
@@ -786,18 +851,24 @@ function renderSourceTree() {
     item.append(icon, label, meta);
     item.title = source.relPath;
     item.onclick = () => { if (!confirmDiscard()) return; $("#source").value = source.relPath; loadSource(source.relPath).catch(error => { if (!isAbortError(error)) status(`Load failed: ${error.message}`); }); };
-    parent.append(item);
+    listItem.append(item);
+    parent.append(listItem);
   };
   const appendFolder = (folder, depth, parent) => {
     if (folder) {
-      const item = document.createElement("div");
-      item.className = "source-tree-folder";
-      item.setAttribute("role", "treeitem");
-      item.setAttribute("aria-expanded", String(Boolean(query) || !state.collapsedSourceFolders.has(folder)));
+      const listItem = document.createElement("li");
+      listItem.className = "source-tree-folder";
+      const expanded = Boolean(query) || !state.collapsedSourceFolders.has(folder);
+      const group = document.createElement("ul");
+      group.className = "source-tree-group";
+      group.id = `source-tree-group-${encodeURIComponent(folder)}`;
+      group.hidden = !expanded;
       const toggle = document.createElement("button");
       toggle.type = "button";
       toggle.className = "source-tree-entry";
       toggle.disabled = state.busy;
+      toggle.setAttribute("aria-expanded", String(expanded));
+      toggle.setAttribute("aria-controls", group.id);
       toggle.style.paddingLeft = `${0.35 + depth * 0.45}rem`;
       const icon = document.createElement("span");
       icon.className = "source-tree-icon";
@@ -815,13 +886,8 @@ function renderSourceTree() {
         if (state.collapsedSourceFolders.has(folder)) state.collapsedSourceFolders.delete(folder); else state.collapsedSourceFolders.add(folder);
         renderSourceTree();
       };
-      item.append(toggle);
-      parent.append(item);
-      if (!query && state.collapsedSourceFolders.has(folder)) return;
-      const group = document.createElement("div");
-      group.className = "source-tree-group";
-      group.setAttribute("role", "group");
-      item.append(group);
+      listItem.append(toggle, group);
+      parent.append(listItem);
       parent = group;
     }
     const children = [...folders].filter(candidate => candidate && parentPath(candidate) === folder).sort();
@@ -829,7 +895,12 @@ function renderSourceTree() {
     for (const source of sources.filter(candidate => parentPath(candidate.relPath) === folder).sort((a, b) => a.relPath.localeCompare(b.relPath))) appendSource(source, depth + 1, parent);
   };
   appendFolder("", 0, tree);
-  if (!tree.children.length) tree.textContent = "No matching Markdown sources.";
+  if (!tree.children.length) {
+    const empty = document.createElement("li");
+    empty.className = "source-tree-empty";
+    empty.textContent = "No matching Markdown sources.";
+    tree.append(empty);
+  }
 }
 function defaultCollapsedSourceFolders(sources, preferred) {
   const collapsed = new Set();
@@ -926,28 +997,47 @@ async function refreshFilesFromUI() {
 async function refreshFiles(preferred = state.filePath) {
   let data;
   try {
-    data = await responseJSON(await fetchWithTimeout("/_oxpio/files"));
+    const usageQuery = state.resourceFilter === "unused" ? "?usage=unused" : "";
+    data = await responseJSON(await fetchWithTimeout(`/_oxpio/files${usageQuery}`));
   } catch (error) {
     state.fileEntries = null;
     throw error;
   }
-  state.fileEntries = data.entries;
+  const resourceFiles = data.entries.filter(entry => entry.kind === "file" && !/\.md$/iu.test(entry.path) && (state.resourceFilter !== "unused" || !entry.usageCount));
+  const resourceFolders = new Set();
+  for (const entry of data.entries.filter(candidate => candidate.kind === "folder")) {
+    const hasResourceDescendant = resourceFiles.some(file => file.path.startsWith(`${entry.path}/`));
+    const hasContentDescendant = state.catalogSources.some(source => source.relPath.startsWith(`${entry.path}/`));
+    const hasNoDescendant = !data.entries.some(candidate => candidate.path.startsWith(`${entry.path}/`));
+    if (hasContentDescendant && !hasResourceDescendant) continue;
+    if (!hasResourceDescendant && !hasNoDescendant) continue;
+    let folder = entry.path;
+    while (folder) {
+      resourceFolders.add(folder);
+      folder = folder.includes("/") ? folder.slice(0, folder.lastIndexOf("/")) : "";
+    }
+  }
+  const entries = data.entries.filter(entry => entry.kind === "folder" ? resourceFolders.has(entry.path) : !/\.md$/iu.test(entry.path) && (state.resourceFilter !== "unused" || !entry.usageCount));
+  state.fileEntries = entries;
+  $("#resource-filter").value = state.resourceFilter;
   const tree = $("#file-tree");
   tree.replaceChildren();
   const selectionPath = preferred;
   if (selectionPath) for (const folder of state.collapsedFolders) if (selectionPath.startsWith(`${folder}/`)) state.collapsedFolders.delete(folder);
   let selected = null;
-  for (const entry of data.entries) {
-    if ([...state.collapsedFolders].some(folder => entry.path !== folder && entry.path.startsWith(`${folder}/`))) continue;
+  const parentPath = value => value.includes("/") ? value.slice(0, value.lastIndexOf("/")) : "";
+  const appendEntry = (entry, depth, parent) => {
+    const listItem = document.createElement("li");
+    listItem.className = "file-tree-item";
     const button = document.createElement("button");
     button.type = "button";
     button.className = "file-entry";
     button.disabled = state.busy;
     button.dataset.path = entry.path;
-    button.setAttribute("role", "treeitem");
-    button.setAttribute("aria-selected", String(entry.path === preferred || entry.path === state.filePath));
-    if (entry.kind === "folder") button.setAttribute("aria-expanded", String(!state.collapsedFolders.has(entry.path)));
-    button.style.setProperty("--file-indent", `${0.35 + entry.path.split("/").length * 0.45}rem`);
+    const isSelected = entry.path === preferred || entry.path === state.filePath;
+    button.dataset.selected = String(isSelected);
+    if (isSelected) button.setAttribute("aria-current", "true");
+    button.style.setProperty("--file-indent", `${0.35 + (depth + 1) * 0.45}rem`);
     const icon = document.createElement("span");
     icon.className = "file-entry-icon";
     const fileIcon = entry.kind === "folder" ? "folder" : (/\.(png|jpe?g|webp|svg)$/iu.test(entry.path) ? "image" : (/\.md$/iu.test(entry.path) ? "file" : "code"));
@@ -956,76 +1046,109 @@ async function refreshFiles(preferred = state.filePath) {
     label.className = "file-entry-label";
     label.textContent = entry.path;
     button.append(icon, label);
-    button.onclick = () => {
-      if (entry.kind === "folder") {
+    if (entry.kind === "folder") {
+      const group = document.createElement("ul");
+      group.className = "file-tree-group";
+      group.id = `file-tree-group-${encodeURIComponent(entry.path)}`;
+      const expanded = !state.collapsedFolders.has(entry.path);
+      group.hidden = !expanded;
+      button.setAttribute("aria-expanded", String(expanded));
+      button.setAttribute("aria-controls", group.id);
+      button.onclick = () => {
         if (state.collapsedFolders.has(entry.path)) state.collapsedFolders.delete(entry.path);
         else state.collapsedFolders.add(entry.path);
         selectFileEntry(entry);
         busy(true, "Loading folder…");
         refreshFiles(entry.path).catch(error => status(isAbortError(error) ? "Folder loading cancelled." : `File list failed: ${error.message}`)).finally(() => busy(false));
-        return;
-      }
-      selectFileEntry(entry);
-    };
-    tree.append(button);
+      };
+      listItem.append(button, group);
+      parent.append(listItem);
+      for (const child of entries.filter(candidate => parentPath(candidate.path) === entry.path).sort((a, b) => a.path.localeCompare(b.path))) appendEntry(child, depth + 1, group);
+    } else {
+      button.onclick = () => selectFileEntry(entry);
+      listItem.append(button);
+      parent.append(listItem);
+    }
     if (entry.path === selectionPath) selected = entry;
+  };
+  for (const entry of entries.filter(candidate => !parentPath(candidate.path)).sort((a, b) => a.path.localeCompare(b.path))) appendEntry(entry, 0, tree);
+  if (!entries.length) {
+    const empty = document.createElement("li");
+    empty.className = "file-tree-empty";
+    empty.textContent = "No assets or files.";
+    tree.append(empty);
   }
-  if (!data.entries.length) tree.textContent = "No managed files.";
   if (selected) {
     state.filePath = selected.path;
     state.fileHash = selected.hash;
     state.fileKind = selected.kind;
-    state.fileSourceKind = selected.sourceKind || "";
-    state.fileEditable = selected.editable !== false;
+    state.fileUsageCount = selected.usageCount || 0;
     $("#upload-folder").value = selected.kind === "folder" ? selected.path : (selected.path.includes("/") ? selected.path.slice(0, selected.path.lastIndexOf("/")) : "");
   } else {
     state.filePath = "";
     state.fileHash = "";
     state.fileKind = "";
-    state.fileSourceKind = "";
-    state.fileEditable = false;
+    state.fileUsageCount = 0;
   }
   updateUploadGuidance();
-  updateFileActions();
-}
-function fileSelectionSnapshot() {
-  return {
-    filePath: state.filePath,
-    fileHash: state.fileHash,
-    fileKind: state.fileKind,
-    fileSourceKind: state.fileSourceKind,
-    fileEditable: state.fileEditable,
-    uploadFolder: $("#upload-folder").value,
-  };
-}
-function restoreFileSelection(selection) {
-  Object.assign(state, selection);
-  $("#upload-folder").value = selection.uploadFolder;
-  document.querySelectorAll(".file-entry").forEach(item => item.setAttribute("aria-selected", String(item.dataset.path === state.filePath)));
-  updateFileActions();
+  updateResourceActions();
+  if (selected?.kind === "file" && !/\.md$/iu.test(selected.path)) refreshResourceUsageCount(selected.path);
 }
 function selectFileEntry(entry) {
-  if (entry.sourceKind && entry.path !== state.path && !confirmDiscard()) return;
-  const previousSelection = fileSelectionSnapshot();
   state.filePath = entry.path;
   state.fileHash = entry.hash;
   state.fileKind = entry.kind;
-  state.fileSourceKind = entry.sourceKind || "";
-  state.fileEditable = entry.editable !== false;
+  state.fileUsageCount = entry.usageCount || 0;
   $("#upload-folder").value = entry.kind === "folder" ? entry.path : (entry.path.includes("/") ? entry.path.slice(0, entry.path.lastIndexOf("/")) : "");
   updateUploadGuidance();
-  document.querySelectorAll(".file-entry").forEach(item => item.setAttribute("aria-selected", String(item.dataset.path === entry.path)));
-  updateFileActions();
-  if (entry.sourceKind) loadSource(entry.path).catch(error => {
-    restoreFileSelection(previousSelection);
-    if (!isAbortError(error)) status(`Load failed: ${error.message}`);
+  document.querySelectorAll(".file-entry").forEach(item => {
+    const selected = item.dataset.path === entry.path;
+    item.dataset.selected = String(selected);
+    if (selected) item.setAttribute("aria-current", "true"); else item.removeAttribute("aria-current");
   });
-  else status(`Selected ${entry.path}`);
+  updateResourceActions();
+  if (entry.kind === "file" && !/\.md$/iu.test(entry.path)) refreshResourceUsageCount(entry.path);
+  status(`Selected ${entry.path}`);
 }
-function updateFileActions() {
-  const hasSelection = Boolean(state.filePath) && !state.busy;
-  $("#file-rename").disabled = !hasSelection || !state.fileEditable;
-  $("#file-delete").disabled = !hasSelection || !state.fileEditable;
+async function refreshResourceUsageCount(resourcePath) {
+  const token = ++state.resourceUsageToken;
+  $("#resource-usage-count").textContent = "Checking usage…";
+  try {
+    const data = await responseJSON(await fetchWithTimeout(`/_oxpio/file/usages?path=${encodeURIComponent(resourcePath)}`));
+    if (token !== state.resourceUsageToken || state.filePath !== resourcePath) return;
+    state.fileUsageCount = data.documentCount || 0;
+    updateResourceActions();
+  } catch {
+    if (token === state.resourceUsageToken && state.filePath === resourcePath) {
+      $("#resource-usage-count").textContent = "Usage unavailable; server checks deletion.";
+    }
+  }
+}
+function updateResourceActions() {
+  const actions = $("#file-resource-actions");
+  const resource = state.fileKind === "file" && state.filePath && !/\.md$/iu.test(state.filePath);
+  actions.hidden = !resource;
+  if (!resource) return;
+  const reserved = state.filePath.toLowerCase() === "custom.css";
+  $("#resource-action-label").textContent = state.filePath.split("/").pop();
+  $("#resource-usage-count").textContent = reserved ? "Managed site stylesheet; use theme tools to edit it." : (state.fileUsageCount ? `Used by ${state.fileUsageCount} document${state.fileUsageCount === 1 ? "" : "s"}` : "Unused resource");
+  $("#resource-rename").disabled = reserved || state.busy;
+  $("#resource-delete").disabled = reserved || state.busy;
+}
+function clearFileSelection() {
+  state.filePath = "";
+  state.fileHash = "";
+  state.fileKind = "";
+  state.fileUsageCount = 0;
+  $("#upload-folder").value = "";
+  document.querySelectorAll(".file-entry").forEach(item => {
+    item.dataset.selected = "false";
+    item.removeAttribute("aria-current");
+  });
+  updateResourceActions();
+}
+function updateContentActions() {
+  $("#content-rename").disabled = state.busy || !state.path || state.kind !== "article";
 }
 function clearEditor() {
   cancelLivePreview();
@@ -1078,10 +1201,7 @@ async function loadSource(path, busyReason = "Working… controls are temporaril
     renderSourceTree();
     state.kind = data.kind;
     state.hash = data.sourceHash;
-    state.filePath = path;
-    state.fileHash = data.sourceHash;
-    state.fileKind = "file";
-    state.fileSourceKind = data.kind;
+    clearFileSelection();
     state.source = data.source;
     state.baselineSource = data.source;
     state.mode = data.parseError ? "source" : "visual";
@@ -1153,8 +1273,11 @@ function updateMode() {
   if (pagePreview) {
     pagePreview.hidden = state.surface !== "read";
     pagePreview.setAttribute("aria-pressed", String(state.previewKind === "page"));
+    pagePreview.setAttribute("aria-label", "Show complete page preview");
+    pagePreview.title = "Show complete page preview";
   }
-  if (state.surface !== "diff") $("#preview-title").textContent = state.surface === "write" ? "Write" : (state.previewKind === "page" ? "Page preview" : "Content preview");
+  if (state.surface !== "diff") $("#preview-title").textContent = state.surface === "write" ? "Write" : (state.previewKind === "page" ? "Complete page" : "Content preview");
+  syncLivePreviewHint();
 }
 function sourceBodyOffset(value) {
   const frontmatter = /^(?:\uFEFF)?---(?:\r\n|\r|\n)[\s\S]*?(?:\r\n|\r|\n)(?:---|\.\.\.)(?:(?:\r\n|\r|\n)|$)/.exec(value);
@@ -1508,7 +1631,7 @@ function destroyDiffView() {
 function showPreviewSurface() {
   $("#diff-editor").hidden = true;
   $("#diff-wrap").hidden = true;
-  $("#preview-title").textContent = state.surface === "write" ? "Write" : (state.previewKind === "page" ? "Page preview" : "Content preview");
+  $("#preview-title").textContent = state.surface === "write" ? "Write" : (state.previewKind === "page" ? "Complete page" : "Content preview");
   $("#preview-title-icon").setAttribute("href", "#icon-eye");
   if (!$("#preview-frame").src) $("#preview-empty").hidden = false;
   else $("#preview-frame").hidden = false;
@@ -1516,7 +1639,7 @@ function showPreviewSurface() {
 async function setWorkspaceMode(surface) {
   const wasDiff = state.surface === "diff";
   if (surface !== "write") {
-    $("#media-panel").hidden = true;
+    closeMedia();
   }
   if (surface === "source" && state.mode !== "source" && !(await toggleMode())) return;
   if (surface === "write" && state.mode !== "visual" && !(await toggleMode())) return;
@@ -1645,6 +1768,10 @@ class LiveRenderedWidget extends WidgetType {
   toDOM() {
     const element = document.createElement("div");
     element.className = this.inlineHost ? "live-rendered-inline" : "live-rendered-block";
+    element.tabIndex = 0;
+    element.setAttribute("role", "button");
+    element.setAttribute("aria-label", this.inlineHost ? "Edit inline Markdown" : "Edit Markdown block");
+    element.title = "Click to edit Markdown";
     element.dataset.theme = document.documentElement.dataset.theme || "system";
     element.dataset.liveBlockFrom = String(this.from);
     element.dataset.liveBlockTo = String(this.to);
@@ -1656,7 +1783,7 @@ class LiveRenderedWidget extends WidgetType {
     }
     const shadow = element.attachShadow({mode: "open"});
     const style = document.createElement("style");
-    style.textContent = `:host { --preview-bg: #fff; --preview-surface: #fff; --preview-text: #20252b; --preview-muted: #687687; --preview-accent: #1769aa; --preview-border: #dce1e6; --preview-code-bg: #20252b; --preview-code-text: #f5f7fa; --preview-inline-code: #eef1f4; --preview-table-head: #f0f4f7; --preview-callout: #f4f8fb; display: block; max-width: 100%; white-space: normal; color: var(--preview-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; } :host([data-theme="dark"]), :host([data-theme="system"]) { --preview-bg: #12191e; --preview-surface: #1e282e; --preview-text: #e8eef1; --preview-muted: #aab8c0; --preview-accent: #75aaff; --preview-border: #35454d; --preview-code-bg: #12191e; --preview-code-text: #e8eef1; --preview-inline-code: #2b373d; --preview-table-head: #253137; --preview-callout: #223854; } @media (prefers-color-scheme: light) { :host([data-theme="system"]) { --preview-bg: #fff; --preview-surface: #fff; --preview-text: #20252b; --preview-muted: #687687; --preview-accent: #1769aa; --preview-border: #dce1e6; --preview-code-bg: #20252b; --preview-code-text: #f5f7fa; --preview-inline-code: #eef1f4; --preview-table-head: #f0f4f7; --preview-callout: #f4f8fb; } } :host(.live-rendered-inline) { display: inline; vertical-align: baseline; } .content-preview-content { min-width: 0; } ${this.inlineHost ? ".content-preview-content, p { display: inline; margin: 0; }" : ""} h1, h2, h3, h4, h5, h6 { margin: .5rem 0; } p { margin: .7rem 0; } pre { overflow-x: auto; padding: .75rem; background: var(--preview-code-bg); color: var(--preview-code-text); } pre.mermaid { background: transparent; color: var(--preview-text); border: 1px dashed var(--preview-border); } code, .live-inline-code { padding: .08rem .25rem; border-radius: .2rem; background: var(--preview-inline-code); } pre code { padding: 0; background: transparent; } blockquote { margin: .75rem 0; padding-left: .8rem; border-left: 3px solid var(--preview-border); color: var(--preview-muted); } .callout { margin: .75rem 0; padding: .65rem .8rem; border-left: 3px solid var(--preview-accent); border-radius: .25rem; background: var(--preview-callout); } .callout-title { margin-bottom: .35rem; color: var(--preview-accent); font-weight: 700; } .footnotes { margin-top: 1.5rem; padding-top: .5rem; border-top: 1px solid var(--preview-border); font-size: .85em; } table { width: 100%; border-collapse: collapse; } th, td { padding: .35rem .5rem; border: 1px solid var(--preview-border); text-align: left; } th { background: var(--preview-table-head); } a, .live-link { color: var(--preview-accent); text-decoration: underline; } .live-image { padding: .15rem .4rem; border: 1px solid var(--preview-border); border-radius: .25rem; background: var(--preview-surface); } .live-math { font-family: Georgia, serif; font-style: italic; } ul:has(> li > .oxpio-task-input), ul:has(> li > p > .oxpio-task-input) { list-style: none; padding-left: 0; } ul:has(> li > .oxpio-task-input) > li, ul:has(> li > p > .oxpio-task-input) > li { padding-left: 0; } .oxpio-task-input { appearance: none; -webkit-appearance: none; display: inline-block; width: 1.25em; height: 1.25em; margin: 0 .35em 0 0; padding: 0; vertical-align: -.18em; border: 1px solid #aeb4bb; border-radius: .28em; background: transparent; background-position: 50% 50%; background-repeat: no-repeat; background-size: 100%; color: #687385; opacity: 1; } .oxpio-task-input:checked { border: none; border-radius: 0; background-image: none; background-color: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: 100%; mask-size: 100%; -webkit-mask-position: 50% 50%; mask-position: 50% 50%; } .oxpio-task-input[data-task='x']:checked, .oxpio-task-input[data-task='X']:checked { border-radius: .28em; background-color: #8b5cf6; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m5 12 4 4L19 6' fill='none' stroke='white' stroke-linecap='round' stroke-linejoin='round' stroke-width='2.5'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='/']:checked { background-image: none; background-color: transparent; border: none; position: relative; overflow: hidden; } .oxpio-task-input[data-task='/']:checked::after { content: ''; display: block; position: absolute; inset: 0 auto 0 0; width: calc(50% - .5px); background-color: #8b5cf6; } .oxpio-task-input[data-task='?']:checked { border: 0; background-color: #eab308; background-size: 200% 90%; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 16 16"%3E%3Cpath fill="white" fill-rule="evenodd" d="M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='"']:checked { border: 0; background-color: #14b8a6; background-size: 75%; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 24 24"%3E%3Cpath fill="white" d="M6.5 10c-.223 0-.437.034-.65.065c.069-.232.14-.468.254-.68c.114-.308.292-.575.469-.844c.148-.291.409-.488.601-.737c.201-.242.475-.403.692-.604c.213-.21.492-.315.714-.463c.232-.133.434-.28.65-.35l.539-.222l.474-.197l-.485-1.938l-.597.144c-.191.048-.424.104-.689.171c-.271.05-.56.187-.882.312c-.318.142-.686.238-1.028.466c-.344.218-.741.4-1.091.692c-.339.301-.748.562-1.05.945c-.33.358-.656.734-.909 1.162c-.293.408-.492.856-.702 1.299c-.19.443-.343.896-.468 1.336c-.237.882-.343 1.72-.384 2.437c-.034.718-.014 1.315.028 1.747c.015.204.043.402.063.539l.025.168l.026-.006A4.5 4.5 0 1 0 6.5 10z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='>']:checked { color: #687385; transform: rotate(90deg); -webkit-mask-position: 50% 100%; mask-position: 50% 100%; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10.894 2.553a1 1 0 0 0-1.788 0l-7 14a1 1 0 0 0 1.169 1.409l5-1.429A1 1 0 0 0 9 15.571V11a1 1 0 1 1 2 0v4.571a1 1 0 0 0 .725.962l5 1.428a1 1 0 0 0 1.17-1.408l-7-14z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='<']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='-']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M3 10a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='!']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-8a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0V6a1 1 0 0 0-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='*']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a.951.951 0 0 0 .951-.69l1.07-3.292z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='l']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M5.05 4.05a7 7 0 1 1 9.9 9.9L10 18.9l-4.95-4.95a7 7 0 0 1 0-9.9ZM10 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='b']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14l-5-2.5L5 18V4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='i']:checked { background-color: #2563eb; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 512 512"%3E%3Cpath fill="none" stroke="white" stroke-width="40" d="M196 220h64v172M187 396h138"/%3E%3Cpath fill="white" d="M256 160a32 32 0 1 1 32-32a32 32 0 0 1-32 32Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='S']:checked { background-color: #16a34a; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 48 48"%3E%3Cpath fill="white" d="M26 8a2 2 0 1 0-4 0v2a8 8 0 1 0 0 16v8a4 4 0 0 1-3.773-2.666a2 2 0 0 0-3.771 1.332A8 8 0 0 0 22 38v2a2 2 0 1 0 4 0v-2a8 8 0 1 0 0-16v-8a4 4 0 0 1 3.773 2.666a2 2 0 0 0 3.771-1.332A8 8 0 0 0 26 10V8Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='I']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M11 3a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0V3zM15.657 5.757a1 1 0 0 0-1.414-1.414l-.707.707a1 1 0 0 0 1.414 1.414l.707-.707zM18 10a1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 1 1zM8 16v-1h4v1a2 2 0 1 1-4 0zM12 14a4 4 0 1 0-4.954 0c.27.213.462.519.476.859h4.002z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='f']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12.395 2.553a1 1 0 0 0-1.45-.385C7.8 4.3 7.1 8.2 7 10.7A2.6 2.6 0 0 1 5.5 8.2A7 7 0 1 0 15 13c0-3.2-2.2-5.7-2.6-10.4Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='k']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 8a6 6 0 0 1-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1 1 18 8zm-6-4a1 1 0 1 0 0 2 2 2 0 0 1 2 2 1 1 0 1 0 2 0 4 4 0 0 0-4-4z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='w']:checked { color: #7c3aed; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 13v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4a4 4 0 0 1-2 1 3 3 0 0 1-3-2 3 3 0 0 1-6 0 3 3 0 0 1-3 2 4 4 0 0 1-2-1Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='p']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 10.5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 1 1-3 0v-6zM6 10.333v5.43a2 2 0 0 0 1.106 1.79L8 18h6.36a2 2 0 0 0 1.96-1.6l1.2-6A2 2 0 0 0 15.56 8H12V4a2 2 0 0 0-2-2 1 1 0 0 0-1 1v.667a4 4 0 0 1-.8 2.4L6.8 7.933a4 4 0 0 0-.8 2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='c']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M18 9.5a1.5 1.5 0 1 1-3 0v-6a1.5 1.5 0 1 1 3 0v6zM14 9.667v-5.43A2 2 0 0 0 11.9 2H5.64a2 2 0 0 0-1.96 1.6l-1.2 6A2 2 0 0 0 4.44 12H8v4a2 2 0 0 0 2 2 1 1 0 0 0 1-1v-.667a4 4 0 0 0 .8-2.4l1.4-1.866a4 4 0 0 0 .8-2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='u']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 7a1 1 0 1 0 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V8.414l-4.293 4.293a1 1 0 0 1-1.414 0L8 10.414l-4.293 4.293a1 1 0 0 1-1.414-1.414l5-5a1 1 0 0 1 1.414 0L11 10.586 14.586 7H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='d']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 13a1 1 0 1 0 0 2h5a1 1 0 0 0 1-1V9a1 1 0 1 0-2 0v2.586L12.707 7.293a1 1 0 0 0-1.414 0L8 10.586 3.707 6.293a1 1 0 0 0-1.414 1.414l5 5a1 1 0 0 0 1.414 0L11 10.414 14.586 13H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked, .oxpio-task-input[data-task='M']:checked, .oxpio-task-input[data-task='D']:checked { -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.25 2.25 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.25 2.25 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked { color: #16a34a; } .oxpio-task-input[data-task='M']:checked { color: #7c3aed; } .oxpio-task-input[data-task='D']:checked { color: #687385; } .oxpio-task-input[data-task='\"']:checked { border: 0; background-color: #14b8a6; background-size: 75%; background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z'/%3E%3C/svg%3E\"); } .oxpio-task-input[data-task='P']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='M']:checked { color: #7c3aed; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='D']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 1 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0-1.5.75.75 0 0 0-1.5 0ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1-2.5 0Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='c']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M18 9.5a1.5 1.5 0 1 1-3 0v-6a1.5 1.5 0 1 1 3 0v6zM14 9.667v-5.43A2 2 0 0 0 11.9 2H5.64a2 2 0 0 0-1.96 1.6l-1.2 6A2 2 0 0 0 4.44 12H8v4a2 2 0 0 0 2 2 1 1 0 0 0 1-1v-.667a4 4 0 0 0 .8-2.4l1.4-1.866a4 4 0 0 0 .8-2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='M']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='D']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0-1.5.75.75 0 0 0-1.5 0ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1-2.5 0Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='>']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10.894 2.553a1 1 0 0 0-1.788 0l-7 14a1 1 0 0 0 1.169 1.409l5-1.429A1 1 0 0 0 9 15.571V11a1 1 0 1 1 2 0v4.571a1 1 0 0 0 .725.962l5 1.428a1 1 0 0 0 1.17-1.408l-7-14z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='<']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='-']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M3 10a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='!']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-8a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0V6a1 1 0 0 0-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='*']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-1.371-1.81.588-1.81h3.461a.951.951 0 0 0 .951-.69l1.07-3.292z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='l']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M5.05 4.05a7 7 0 1 1 9.9 9.9L10 18.9l-4.95-4.95a7 7 0 0 1 0-9.9ZM10 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='b']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14l-5-2.5L5 18V4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='I']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M11 3a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0V3zM15.657 5.757a1 1 0 0 0-1.414-1.414l-.707.707a1 1 0 0 0 1.414 1.414l.707-.707zM18 10a1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 1 1zM8 16v-1h4v1a2 2 0 1 1-4 0zM12 14a4 4 0 1 0-4.954 0c.27.213.462.519.476.859h4.002z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='f']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12.395 2.553a1 1 0 0 0-1.45-.385C7.8 4.3 7.1 8.2 7 10.7A2.6 2.6 0 0 1 5.5 8.2A7 7 0 1 0 15 13c0-3.2-2.2-5.7-2.6-10.4Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='k']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 8a6 6 0 0 1-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1 1 18 8zm-6-4a1 1 0 1 0 0 2 2 2 0 0 1 2 2 1 1 0 1 0 2 0 4 4 0 0 0-4-4z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='w']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 13v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4a4 4 0 0 1-2 1 3 3 0 0 1-3-2 3 3 0 0 1-6 0 3 3 0 0 1-3 2 4 4 0 0 1-2-1Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='p']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 10.5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 1 1-3 0v-6zM6 10.333v5.43a2 2 0 0 0 1.106 1.79L8 18h6.36a2 2 0 0 0 1.96-1.6l1.2-6A2 2 0 0 0 15.56 8H12V4a2 2 0 0 0-2-2 1 1 0 0 0-1 1v.667a4 4 0 0 1-.8 2.4L6.8 7.933a4 4 0 0 0-.8 2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='u']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 7a1 1 0 1 0 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V8.414l-4.293 4.293a1 1 0 0 1-1.414 0L8 10.414l-4.293 4.293a1 1 0 0 1-1.414-1.414l5-5a1 1 0 0 1 1.414 0L11 10.586 14.586 7H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='d']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 13a1 1 0 1 0 0 2h5a1 1 0 0 0 1-1V9a1 1 0 1 0-2 0v2.586L12.707 7.293a1 1 0 0 0-1.414 0L8 10.586 3.707 6.293a1 1 0 0 0-1.414 1.414l5 5a1 1 0 0 0 1.414 0L11 10.414 14.586 13H12z'/%3E%3C/svg%3E"); } :host([data-theme="dark"]) .oxpio-task-input[data-task='?']:checked, :host-context(html[data-theme="dark"]) .oxpio-task-input[data-task='?']:checked { background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' fill-opacity='.8' d='M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z\"/%3E%3C/svg%3E\"); } :host([data-theme="dark"]) .oxpio-task-input[data-task='\"']:checked, :host-context(html[data-theme="dark"]) .oxpio-task-input[data-task='\"']:checked { background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' fill-opacity='.7' d='M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z'/%3E%3C/svg%3E\"); } @media (prefers-color-scheme: dark) { :host([data-theme="system"]) .oxpio-task-input[data-task='?']:checked { background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 16 16"%3E%3Cpath fill="black" fill-opacity="0.8" d="M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z"/%3E%3C/svg%3E'); } :host([data-theme="system"]) .oxpio-task-input[data-task='\"']:checked { background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 24 24"%3E%3Cpath fill="black" fill-opacity="0.7" d="M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z"/%3E%3C/svg%3E'); } } li:has(> input[data-task='x']:checked), li:has(> input[data-task='X']:checked), li:has(> input[data-task='-']:checked), li:has(> p > input[data-task='x']:checked), li:has(> p > input[data-task='X']:checked), li:has(> p > input[data-task='-']:checked) { text-decoration: line-through solid currentColor 1px; }${this.styles}`;
+    style.textContent = `:host { --preview-bg: var(--color-canvas); --preview-surface: var(--color-surface); --preview-text: var(--color-text); --preview-muted: var(--color-muted); --preview-accent: var(--color-accent); --preview-border: var(--color-border); --preview-code-bg: var(--color-code); --preview-code-text: var(--color-text); --preview-inline-code: var(--color-code); --preview-table-head: var(--color-accent-soft); --preview-callout: var(--color-accent-soft); display: block; max-width: 100%; white-space: normal; color: var(--preview-text); font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; } :host(.live-rendered-inline) { display: inline; vertical-align: baseline; } .content-preview-content { min-width: 0; } ${this.inlineHost ? ".content-preview-content, p { display: inline; margin: 0; }" : ""} h1, h2, h3, h4, h5, h6 { margin: .5rem 0; } p { margin: .7rem 0; } pre { overflow-x: auto; padding: .75rem; background: var(--preview-code-bg); color: var(--preview-code-text); } pre.mermaid { background: transparent; color: var(--preview-text); border: 1px dashed var(--preview-border); } code, .live-inline-code { padding: .08rem .25rem; border-radius: .2rem; background: var(--preview-inline-code); } pre code { padding: 0; background: transparent; } blockquote { margin: .75rem 0; padding-left: .8rem; border-left: 3px solid var(--preview-border); color: var(--preview-muted); } .callout { margin: .75rem 0; padding: .65rem .8rem; border-left: 3px solid var(--preview-accent); border-radius: .25rem; background: var(--preview-callout); } .callout-title { margin-bottom: .35rem; color: var(--preview-accent); font-weight: 700; } .footnotes { margin-top: 1.5rem; padding-top: .5rem; border-top: 1px solid var(--preview-border); font-size: .85em; } table { width: 100%; border-collapse: collapse; } th, td { padding: .35rem .5rem; border: 1px solid var(--preview-border); text-align: left; } th { background: var(--preview-table-head); } a, .live-link { color: var(--preview-accent); text-decoration: underline; } .live-image { padding: .15rem .4rem; border: 1px solid var(--preview-border); border-radius: .25rem; background: var(--preview-surface); } .live-math { font-family: Georgia, serif; font-style: italic; } ul:has(> li > .oxpio-task-input), ul:has(> li > p > .oxpio-task-input) { list-style: none; padding-left: 0; } ul:has(> li > .oxpio-task-input) > li, ul:has(> li > p > .oxpio-task-input) > li { padding-left: 0; } .oxpio-task-input { appearance: none; -webkit-appearance: none; display: inline-block; width: 1.25em; height: 1.25em; margin: 0 .35em 0 0; padding: 0; vertical-align: -.18em; border: 1px solid #aeb4bb; border-radius: .28em; background: transparent; background-position: 50% 50%; background-repeat: no-repeat; background-size: 100%; color: #687385; opacity: 1; } .oxpio-task-input:checked { border: none; border-radius: 0; background-image: none; background-color: currentColor; -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat; -webkit-mask-size: 100%; mask-size: 100%; -webkit-mask-position: 50% 50%; mask-position: 50% 50%; } .oxpio-task-input[data-task='x']:checked, .oxpio-task-input[data-task='X']:checked { border-radius: .28em; background-color: #8b5cf6; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='m5 12 4 4L19 6' fill='none' stroke='white' stroke-linecap='round' stroke-linejoin='round' stroke-width='2.5'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='/']:checked { background-image: none; background-color: transparent; border: none; position: relative; overflow: hidden; } .oxpio-task-input[data-task='/']:checked::after { content: ''; display: block; position: absolute; inset: 0 auto 0 0; width: calc(50% - .5px); background-color: #8b5cf6; } .oxpio-task-input[data-task='?']:checked { border: 0; background-color: #eab308; background-size: 200% 90%; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 16 16"%3E%3Cpath fill="white" fill-rule="evenodd" d="M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='"']:checked { border: 0; background-color: #14b8a6; background-size: 75%; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 24 24"%3E%3Cpath fill="white" d="M6.5 10c-.223 0-.437.034-.65.065c.069-.232.14-.468.254-.68c.114-.308.292-.575.469-.844c.148-.291.409-.488.601-.737c.201-.242.475-.403.692-.604c.213-.21.492-.315.714-.463c.232-.133.434-.28.65-.35l.539-.222l.474-.197l-.485-1.938l-.597.144c-.191.048-.424.104-.689.171c-.271.05-.56.187-.882.312c-.318.142-.686.238-1.028.466c-.344.218-.741.4-1.091.692c-.339.301-.748.562-1.05.945c-.33.358-.656.734-.909 1.162c-.293.408-.492.856-.702 1.299c-.19.443-.343.896-.468 1.336c-.237.882-.343 1.72-.384 2.437c-.034.718-.014 1.315.028 1.747c.015.204.043.402.063.539l.025.168l.026-.006A4.5 4.5 0 1 0 6.5 10z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='>']:checked { color: #687385; transform: rotate(90deg); -webkit-mask-position: 50% 100%; mask-position: 50% 100%; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10.894 2.553a1 1 0 0 0-1.788 0l-7 14a1 1 0 0 0 1.169 1.409l5-1.429A1 1 0 0 0 9 15.571V11a1 1 0 1 1 2 0v4.571a1 1 0 0 0 .725.962l5 1.428a1 1 0 0 0 1.17-1.408l-7-14z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='<']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='-']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M3 10a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='!']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-8a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0V6a1 1 0 0 0-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='*']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-.38-1.81.588-1.81h3.461a.951.951 0 0 0 .951-.69l1.07-3.292z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='l']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M5.05 4.05a7 7 0 1 1 9.9 9.9L10 18.9l-4.95-4.95a7 7 0 0 1 0-9.9ZM10 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='b']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14l-5-2.5L5 18V4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='i']:checked { background-color: #2563eb; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 512 512"%3E%3Cpath fill="none" stroke="white" stroke-width="40" d="M196 220h64v172M187 396h138"/%3E%3Cpath fill="white" d="M256 160a32 32 0 1 1 32-32a32 32 0 0 1-32 32Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='S']:checked { background-color: #16a34a; background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 48 48"%3E%3Cpath fill="white" d="M26 8a2 2 0 1 0-4 0v2a8 8 0 1 0 0 16v8a4 4 0 0 1-3.773-2.666a2 2 0 0 0-3.771 1.332A8 8 0 0 0 22 38v2a2 2 0 1 0 4 0v-2a8 8 0 1 0 0-16v-8a4 4 0 0 1 3.773 2.666a2 2 0 0 0 3.771-1.332A8 8 0 0 0 26 10V8Z"/%3E%3C/svg%3E'); } .oxpio-task-input[data-task='I']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M11 3a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0V3zM15.657 5.757a1 1 0 0 0-1.414-1.414l-.707.707a1 1 0 0 0 1.414 1.414l.707-.707zM18 10a1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 1 1zM8 16v-1h4v1a2 2 0 1 1-4 0zM12 14a4 4 0 1 0-4.954 0c.27.213.462.519.476.859h4.002z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='f']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12.395 2.553a1 1 0 0 0-1.45-.385C7.8 4.3 7.1 8.2 7 10.7A2.6 2.6 0 0 1 5.5 8.2A7 7 0 1 0 15 13c0-3.2-2.2-5.7-2.6-10.4Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='k']:checked { color: #eab308; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 8a6 6 0 0 1-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1 1 18 8zm-6-4a1 1 0 1 0 0 2 2 2 0 0 1 2 2 1 1 0 1 0 2 0 4 4 0 0 0-4-4z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='w']:checked { color: #7c3aed; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 13v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4a4 4 0 0 1-2 1 3 3 0 0 1-3-2 3 3 0 0 1-6 0 3 3 0 0 1-3 2 4 4 0 0 1-2-1Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='p']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 10.5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 1 1-3 0v-6zM6 10.333v5.43a2 2 0 0 0 1.106 1.79L8 18h6.36a2 2 0 0 0 1.96-1.6l1.2-6A2 2 0 0 0 15.56 8H12V4a2 2 0 0 0-2-2 1 1 0 0 0-1 1v.667a4 4 0 0 1-.8 2.4L6.8 7.933a4 4 0 0 0-.8 2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='c']:checked { color: #f97316; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M18 9.5a1.5 1.5 0 1 1-3 0v-6a1.5 1.5 0 1 1 3 0v6zM14 9.667v-5.43A2 2 0 0 0 11.9 2H5.64a2 2 0 0 0-1.96 1.6l-1.2 6A2 2 0 0 0 4.44 12H8v4a2 2 0 0 0 2 2 1 1 0 0 0 1-1v-.667a4 4 0 0 0 .8-2.4l1.4-1.866a4 4 0 0 0 .8-2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='u']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 7a1 1 0 1 0 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V8.414l-4.293 4.293a1 1 0 0 1-1.414 0L8 10.414l-4.293 4.293a1 1 0 0 1-1.414-1.414l5-5a1 1 0 0 1 1.414 0L11 10.586 14.586 7H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='d']:checked { color: #ef4444; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 13a1 1 0 1 0 0 2h5a1 1 0 0 0 1-1V9a1 1 0 1 0-2 0v2.586L12.707 7.293a1 1 0 0 0-1.414 0L8 10.586 3.707 6.293a1 1 0 0 0-1.414 1.414l5 5a1 1 0 0 0 1.414 0L11 10.414 14.586 13H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked, .oxpio-task-input[data-task='M']:checked, .oxpio-task-input[data-task='D']:checked { -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.25 2.25 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.25 2.25 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked { color: #16a34a; } .oxpio-task-input[data-task='M']:checked { color: #7c3aed; } .oxpio-task-input[data-task='D']:checked { color: #687385; } .oxpio-task-input[data-task='\"']:checked { border: 0; background-color: #14b8a6; background-size: 75%; background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='white' d='M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z'/%3E%3C/svg%3E\"); } .oxpio-task-input[data-task='P']:checked { color: #16a34a; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354ZM3.75 2.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm0 9.5a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm8.25.75a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='M']:checked { color: #7c3aed; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='D']:checked { color: #687385; -webkit-mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 1 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0-1.5.75.75 0 0 0-1.5 0ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1-2.5 0Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='c']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M18 9.5a1.5 1.5 0 1 1-3 0v-6a1.5 1.5 0 1 1 3 0v6zM14 9.667v-5.43A2 2 0 0 0 11.9 2H5.64a2 2 0 0 0-1.96 1.6l-1.2 6A2 2 0 0 0 4.44 12H8v4a2 2 0 0 0 2 2 1 1 0 0 0 1-1v-.667a4 4 0 0 0 .8-2.4l1.4-1.866a4 4 0 0 0 .8-2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='P']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M1.5 3.25a2.25 2.25 0 1 1 3 2.122v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.25 2.25 0 0 1 1.5 3.25Zm5.677-.177L9.573.677A.25.25 0 0 1 10 .854V2.5h1A2.5 2.5 0 0 1 13.5 5v5.628a2.251 2.251 0 1 1-1.5 0V5a1 1 0 0 0-1-1h-1v1.646a.25.25 0 0 1-.427.177L7.177 3.427a.25.25 0 0 1 0-.354Z'%3E%3C/path%3E%3C/svg%3E"); } .oxpio-task-input[data-task='M']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.45 5.154A4.25 4.25 0 0 0 9.25 7.5h1.378a2.251 2.251 0 1 1 0 1.5H9.25A5.734 5.734 0 0 1 5 7.123v3.505a2.25 2.25 0 1 1-1.5 0V5.372a2.25 2.25 0 1 1 1.95-.218ZM4.25 13.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5Zm8.5-4.5a.75.75 0 1 0 0-1.5.75.75 0 0 0 0 1.5ZM5 3.25a.75.75 0 1 0 0 .005V3.25Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='D']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M3.25 1A2.25 2.25 0 0 1 4 5.372v5.256a2.251 2.251 0 1 1-1.5 0V5.372A2.251 2.251 0 0 1 3.25 1Zm9.5 14a2.25 2.25 0 1 1 0-4.5 2.25 2.25 0 0 1 0 4.5ZM2.5 3.25a.75.75 0 1 0 1.5 0 .75.75 0 0 0-1.5 0ZM3.25 12a.75.75 0 1 0 0 1.5.75.75 0 0 0 0-1.5Zm9.5 0a.75.75 0 1 0 0-1.5.75.75 0 0 0-1.5 0ZM14 7.5a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1 2.5 0Zm0-4.25a1.25 1.25 0 1 1-2.5 0 1.25 1.25 0 0 1-2.5 0Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='>']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M10.894 2.553a1 1 0 0 0-1.788 0l-7 14a1 1 0 0 0 1.169 1.409l5-1.429A1 1 0 0 0 9 15.571V11a1 1 0 1 1 2 0v4.571a1 1 0 0 0 .725.962l5 1.428a1 1 0 0 0 1.17-1.408l-7-14z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='<']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M10 18a8 8 0 1 0 0-16 8 8 0 0 0 0 16zm1-12a1 1 0 1 0-2 0v4a1 1 0 0 0 .293.707l2.828 2.829a1 1 0 1 0 1.415-1.415L11 9.586V6z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='-']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M3 10a1 1 0 0 1 1-1h12a1 1 0 1 1 0 2H4a1 1 0 0 1-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='!']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 1 1-2 0 1 1 0 0 1 2 0zm-1-8a1 1 0 0 0-1 1v3a1 1 0 0 0 2 0V6a1 1 0 0 0-1-1z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='*']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M9.049 2.927c.3-.921 1.603-.921 1.902 0l1.07 3.292a1 1 0 0 0 .95.69h3.462c.969 0 1.371 1.24.588 1.81l-2.8 2.034a1 1 0 0 0-.364 1.118l1.07 3.292c.3.921-.755 1.688-1.54 1.118l-2.8-2.034a1 1 0 0 0-1.175 0l-2.8 2.034c-.784.57-1.838-.197-1.539-1.118l1.07-3.292a1 1 0 0 0-.364-1.118L2.98 8.72c-.783-.57-1.371-1.81.588-1.81h3.461a.951.951 0 0 0 .951-.69l1.07-3.292z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='l']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M5.05 4.05a7 7 0 1 1 9.9 9.9L10 18.9l-4.95-4.95a7 7 0 0 1 0-9.9ZM10 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='b']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M5 4a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v14l-5-2.5L5 18V4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='I']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M11 3a1 1 0 1 0-2 0v1a1 1 0 1 0 2 0V3zM15.657 5.757a1 1 0 0 0-1.414-1.414l-.707.707a1 1 0 0 0 1.414 1.414l.707-.707zM18 10a1 1 0 0 1-1 1h-1a1 1 0 1 1 0-2h1a1 1 0 0 1 1 1zM8 16v-1h4v1a2 2 0 1 1-4 0zM12 14a4 4 0 1 0-4.954 0c.27.213.462.519.476.859h4.002z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='f']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12.395 2.553a1 1 0 0 0-1.45-.385C7.8 4.3 7.1 8.2 7 10.7A2.6 2.6 0 0 1 5.5 8.2A7 7 0 1 0 15 13c0-3.2-2.2-5.7-2.6-10.4Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='k']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath fill-rule='evenodd' d='M18 8a6 6 0 0 1-7.743 5.743L10 14l-1 1-1 1H6v2H2v-4l4.257-4.257A6 6 0 1 1 18 8zm-6-4a1 1 0 1 0 0 2 2 2 0 0 1 2 2 1 1 0 1 0 2 0 4 4 0 0 0-4-4z' clip-rule='evenodd'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='w']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 13v4a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-4a4 4 0 0 1-2 1 3 3 0 0 1-3-2 3 3 0 0 1-6 0 3 3 0 0 1-3 2 4 4 0 0 1-2-1Z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='p']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M2 10.5a1.5 1.5 0 1 1 3 0v6a1.5 1.5 0 1 1-3 0v-6zM6 10.333v5.43a2 2 0 0 0 1.106 1.79L8 18h6.36a2 2 0 0 0 1.96-1.6l1.2-6A2 2 0 0 0 15.56 8H12V4a2 2 0 0 0-2-2 1 1 0 0 0-1 1v.667a4 4 0 0 1-.8 2.4L6.8 7.933a4 4 0 0 0-.8 2.4z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='u']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 7a1 1 0 1 0 0-2h5a1 1 0 0 1 1 1v5a1 1 0 1 1-2 0V8.414l-4.293 4.293a1 1 0 0 1-1.414 0L8 10.414l-4.293 4.293a1 1 0 0 1-1.414-1.414l5-5a1 1 0 0 1 1.414 0L11 10.586 14.586 7H12z'/%3E%3C/svg%3E"); } .oxpio-task-input[data-task='d']:checked { mask-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Cpath d='M12 13a1 1 0 1 0 0 2h5a1 1 0 0 0 1-1V9a1 1 0 1 0-2 0v2.586L12.707 7.293a1 1 0 0 0-1.414 0L8 10.586 3.707 6.293a1 1 0 0 0-1.414 1.414l5 5a1 1 0 0 0 1.414 0L11 10.414 14.586 13H12z'/%3E%3C/svg%3E"); } :host([data-theme="dark"]) .oxpio-task-input[data-task='?']:checked, :host-context(html[data-theme="dark"]) .oxpio-task-input[data-task='?']:checked { background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath fill='black' fill-opacity='.8' d='M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z\"/%3E%3C/svg%3E\"); } :host([data-theme="dark"]) .oxpio-task-input[data-task='\"']:checked, :host-context(html[data-theme="dark"]) .oxpio-task-input[data-task='\"']:checked { background-image: url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='black' fill-opacity='.7' d='M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z'/%3E%3C/svg%3E\"); } @media (prefers-color-scheme: dark) { :host([data-theme="system"]) .oxpio-task-input[data-task='?']:checked { background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 16 16"%3E%3Cpath fill="black" fill-opacity="0.8" d="M4.475 5.458c-.284 0-.514-.237-.47-.517C4.28 3.24 5.576 2 7.825 2c2.25 0 3.767 1.36 3.767 3.215c0 1.344-.665 2.288-1.79 2.973c-1.1.659-1.414 1.118-1.414 2.01v.03a.5.5 0 0 1-.5.5h-.77a.5.5 0 0 1-.5-.495l-.003-.2c-.043-1.221.477-2.001 1.645-2.712c1.03-.632 1.397-1.135 1.397-2.028c0-.979-.758-1.698-1.926-1.698c-1.009 0-1.71.529-1.938 1.402c-.066.254-.278.461-.54.461h-.777ZM7.496 14c.622 0 1.095-.474 1.095-1.09c0-.618-.473-1.092-1.095-1.092c-.606 0-1.087.474-1.087 1.091S6.89 14 7.496 14Z"/%3E%3C/svg%3E'); } :host([data-theme="system"]) .oxpio-task-input[data-task='\"']:checked { background-image: url('data:image/svg+xml,%3Csvg xmlns="http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg" viewBox="0 0 24 24"%3E%3Cpath fill="black" fill-opacity="0.7" d="M5 5h6v7H8v4h3v3H5v-7h6V5H5zm8 0h6v7h-3v4h3v3h-6v-7h6V5h-6z"/%3E%3C/svg%3E'); } } li:has(> input[data-task='x']:checked), li:has(> input[data-task='X']:checked), li:has(> input[data-task='-']:checked), li:has(> p > input[data-task='x']:checked), li:has(> p > input[data-task='X']:checked), li:has(> p > input[data-task='-']:checked) { text-decoration: line-through solid currentColor 1px; }${this.styles}`;
     const mathStyle = document.createElement("link");
     mathStyle.rel = "stylesheet";
     mathStyle.href = new URL("editor-runtime/katex.min.css", document.baseURI).href;
@@ -1913,9 +2040,21 @@ function insertMedia(path, allowBusy = false) {
   editor.dispatch({changes: {from, to, insert: value}, selection: {anchor: from + value.length}});
   editor.focus();
 }
+function focusMediaTrigger() {
+  const trigger = $("#media");
+  if (trigger.disabled) { mediaFocusPending = true; return; }
+  mediaFocusPending = false;
+  trigger.focus();
+}
+function closeMedia() {
+  const panel = $("#media-panel");
+  if (panel.open) panel.close();
+}
 async function openMedia() {
-  $("#media-panel").hidden = false;
+  const panel = $("#media-panel");
+  if (!panel.open) panel.showModal();
   updateUploadGuidance();
+  $("#media-close").focus();
   if (state.busy) return loadMedia(true);
   busy(true, "Loading media library…");
   try { await loadMedia(true); }
@@ -1945,26 +2084,14 @@ async function loadMedia(throwOnError = false) {
     if (throwOnError) throw error;
   }
 }
-function uploadTargetPath(file) {
-  const folder = $("#upload-folder").value.trim();
-  return folder ? `${folder}/${file.name}` : file.name;
-}
-function updateUploadGuidance(file = $("#media-upload").files?.[0]) {
+function updateUploadGuidance() {
   const warning = $("#upload-parent-warning");
-  const message = file && /\.md$/iu.test(file.name) ? fileMarkdownWarning(uploadTargetPath(file), $("#upload-kind").value) : "";
-  warning.textContent = message;
-  warning.hidden = !message;
+  warning.textContent = "";
+  warning.hidden = true;
 }
 async function uploadMedia(file) {
   if (!file || state.busy) return;
-  if (file instanceof FileList && file.length !== 1) { status("Upload exactly one file."); return; }
-  const warning = file instanceof File ? fileMarkdownWarning(uploadTargetPath(file), $("#upload-kind").value) : "";
-  if (warning) {
-    updateUploadGuidance(file);
-    diagnostics([], `Upload blocked: ${warning}`);
-    status(`Upload blocked: ${warning}`);
-    return;
-  }
+  if (file instanceof FileList && file.length !== 1) { status("Upload exactly one image."); return; }
   busy(true);
   const stopProgress = progressStatus("Upload: validating, building, and saving…");
   try {
@@ -1972,21 +2099,12 @@ async function uploadMedia(file) {
     form.append("file", file);
     const folder = $("#upload-folder").value.trim() || (state.fileKind === "folder" ? state.filePath : "");
     if (folder) form.append("folder", folder);
-    if (/\.md$/iu.test(file.name)) {
-      const kind = $("#upload-kind").value;
-      const isSectionFile = /^_index\.md$/iu.test(file.name);
-      if (isSectionFile !== (kind === "section-index")) throw new Error(isSectionFile ? "Choose Section index for _index.md uploads." : "Choose Article for ordinary Markdown uploads.");
-      form.append("kind", kind);
-    }
     const result = await mutation("POST", "/_oxpio/media", form, {"X-OXPIO-File-Hash": "absent"});
     markOperationCommitted("Upload");
     await loadMedia(true);
     await refreshFiles(result.path);
-    if (/\.md$/iu.test(file.name)) await loadCatalog(result.path);
-    else {
-      insertMedia(result.path, true);
-      if (state.surface === "write" && state.mode === "visual") state.previewPending = "live";
-    }
+    insertMedia(result.path, true);
+    if (state.surface === "write" && state.mode === "visual") state.previewPending = "live";
     status(`Uploaded ${result.path} and rebuilt successfully.${postCommitWarning(result)}`);
   } catch (error) {
     if (state.operationCommitted) {
@@ -1997,11 +2115,11 @@ async function uploadMedia(file) {
   }
   finally { stopProgress(); busy(false); $("#media-upload").value = ""; updateUploadGuidance(); }
 }
-function fileSectionIndexPath(parent) {
+function sourceSectionIndexPath(parent) {
   return parent === "." ? "_index.md" : `${parent}/_index.md`;
 }
-function fileParentSectionWarning(relPath) {
-  if (!Array.isArray(state.fileEntries) || !/\.md$/iu.test(relPath)) return "";
+function sourceParentSectionWarning(relPath) {
+  if (!/\.md$/iu.test(relPath)) return "";
   const isSectionIndex = /(^|\/)[_]index\.md$/iu.test(relPath);
   const slash = relPath.lastIndexOf("/");
   let parent = slash < 0 ? "." : relPath.slice(0, slash);
@@ -2010,63 +2128,97 @@ function fileParentSectionWarning(relPath) {
     const parentSlash = parent.lastIndexOf("/");
     parent = parentSlash < 0 ? "." : parent.slice(0, parentSlash);
   }
-  const sectionPath = fileSectionIndexPath(parent);
-  const section = state.fileEntries.find(entry => entry.kind === "file" && entry.path === sectionPath && entry.sourceKind === "section");
+  const sectionPath = sourceSectionIndexPath(parent);
+  const section = state.catalogSources.find(source => source.relPath === sectionPath && source.kind === "section");
   if (section) return "";
   const folder = parent === "." ? "the vault root" : `folder \"${parent}\"`;
   return `${folder} is not a section yet. Create \"${sectionPath}\" as a Section index first.`;
 }
-function articleCreationWarning(relPath) {
-  if (/(^|\/)[_]index\.md$/iu.test(relPath)) return "Articles cannot be named _index.md. Use New Markdown and choose Section index instead.";
-  return fileParentSectionWarning(relPath);
-}
-function fileMarkdownWarning(relPath, kind) {
+function sourceCreationWarning(relPath, kind = "article") {
   const looksLikeSectionIndex = /(^|\/)[_]index\.md$/iu.test(relPath);
   const exactSectionIndex = /(^|\/)[_]index\.md$/.test(relPath);
-  if (looksLikeSectionIndex && !exactSectionIndex) return "Section index files must use the exact filename _index.md.";
-  if (looksLikeSectionIndex && kind !== "section-index") return "Files named _index.md must use Section index kind.";
-  if (!looksLikeSectionIndex && kind === "section-index") return "Section index files must be named _index.md.";
-  return fileParentSectionWarning(relPath);
-}
-function updateFileDialogGuidance() {
-  const markdown = state.fileDialogMode === "markdown";
-  const warning = $("#file-parent-warning");
-  const message = markdown ? fileMarkdownWarning($("#file-path").value.trim(), $("#file-kind").value) : "";
-  warning.textContent = message;
-  warning.hidden = !message;
-  $("#file-submit").disabled = Boolean(message);
+  if (kind === "section-index") {
+    if (!exactSectionIndex) return "Section files must use the exact filename _index.md.";
+  } else if (looksLikeSectionIndex) {
+    return "Articles cannot be named _index.md. Choose Section instead.";
+  }
+  return sourceParentSectionWarning(relPath);
 }
 function updateNewDialogGuidance() {
   const warning = $("#new-parent-warning");
-  const message = articleCreationWarning($("#new-form input[name=path]").value.trim());
+  const kind = $("#new-kind").value;
+  const message = sourceCreationWarning($("#new-form input[name=path]").value.trim(), kind);
   warning.textContent = message;
   warning.hidden = !message;
   $("#new-submit").disabled = Boolean(message);
+  $("#new-type-wrap").hidden = kind === "section-index";
+  $("#new-date-wrap").hidden = kind === "section-index";
+  $("#new-dialog-title").textContent = kind === "section-index" ? "New section" : "New article";
+  $("#new-submit").textContent = kind === "section-index" ? "Create section" : "Create draft";
+}
+async function showResourceUsages(usages = null) {
+  const resourcePath = state.filePath;
+  if (!resourcePath) return;
+  let items = usages;
+  if (!items) {
+    busy(true, "Loading resource usages…");
+    try {
+      const data = await responseJSON(await fetchWithTimeout(`/_oxpio/file/usages?path=${encodeURIComponent(resourcePath)}`));
+      items = data.usages || [];
+    } catch (error) {
+      status(isAbortError(error) ? "Usage scan cancelled." : `Usage scan failed: ${error.message}`);
+      return;
+    } finally {
+      busy(false);
+    }
+  }
+  const dialog = $("#resource-dialog");
+  $("#resource-dialog-title").textContent = resourcePath;
+  $("#resource-dialog-summary").textContent = items.length ? `Used by ${items.length} reference${items.length === 1 ? "" : "s"}.` : "No source references found.";
+  const list = $("#resource-dialog-list");
+  list.replaceChildren();
+  for (const usage of items) {
+    const item = document.createElement("div");
+    item.className = "resource-usage-item";
+    const documentName = document.createElement("strong");
+    documentName.textContent = usage.document || "Unknown document";
+    const detail = document.createElement("span");
+    detail.textContent = `${usage.field || usage.kind || "Reference"}${usage.line ? ` · line ${usage.line}` : ""}${usage.reference ? ` · ${usage.reference}` : ""}`;
+    item.append(documentName, detail);
+    list.append(item);
+  }
+  dialog.showModal();
 }
 function openFileDialog(mode) {
   if (state.busy) return;
-  if ((mode === "rename" || mode === "delete") && !state.filePath) return;
+  if ((mode === "content-rename" || mode === "resource-rename" || mode === "delete") && !state.filePath) return;
   state.fileDialogMode = mode;
   const dialog = $("#file-dialog");
-  const markdown = mode === "markdown";
-  $("#file-dialog-title").textContent = mode === "folder" ? "New folder" : mode === "rename" ? "Rename" : "New Markdown file";
-  $("#file-submit").textContent = mode === "folder" ? "Create folder" : mode === "rename" ? "Rename" : "Create file";
+  const resource = mode === "resource-rename";
+  $("#file-dialog-title").textContent = mode === "folder" ? "New resource folder" : (resource ? "Rename resource" : "Rename content");
+  $("#file-submit").textContent = mode === "folder" ? "Create folder" : "Rename";
   $("#file-original").value = state.filePath;
-  $("#file-path").value = mode === "rename" ? state.filePath : "";
+  $("#file-path").value = mode === "content-rename" || resource ? state.filePath : "";
   $("#file-path").readOnly = false;
-  $("#markdown-file-fields").hidden = !markdown;
-  $("#file-model-hint").hidden = !markdown;
   $("#file-parent-warning").hidden = true;
-  $("#file-title").required = markdown;
-  if (markdown) {
-    $("#file-title").value = "";
-    $("#file-type").value = "doc";
-    $("#file-date").value = "";
-    $("#file-kind").value = "article";
-  }
   $("#file-submit").disabled = false;
   dialog.showModal();
-  updateFileDialogGuidance();
+}
+async function deleteResource() {
+  if (state.busy || state.fileKind !== "file" || !state.filePath) return;
+  if (state.fileUsageCount > 0) {
+    await showResourceUsages();
+    return;
+  }
+  const resourcePath = state.filePath;
+  if (!confirm(`Delete ${resourcePath}? This cannot be undone.`)) return;
+  try {
+    await runFileMutation("Delete resource", () => mutation("DELETE", `/_oxpio/file?path=${encodeURIComponent(resourcePath)}&confirm=true`, null, {"X-OXPIO-File-Hash": state.fileHash}), "", false);
+    clearFileSelection();
+    $("#file-resource-actions").open = false;
+  } catch (error) {
+    if (error.usages?.length) await showResourceUsages(error.usages);
+  }
 }
 async function runFileMutation(label, action, preferred = state.filePath, reloadSource = true) {
   if (state.busy) return;
@@ -2082,7 +2234,8 @@ async function runFileMutation(label, action, preferred = state.filePath, reload
       await refreshFiles(preferred);
     }
     const rebuilt = result.warningCount !== undefined;
-    status(`${label} completed${rebuilt ? " and rebuilt" : ""}.${postCommitWarning(result)}`);
+    const updated = result.referenceDocumentCount ? ` Updated ${result.referenceDocumentCount} document${result.referenceDocumentCount === 1 ? "" : "s"}.` : "";
+    status(`${label} completed${rebuilt ? " and rebuilt" : ""}.${updated}${postCommitWarning(result)}`);
   } catch (error) {
     if (state.operationCommitted) {
       diagnostics(error.diagnostics, `${label} committed, but refresh failed: ${error.message}`);
@@ -2102,10 +2255,18 @@ async function runFileMutation(label, action, preferred = state.filePath, reload
 
 document.querySelectorAll("button svg, label svg, .workspace-search svg").forEach(svg => { svg.setAttribute("aria-hidden", "true"); svg.setAttribute("focusable", "false"); });
 editor = new EditorView({state: EditorState.create({extensions: editorExtensions()}), parent: $("#editor")});
+editor.dom.addEventListener("keydown", event => {
+  if (state.surface !== "write" || state.mode !== "visual" || (event.key !== "Enter" && event.key !== " ")) return;
+  const target = event.target instanceof Element ? event.target.closest(".live-rendered-block, .live-rendered-inline") : null;
+  if (!target) return;
+  event.preventDefault();
+  target.click();
+});
 editor.dom.addEventListener("click", event => {
   if (state.surface !== "write" || state.mode !== "visual") return;
   const target = event.target instanceof Element ? event.target.closest(".live-rendered-block, .live-rendered-inline") : null;
   if (!target) return;
+  dismissLivePreviewHint();
   const path = event.composedPath?.() || [];
   const inline = path.find(node => node instanceof Element && node.hasAttribute("data-live-inline-from"));
   const block = path.find(node => node instanceof Element && node.hasAttribute("data-live-block-from"));
@@ -2119,12 +2280,96 @@ editor.dom.addEventListener("click", event => {
   editor.dispatch({selection: {anchor: position}, effects: livePreviewActive.of(activeInline)});
 });
 loadPreferences();
+syncShortcutHints();
 $("#document-search").oninput = filterDocuments;
+function setSidebarCollapsed(collapsed) {
+  const layout = $(".editor-layout");
+  const button = $("#sidebar-collapse");
+  if (!layout || !button) return;
+  const expanded = !collapsed;
+  layout.classList.toggle("sidebar-collapsed", collapsed);
+  button.dataset.state = expanded ? "expanded" : "collapsed";
+  button.setAttribute("aria-expanded", String(expanded));
+  button.setAttribute("aria-label", expanded ? "Collapse document panel" : "Expand document panel");
+  button.title = expanded ? "Collapse document panel" : "Expand document panel";
+  $("#sidebar-collapse-icon").setAttribute("href", expanded ? "#icon-panel-left" : "#icon-panel-left-collapsed");
+}
+function sidebarWidthBounds() {
+  const rem = parseFloat(getComputedStyle(document.documentElement).fontSize) || 16;
+  const min = 14 * rem;
+  const max = Math.max(min, Math.min(30 * rem, window.innerWidth - 24 * rem));
+  return {min, max, rem};
+}
+function setSidebarWidth(width, persist = true) {
+  const layout = $(".editor-layout");
+  const resizer = $("#sidebar-resizer");
+  if (!layout || !resizer) return;
+  const {min, max, rem} = sidebarWidthBounds();
+  const value = Math.max(min, Math.min(max, width));
+  layout.style.setProperty("--sidebar-width", `${value}px`);
+  resizer.setAttribute("aria-valuemax", String(Math.round(max / rem)));
+  resizer.setAttribute("aria-valuenow", String(Math.round(value / rem)));
+  if (persist) {
+    try { localStorage.setItem("oxpio-editor-sidebar-width", String(value)); } catch { /* browser preferences are best effort */ }
+  }
+}
+function restoreSidebarWidth() {
+  let saved = 0;
+  try { saved = Number(localStorage.getItem("oxpio-editor-sidebar-width")) || 0; } catch { /* browser preferences are best effort */ }
+  const current = $(".source-sidebar")?.getBoundingClientRect().width || 17 * 16;
+  setSidebarWidth(saved || current, false);
+}
+function startSidebarResize(event) {
+  if (window.matchMedia("(max-width: 52rem)").matches || $(".editor-layout").classList.contains("sidebar-collapsed")) return;
+  event.preventDefault();
+  sidebarResize = {pointerId: event.pointerId, startX: event.clientX, startWidth: $(".source-sidebar").getBoundingClientRect().width};
+  event.currentTarget.setPointerCapture(event.pointerId);
+  document.body.classList.add("sidebar-resizing");
+}
+function moveSidebarResize(event) {
+  if (!sidebarResize || event.pointerId !== sidebarResize.pointerId) return;
+  setSidebarWidth(sidebarResize.startWidth + event.clientX - sidebarResize.startX, false);
+}
+function endSidebarResize(event) {
+  if (!sidebarResize || event.pointerId !== sidebarResize.pointerId) return;
+  try { event.currentTarget.releasePointerCapture(event.pointerId); } catch { /* pointer capture may already be released */ }
+  sidebarResize = null;
+  document.body.classList.remove("sidebar-resizing");
+  const width = $(".source-sidebar").getBoundingClientRect().width;
+  setSidebarWidth(width);
+}
+function keyboardSidebarResize(event) {
+  if (window.matchMedia("(max-width: 52rem)").matches || $(".editor-layout").classList.contains("sidebar-collapsed")) return;
+  const sidebar = $(".source-sidebar");
+  const current = sidebar.getBoundingClientRect().width;
+  const {min, max} = sidebarWidthBounds();
+  const step = event.shiftKey ? 80 : 16;
+  const width = event.key === "ArrowLeft" ? current - step : event.key === "ArrowRight" ? current + step : event.key === "Home" ? min : event.key === "End" ? max : 0;
+  if (!width) return;
+  event.preventDefault();
+  setSidebarWidth(width);
+}
+restoreSidebarWidth();
+$("#sidebar-collapse").onclick = () => setSidebarCollapsed(!$(".editor-layout").classList.contains("sidebar-collapsed"));
+$("#sidebar-resizer").addEventListener("pointerdown", startSidebarResize);
+$("#sidebar-resizer").addEventListener("pointermove", moveSidebarResize);
+$("#sidebar-resizer").addEventListener("pointerup", endSidebarResize);
+$("#sidebar-resizer").addEventListener("pointercancel", endSidebarResize);
+$("#sidebar-resizer").addEventListener("keydown", keyboardSidebarResize);
+window.addEventListener("resize", () => { if (!window.matchMedia("(max-width: 52rem)").matches && !$(".editor-layout").classList.contains("sidebar-collapsed") && !sidebarResize) setSidebarWidth($(".source-sidebar").getBoundingClientRect().width, false); });
 $("#sidebar-toggle").onclick = event => { const open = $(".source-sidebar").classList.toggle("drawer-open"); event.currentTarget.setAttribute("aria-expanded", String(open)); event.currentTarget.setAttribute("aria-label", open ? "Close documents" : "Open documents"); };
 document.addEventListener("keydown", event => { if (event.key === "Escape" && $(".source-sidebar").classList.contains("drawer-open")) { $(".source-sidebar").classList.remove("drawer-open"); $("#sidebar-toggle").setAttribute("aria-expanded", "false"); $("#sidebar-toggle").setAttribute("aria-label", "Open documents"); } });
-$("#settings").onclick = () => $("#settings-dialog").showModal();
+function closeMoreActions(focus = false) {
+  const menu = $("#more-actions");
+  if (!menu) return;
+  menu.open = false;
+  if (focus) menu.querySelector("summary")?.focus();
+}
+$("#settings").onclick = () => { closeMoreActions(); $("#settings-dialog").showModal(); };
+document.addEventListener("click", event => { if (!event.target.closest("#more-actions")) closeMoreActions(); });
 $("#cancel-operation").onclick = () => state.operationController ? state.operationController.abort() : cancelLivePreview(true);
 $("#settings-save").onclick = storePreferences;
+$("#live-preview-hint-close").onclick = dismissLivePreviewHint;
 $("#metadata-toggle").onclick = event => {
   const collapsed = $("#metadata").classList.toggle("metadata-collapsed");
   const expanded = !collapsed;
@@ -2145,8 +2390,10 @@ document.addEventListener("click", event => {
 });
 document.addEventListener("keydown", event => {
   if (event.key !== "Escape") return;
+  closeMoreActions();
   $("#help-tooltip").setAttribute("aria-expanded", "false");
   $("#help-tooltip-content").setAttribute("aria-hidden", "true");
+  if (document.body.classList.contains("editor-fullscreen")) setFullscreen(false);
 });
 $("#logout").onclick = async () => { try { await mutation("POST", "/_oxpio/logout"); location.href = "/_oxpio/login"; } catch (error) { status(`Log out failed: ${error.message}`); } };
 $("#write-mode").onclick = () => setWorkspaceMode("write").catch(error => diagnostics(error.diagnostics, `Write mode failed: ${error.message}`));
@@ -2174,81 +2421,95 @@ $("#source").onchange = event => {
 $("#refresh").onclick = refreshCatalogFromUI;
 $("#save").onclick = save;
 $("#diff-wrap").onclick = () => { state.diffWrap = !state.diffWrap; rebuildDiffView(); };
-$("#toolbar-fullscreen").onclick = event => {
-  const fullscreen = document.body.classList.toggle("editor-fullscreen");
-  event.currentTarget.setAttribute("aria-pressed", String(fullscreen));
-};
-$("#metadata").oninput = () => { dirty(); scheduleLivePreview(); };
+$("#toolbar-fullscreen").onclick = () => setFullscreen(!document.body.classList.contains("editor-fullscreen"));
+syncFullscreenControl();
+$("#metadata").oninput = () => { updateDocumentHeading(); updatePublishBadge($("[data-field=publish]")?.checked === true); dirty(); scheduleLivePreview(); };
 $("#metadata").onsubmit = event => event.preventDefault();
 $("#file-refresh").onclick = refreshFilesFromUI;
-$("#file-path").oninput = updateFileDialogGuidance;
-$("#file-kind").onchange = updateFileDialogGuidance;
-$("#file-new-folder").onclick = () => openFileDialog("folder");
-$("#file-new-markdown").onclick = () => openFileDialog("markdown");
-$("#file-rename").onclick = () => openFileDialog("rename");
-$("#file-delete").onclick = () => {
-  if (!state.filePath || !confirmDiscard()) return;
-  const qualifier = state.fileKind === "folder" ? " (empty folder)" : "";
-  if (!confirm(`Delete ${state.filePath}${qualifier}?`)) return;
-  const pathValue = state.filePath;
-  const fileHash = state.fileHash;
-  const affectsCurrent = pathContains(pathValue, state.path);
-  const preferred = affectsCurrent ? "" : state.path;
-  runFileMutation("Delete", async () => {
-    const result = await mutation("DELETE", `/_oxpio/file?path=${encodeURIComponent(pathValue)}&confirm=true`, null, {"X-OXPIO-File-Hash": fileHash});
-    await clearDraft(pathValue);
-    return result;
-  }, preferred, affectsCurrent).catch(() => {});
+$("#resource-filter").onchange = () => {
+  state.resourceFilter = $("#resource-filter").value;
+  refreshFiles().catch(error => status(`File list failed: ${error.message}`));
 };
+$("#resource-copy-path").onclick = async () => {
+  if (!state.filePath) return;
+  try {
+    await navigator.clipboard.writeText(state.filePath);
+    status(`Copied ${state.filePath}`);
+  } catch {
+    status("Could not copy the resource path.");
+  }
+};
+$("#resource-rename").onclick = () => openFileDialog("resource-rename");
+$("#resource-show-usages").onclick = () => showResourceUsages();
+$("#resource-delete").onclick = deleteResource;
+$("#content-rename").onclick = () => {
+  if (state.busy || state.kind !== "article" || !state.path || !confirmDiscard()) return;
+  state.filePath = state.path;
+  state.fileHash = state.hash;
+  state.fileKind = "file";
+  openFileDialog("content-rename");
+};
+$("#file-new-folder").onclick = () => openFileDialog("folder");
+$("#resource-dialog").addEventListener("click", event => { if (event.target === event.currentTarget) event.currentTarget.close(); });
 $("#file-form").onsubmit = async event => {
-  if (event.submitter?.value === "cancel") return;
+  if (event.submitter?.value === "cancel") {
+    if (state.fileDialogMode === "content-rename") clearFileSelection();
+    return;
+  }
   event.preventDefault();
   const mode = state.fileDialogMode;
   const pathValue = $("#file-path").value.trim();
   const dialog = $("#file-dialog");
-  if (mode === "markdown" && fileMarkdownWarning(pathValue, $("#file-kind").value)) {
-    updateFileDialogGuidance();
-    $("#file-path").focus();
-    return;
-  }
   try {
     if (mode === "folder") {
-      await runFileMutation("Create folder", () => mutation("POST", "/_oxpio/file/folder", {path: pathValue}, {"X-OXPIO-File-Hash": "absent"}), pathValue, false);
-    } else if (mode === "markdown") {
-      const request = {path: pathValue, title: $("#file-title").value, type: $("#file-type").value, date: $("#file-date").value, kind: $("#file-kind").value};
-      await runFileMutation("Create Markdown file", () => mutation("POST", "/_oxpio/file/markdown", request, {"X-OXPIO-File-Hash": "absent"}), pathValue);
-    } else if (mode === "rename") {
+      await runFileMutation("Create resource folder", () => mutation("POST", "/_oxpio/file/folder", {path: pathValue}, {"X-OXPIO-File-Hash": "absent"}), pathValue, false);
+    } else if (mode === "content-rename") {
       const oldPath = $("#file-original").value;
       const affectsCurrent = pathContains(oldPath, state.path);
       if (affectsCurrent && !confirmDiscard()) return;
       const suffix = affectsCurrent ? state.path.slice(oldPath.length) : "";
       const preferred = affectsCurrent ? pathValue + suffix : state.path;
       await runFileMutation("Rename", () => mutation("PUT", `/_oxpio/file?path=${encodeURIComponent(oldPath)}`, {destination: pathValue}, {"X-OXPIO-File-Hash": state.fileHash}), preferred, affectsCurrent);
+    } else if (mode === "resource-rename") {
+      const oldPath = $("#file-original").value;
+      if (!confirmDiscard()) return;
+      await runFileMutation("Rename resource", () => mutation("PUT", `/_oxpio/file?path=${encodeURIComponent(oldPath)}`, {destination: pathValue}, {"X-OXPIO-File-Hash": state.fileHash}), state.path, true);
     }
     dialog.close();
   } catch (error) {
-    if (isAbortError(error)) status(`${mode === "rename" ? "Rename" : "File operation"} cancelled.`);
+    if (isAbortError(error)) status(`${mode === "content-rename" ? "Rename" : "File operation"} cancelled.`);
     else {
       diagnostics(error.diagnostics, error.message);
       saveState("failed", "Build failed");
-      status(`${mode === "rename" ? "Rename" : "File operation"} failed: ${error.message}`);
+      status(`${mode === "content-rename" ? "Rename" : "File operation"} failed: ${error.message}`);
     }
+    if (mode === "content-rename") clearFileSelection();
   }
 };
-$("#new").onclick = () => { if (confirmDiscard()) { $("#new-dialog").showModal(); updateNewDialogGuidance(); } };
+$("#new").onclick = () => {
+  closeMoreActions();
+  if (!confirmDiscard()) return;
+  $("#new-kind").value = "article";
+  $("#new-form input[name=path]").value = "";
+  $("#new-form input[name=title]").value = "";
+  $("#new-form input[name=date]").value = "";
+  $("#new-dialog").showModal();
+  updateNewDialogGuidance();
+};
+$("#new-kind").onchange = updateNewDialogGuidance;
 $("#new-form input[name=path]").oninput = updateNewDialogGuidance;
-$("#new-cancel").onclick = () => { $("#new-dialog").close(); $("#new").focus(); };
+$("#new-cancel").onclick = () => { $("#new-dialog").close(); closeMoreActions(true); };
 $("#new-form").onsubmit = async event => {
   if (event.submitter?.value === "cancel") {
     event.preventDefault();
     $("#new-dialog").close();
-    $("#new").focus();
+    closeMoreActions(true);
     return;
   }
   event.preventDefault();
   if (state.busy) return;
   const form = new URLSearchParams(new FormData(event.target));
-  if (articleCreationWarning(form.get("path")?.trim() || "")) {
+  if (sourceCreationWarning(form.get("path")?.trim() || "", form.get("kind") || "article")) {
     updateNewDialogGuidance();
     $("#new-form input[name=path]").focus();
     return;
@@ -2260,7 +2521,7 @@ $("#new-form").onsubmit = async event => {
     markOperationCommitted("Create");
     $("#new-dialog").close(); dirty(false);
     await loadCatalog(form.get("path"));
-    status(`Created and rebuilt.${postCommitWarning(result)}`);
+    status(`${form.get("kind") === "section-index" ? "Section created" : "Created"} and rebuilt.${postCommitWarning(result)}`);
   } catch (error) {
     if (state.operationCommitted) {
       diagnostics(error.diagnostics, `Create committed, but refresh failed: ${error.message}`);
@@ -2273,6 +2534,7 @@ $("#new-form").onsubmit = async event => {
 };
 $("#delete").onclick = () => {
   if (state.kind !== "article" || !confirm("Delete this article?")) return;
+  closeMoreActions();
   operation("Delete", async () => {
     const stopProgress = progressStatus("Delete: validating, building, and saving…");
     try {
@@ -2286,12 +2548,23 @@ $("#delete").onclick = () => {
     }
   });
 };
+const mediaPanel = $("#media-panel");
 $("#media").onclick = openMedia;
-$("#media-close").onclick = () => { $("#media-panel").hidden = true; };
+$("#media-close").onclick = closeMedia;
+mediaPanel.addEventListener("close", focusMediaTrigger);
+mediaPanel.addEventListener("click", event => {
+  if (event.target !== mediaPanel) return;
+  const bounds = mediaPanel.getBoundingClientRect();
+  if (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom) closeMedia();
+});
 $("#upload-folder").oninput = () => updateUploadGuidance();
-$("#upload-kind").onchange = () => updateUploadGuidance();
 $("#media-upload").onchange = event => { if (event.target.files.length !== 1) { saveState("failed", "Upload failed"); diagnostics([], "Upload exactly one file; no files were written."); status("Upload exactly one file; no files were written."); event.target.value = ""; return; } updateUploadGuidance(event.target.files[0]); uploadMedia(event.target.files[0]); };
 const mediaDropzone = $("#media-dropzone");
+mediaDropzone.addEventListener("keydown", event => {
+  if (event.key !== "Enter" && event.key !== " ") return;
+  event.preventDefault();
+  $("#media-upload").click();
+});
 ["dragenter", "dragover"].forEach(type => mediaDropzone.addEventListener(type, event => { event.preventDefault(); mediaDropzone.classList.add("drag-over"); }));
 ["dragleave", "drop"].forEach(type => mediaDropzone.addEventListener(type, event => { event.preventDefault(); mediaDropzone.classList.remove("drag-over"); }));
 mediaDropzone.addEventListener("drop", event => {

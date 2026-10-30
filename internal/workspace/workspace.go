@@ -64,6 +64,8 @@ type SourceChange struct {
 	Path       string `json:"path"`
 	BeforeHash string `json:"beforeHash"`
 	AfterHash  string `json:"afterHash"`
+	BeforePath string `json:"beforePath,omitempty"`
+	AfterPath  string `json:"afterPath,omitempty"`
 }
 
 type Journal struct {
@@ -83,6 +85,7 @@ type Journal struct {
 	SourceBeforeHash    string         `json:"sourceBeforeHash,omitempty"`
 	SourceAfterHash     string         `json:"sourceAfterHash,omitempty"`
 	SourceChanges       []SourceChange `json:"sourceChanges,omitempty"`
+	ReferenceChanges    []SourceChange `json:"referenceChanges,omitempty"`
 	OutputIdentity      string         `json:"outputIdentity,omitempty"`
 	OutputAfterIdentity string         `json:"outputAfterIdentity,omitempty"`
 	OutputBeforeHash    string         `json:"outputBeforeHash,omitempty"`

@@ -12,6 +12,147 @@ import (
 	"github.com/simp-lee/oxpio/internal/workspace"
 )
 
+func TestRecoverCompletesPartiallyAppliedReferenceUpdates(t *testing.T) {
+	vault := t.TempDir()
+	output := filepath.Join(vault, "public")
+	if err := os.MkdirAll(output, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(output, "index.html"), []byte("old output"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	staging := filepath.Join(vault, ".oxpio-edit-stage-test", "public")
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, ManagedMarkerFilename), []byte(ManagedMarkerContents), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(staging, "index.html"), []byte("new output"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	oldResource := filepath.Join(vault, "assets", "old.png")
+	newResource := filepath.Join(vault, "assets", "new.png")
+	if err := os.MkdirAll(filepath.Dir(oldResource), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(newResource, []byte("new resource"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	referencePaths := []string{filepath.Join(vault, "first.md"), filepath.Join(vault, "second.md"), filepath.Join(vault, "oxpio.yaml")}
+	beforeData := [][]byte{[]byte("first before"), []byte("second before"), []byte("title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultImg: assets/old.png\n")}
+	afterData := [][]byte{[]byte("first after"), []byte("second after"), []byte("title: Site\nbaseURL: https://example.test/\nnavigation: []\ndefaultImg: assets/new.png\n")}
+	for index, referencePath := range referencePaths {
+		if err := os.WriteFile(referencePath, afterData[index], 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(referencePaths[0], beforeData[0], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(referencePaths[2], beforeData[2], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(referencePaths[0], afterData[0], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(referencePaths[2], afterData[2], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	expectedFingerprint, err := workspace.Fingerprint(vault, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(referencePaths[0], beforeData[0], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(referencePaths[2], beforeData[2], 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(vault, ".oxpio-source-txn-test")
+	if err := os.MkdirAll(backup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	changes := make([]workspace.SourceChange, 0, len(referencePaths))
+	for index, referencePath := range referencePaths {
+		beforePath := filepath.Join(backup, fmt.Sprintf("reference-%d-before", index))
+		afterPath := filepath.Join(backup, fmt.Sprintf("reference-%d-after", index))
+		if err := os.WriteFile(beforePath, beforeData[index], 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(afterPath, afterData[index], 0o600); err != nil {
+			t.Fatal(err)
+		}
+		beforeHash := sha256.Sum256(beforeData[index])
+		afterHash := sha256.Sum256(afterData[index])
+		changes = append(changes, workspace.SourceChange{Path: referencePath, BeforeHash: fmt.Sprintf("%x", beforeHash), AfterHash: fmt.Sprintf("%x", afterHash), BeforePath: beforePath, AfterPath: afterPath})
+	}
+	oldHash := sha256.Sum256([]byte("old resource"))
+	newHash := sha256.Sum256([]byte("new resource"))
+	journal := workspace.Journal{
+		Version: workspace.JournalVersion, CommitKind: "source+output", Phase: "source-committed", InputFingerprint: expectedFingerprint,
+		TargetPath: output, SourcePath: newResource, SourceBeforePath: oldResource, SourceBeforeHash: fmt.Sprintf("%x", oldHash), SourceAfterHash: fmt.Sprintf("%x", newHash),
+		TemporaryPath: staging, BackupPath: backup, ReferenceChanges: changes,
+		OutputIdentity: outputIdentity(output), OutputBeforeHash: directoryHash(output), OutputAfterHash: directoryHash(staging), OutputAfterIdentity: outputIdentity(staging),
+	}
+	if err := workspace.WriteJournal(vault, journal); err != nil {
+		t.Fatal(err)
+	}
+	result, err := Recover(vault, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.Action != "complete-output" || !result.Changed {
+		t.Fatalf("recovery result = %#v, want completed output commit", result)
+	}
+	for index, referencePath := range referencePaths {
+		data, readErr := os.ReadFile(referencePath)
+		if readErr != nil || string(data) != string(afterData[index]) {
+			t.Fatalf("reference %q after recovery = %q, %v", referencePath, data, readErr)
+		}
+	}
+}
+
+func TestSourceCommittedAfterPreparedRecognizesSelfReferenceIntermediate(t *testing.T) {
+	vault := t.TempDir()
+	source := filepath.Join(vault, "page.html")
+	beforePath := filepath.Join(vault, "old.html")
+	if err := os.WriteFile(source, []byte("old page"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	journal := workspace.Journal{SourcePath: source, SourceBeforePath: beforePath, SourceBeforeHash: fmt.Sprintf("%x", sha256.Sum256([]byte("old page"))), SourceAfterHash: fmt.Sprintf("%x", sha256.Sum256([]byte("new page"))), ReferenceChanges: []workspace.SourceChange{{Path: source, BeforeHash: "absent"}}}
+	if !sourceCommittedAfterPrepared(journal) {
+		t.Fatal("sourceCommittedAfterPrepared = false, want intermediate self-reference state recognized")
+	}
+}
+
+func TestCompleteReferenceChangesRepairsSelfReferenceIntermediate(t *testing.T) {
+	vault := t.TempDir()
+	source := filepath.Join(vault, "page.html")
+	if err := os.WriteFile(source, []byte("old page"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	backup := filepath.Join(vault, ".oxpio-source-txn-test")
+	if err := os.MkdirAll(backup, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	afterPath := filepath.Join(backup, "reference-after")
+	after := []byte("new page")
+	if err := os.WriteFile(afterPath, after, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	before := sha256.Sum256([]byte("old page"))
+	afterHash := sha256.Sum256(after)
+	journal := workspace.Journal{TargetPath: filepath.Join(vault, "public"), BackupPath: backup, SourcePath: source, SourceBeforeHash: fmt.Sprintf("%x", before), ReferenceChanges: []workspace.SourceChange{{Path: source, BeforeHash: "absent", AfterHash: fmt.Sprintf("%x", afterHash), AfterPath: afterPath}}}
+	if err := completeReferenceChanges(vault, journal, true); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(source)
+	if err != nil || string(data) != string(after) {
+		t.Fatalf("self-reference after repair = %q, %v", data, err)
+	}
+}
+
 func TestRecoverPreparedJournalOnlyCleansTemporaryState(t *testing.T) {
 	vault := t.TempDir()
 	temporary := filepath.Join(vault, ".stage")

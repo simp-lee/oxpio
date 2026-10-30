@@ -33,8 +33,10 @@ math and diagram markers but remove Sidebar and Popover markers because their
 shell mount points are intentionally cropped.
 
 The pure template functions are `siteURL(path)`, `routeURL(route)`,
-`assetURL(themePath)`, `formatDate(value, layout)`, and
-`emitJSONLD(value)`. `assetURL` accepts only a planned path such as
+`tagURL(tag, versionRoot)`, `assetURL(themePath)`, `formatDate(value, layout)`, and
+`emitJSONLD(value)`. `tagURL` normalizes a tag and returns its canonical
+`/tags/<tag>/` route, prefixed by the current version root when supplied.
+`assetURL` accepts only a planned path such as
 `assets/style.css`; it never reads files or the network. External `href`
 navigation links are allowed, but external `src`, stylesheet, and CSS
 `url()` resources are rejected so theme previews remain offline. Use `theme context`,

@@ -25,6 +25,7 @@ import (
 
 	internalasset "github.com/simp-lee/oxpio/internal/asset"
 	"github.com/simp-lee/oxpio/internal/fsutil"
+	"github.com/simp-lee/oxpio/internal/model"
 	"github.com/simp-lee/oxpio/internal/render/viewmodel"
 	xhtml "golang.org/x/net/html"
 	"golang.org/x/text/unicode/norm"
@@ -534,7 +535,7 @@ func ValidationAssets(source Source) map[string]string {
 }
 
 func validateThemeTemplateActions(name string, data []byte) error {
-	allowed := map[string]bool{"siteURL": true, "routeURL": true, "assetURL": true, "formatDate": true, "emitJSONLD": true}
+	allowed := map[string]bool{"siteURL": true, "routeURL": true, "tagURL": true, "assetURL": true, "formatDate": true, "emitJSONLD": true}
 	funcs := map[string]any{}
 	for identifier := range allowed {
 		funcs[identifier] = func(...any) any { return nil }
@@ -948,6 +949,17 @@ func Compile(source Source, assets map[string]string, baseURL string) (*Renderer
 	funcs := template.FuncMap{
 		"siteURL":  func(value string) (string, error) { return resolveThemeURL(baseURL, value, assets) },
 		"routeURL": func(value string) (string, error) { return resolveThemeURL(baseURL, value, assets) },
+		"tagURL": func(value string, versionRoots ...string) (string, error) {
+			tag := model.NormalizeTagName(value)
+			if tag == "" {
+				return "", fmt.Errorf("theme tag name is invalid")
+			}
+			root := ""
+			if len(versionRoots) > 0 {
+				root = strings.TrimSuffix(strings.TrimSpace(versionRoots[0]), "/")
+			}
+			return resolveThemeURL(baseURL, root+"/tags/"+tag+"/", assets)
+		},
 		"assetURL": func(value string) (string, error) {
 			if !safeRelativePath(value) {
 				return "", fmt.Errorf("theme asset path %q is not normalized", value)

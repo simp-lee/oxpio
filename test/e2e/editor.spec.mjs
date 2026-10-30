@@ -51,6 +51,11 @@ async function login(page) {
   await expect(page.locator('body')).toContainText('Content editor');
 }
 
+async function openMoreActions(page) {
+  const menu = page.locator('#more-actions');
+  if (!(await menu.getAttribute('open'))) await menu.locator('summary').click();
+}
+
 async function session(context) {
   const response = await context.request.get(`${origin}/_oxpio/session`);
   expect(response.status()).toBe(200);
@@ -135,9 +140,32 @@ test('new editor sessions select the home document after the initial catalog loa
   await page.goto(`${origin}/_oxpio/editor`);
   await expect(page.locator('#content-editor')).toHaveAttribute('aria-busy', 'false');
   await expect(page.locator('#source')).toHaveValue('_index.md');
-  await expect(page.locator('.source-tree-entry[data-path="_index.md"]')).toHaveAttribute('aria-selected', 'true');
+  await expect(page.locator('.source-tree-entry[data-path="_index.md"]')).toHaveAttribute('data-selected', 'true');
   await expect(page.locator('#editor .cm-content')).toContainText('Home');
   await expect(page.locator('#save')).toBeEnabled();
+  await context.close();
+});
+
+test('fullscreen mode is reversible with Escape and exposes current action', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  await expect(page.locator('#content-editor')).toHaveAttribute('aria-busy', 'false');
+  const fullscreen = page.locator('#toolbar-fullscreen');
+  await expect(fullscreen).toHaveAttribute('aria-pressed', 'false');
+  await expect(fullscreen).toHaveAttribute('aria-label', 'Enter fullscreen');
+  await expect(fullscreen).toHaveAttribute('title', 'Enter fullscreen');
+  await fullscreen.click();
+  await expect(page.locator('body')).toHaveClass(/editor-fullscreen/);
+  await expect(fullscreen).toHaveAttribute('aria-pressed', 'true');
+  await expect(fullscreen).toHaveAttribute('aria-label', 'Exit fullscreen');
+  await expect(fullscreen).toHaveAttribute('title', 'Exit fullscreen');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('body')).not.toHaveClass(/editor-fullscreen/);
+  await expect(fullscreen).toHaveAttribute('aria-pressed', 'false');
+  await expect(fullscreen).toHaveAttribute('aria-label', 'Enter fullscreen');
+  await expect(fullscreen).toHaveAttribute('title', 'Enter fullscreen');
   await context.close();
 });
 
@@ -152,18 +180,18 @@ test('authenticated catalog maps articles, sections, drafts, and preserves full 
   await page.goto(`${origin}/article/`);
   await expect(page.locator('.edit-page-link')).toHaveCount(0);
   await login(page);
-  await expect(page.locator('.source-tree-folder')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.source-tree-folder > .source-tree-entry')).toHaveAttribute('aria-expanded', 'false');
   await page.locator('#document-search').fill('Section');
   await expect(page.locator('#document-search-status')).toHaveText('1 of 5 documents');
-  await expect(page.locator('.source-tree-folder')).toHaveAttribute('aria-expanded', 'true');
-  await expect(page.locator('.source-tree-group[role="group"]')).toHaveCount(1);
+  await expect(page.locator('.source-tree-folder > .source-tree-entry')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.source-tree-group')).toHaveCount(1);
   const sectionSource = page.locator('.source-tree-entry[data-path="section/_index.md"]');
   await expect(sectionSource).toBeVisible();
   await sectionSource.click();
-  await expect(sectionSource).toHaveAttribute('aria-selected', 'true');
+  await expect(sectionSource).toHaveAttribute('data-selected', 'true');
   await page.locator('#document-search').fill('');
   await expect(sectionSource).toBeVisible();
-  await expect(page.locator('.source-tree-folder')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('.source-tree-folder > .source-tree-entry')).toHaveAttribute('aria-expanded', 'true');
 
   await page.goto(`${origin}/article/`);
   await expect(page.locator('.edit-page-link')).toHaveAttribute('href', /path=article\.md/);
@@ -241,25 +269,30 @@ test('editor visual states hide irrelevant controls and protect frontmatter duri
 
   await page.locator('#file-new-folder').click();
   await expect(page.locator('#file-dialog')).toHaveAttribute('aria-labelledby', 'file-dialog-title');
-  await expect(page.locator('#markdown-file-fields')).toBeHidden();
+  await expect(page.locator('#file-dialog')).not.toContainText('Markdown');
   await page.locator('#file-dialog').evaluate(dialog => dialog.close());
-  await page.locator('#file-rename').click();
-  await expect(page.locator('#markdown-file-fields')).toBeHidden();
-  await page.locator('#file-dialog').evaluate(dialog => dialog.close());
+  await expect(page.locator('.file-actions button')).toHaveCount(1);
+  await openMoreActions(page);
   await page.locator('#new').click();
   await expect(page.locator('#new-dialog')).toBeVisible();
   await expect(page.locator('#new-dialog')).toHaveAttribute('aria-labelledby', 'new-dialog-title');
   await page.locator('#new-dialog').getByRole('button', {name: 'Cancel'}).click();
   await expect(page.locator('#new-dialog')).toBeHidden();
-  await expect(page.locator('#new')).toBeFocused();
+  await expect(page.locator('#more-actions summary')).toBeFocused();
 
   await page.locator('#source-mode').click();
   await page.locator('#media').click();
+  await expect(page.locator('#media-panel')).toBeVisible();
+  await expect(page.locator('#media-panel')).toHaveAttribute('aria-labelledby', 'media-panel-title');
+  await expect(page.locator('#media-close')).toBeFocused();
   await page.locator('#media-upload').setInputFiles(path.join(repoRoot, 'test', 'testdata', 'e2e', 'runtime-vault', 'images', 'hero.png'));
   await page.waitForFunction(() => document.querySelectorAll('#media-list .media-item').length > 0);
   await expect.poll(async () => (await page.locator('#editor .cm-line').allTextContents()).join('\n')).toMatch(/^---[\s\S]*---\r?\n\r?\n!\[/);
   const editorSource = (await page.locator('#editor .cm-line').allTextContents()).join('\n');
   expect(editorSource.startsWith(`${originalFrontmatter}\n![hero](hero.png)`)).toBe(true);
+  await page.locator('#media-close').click();
+  await expect(page.locator('#media-panel')).toBeHidden();
+  await expect(page.locator('#media')).toBeFocused();
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   const persisted = await source(context, 'article.md');
@@ -325,7 +358,14 @@ test('write mode reveals only the active inline Markdown node', async ({browser}
   await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
   await expect.poll(async () => page.evaluate(() => document.querySelector('#editor .live-rendered-block')?.shadowRoot?.innerHTML || '')).toContain('data-live-inline-from');
   const firstBlock = page.locator('#editor .live-rendered-block').first();
-  await firstBlock.locator('strong').click();
+  await expect(firstBlock).toHaveAttribute('role', 'button');
+  await expect(firstBlock).toHaveAttribute('tabindex', '0');
+  await firstBlock.focus();
+  await page.keyboard.press('Enter');
+  await expect(editor).toContainText('**bold**');
+  await editor.fill('Normal **bold** and *italic* with [a link](https://example.test).\n\nNeighbor block');
+  await expect.poll(() => page.locator('#editor .live-rendered-block').count()).toBeGreaterThan(0);
+  await page.locator('#editor .live-rendered-block').first().locator('strong').click();
   await expect(page.locator('#write-mode')).toHaveAttribute('aria-selected', 'true');
   await expect(page.locator('#source-mode')).toHaveAttribute('aria-selected', 'false');
   await expect(editor).toContainText('**bold**');
@@ -559,8 +599,11 @@ test('source media insertion preserves mixed line endings after save and reload'
   const expected = `${originalFrontmatter}\r\n![hero](hero.png)\r\n\nOriginal\n`;
   await page.locator('#source-mode').click();
   await page.locator('#media').click();
+  await expect(page.locator('#media-close')).toBeFocused();
   await page.locator('#media-upload').setInputFiles(path.join(repoRoot, 'test', 'testdata', 'e2e', 'runtime-vault', 'images', 'hero.png'));
   await page.waitForFunction(() => document.querySelectorAll('#media-list .media-item').length > 0);
+  await page.locator('#media-close').click();
+  await expect(page.locator('#media')).toBeFocused();
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   expect((await source(context, 'article.md')).body).toBe(expected);
@@ -587,9 +630,9 @@ test('form metadata edits preserve mixed source bytes after save and reload', as
 });
 
 test('editor dark mode keeps metadata and long file labels readable', async ({browser}) => {
-  const longPath = 'deeply-nested-folder-with-a-long-name/another-long-folder/article-with-a-long-name.md';
+  const longPath = 'deeply-nested-folder-with-a-long-name/another-long-folder/attachment-with-a-long-name.pdf';
   await fs.mkdir(path.dirname(path.join(vault, longPath)), {recursive: true});
-  await fs.writeFile(path.join(vault, longPath), '---\ntitle: Long\npublish: false\ntype: doc\n---\nLong\n');
+  await fs.writeFile(path.join(vault, longPath), 'attachment');
   const context = await browser.newContext({viewport: {width: 390, height: 844}, colorScheme: 'dark'});
   const page = await context.newPage();
   await login(page);
@@ -626,13 +669,29 @@ test('editor mobile layout keeps the workspace ahead of navigation', async ({bro
   await page.goto(`${origin}/_oxpio/editor?path=article.md`);
   await page.locator('#editor .cm-content').waitFor();
   await expect(page.locator('.metadata')).toBeVisible();
+  await expect(page.locator('#metadata-toggle')).toHaveCSS('border-top-color', 'rgba(0, 0, 0, 0)');
   await expect(page.locator('.toolbar')).toBeVisible();
+  await page.locator('#more-actions summary').click();
   await expect(page.locator('#settings')).toBeVisible();
   await expect(page.locator('#settings')).toHaveAttribute('aria-label', 'Editor settings');
   await page.locator('#settings').click();
   await expect(page.locator('#settings-dialog')).toBeVisible();
   await expect(page.locator('#settings-dialog')).toHaveAttribute('aria-labelledby', 'settings-dialog-title');
   await page.locator('#settings-dialog button[value="cancel"]').click();
+  const mediaTrigger = page.getByRole('button', {name: 'Media library'});
+  await mediaTrigger.click();
+  await expect(page.locator('#media-panel')).toBeVisible();
+  await expect(page.locator('#media-close')).toBeFocused();
+  const mediaLayout = await page.locator('#media-panel').evaluate(panel => {
+    const bounds = panel.getBoundingClientRect();
+    return {left: bounds.left, right: bounds.right, top: bounds.top, bottom: bounds.bottom, viewportWidth: innerWidth, viewportHeight: innerHeight};
+  });
+  expect(mediaLayout.left).toBe(0);
+  expect(mediaLayout.right).toBe(mediaLayout.viewportWidth);
+  expect(mediaLayout.top).toBeGreaterThan(0);
+  expect(mediaLayout.bottom).toBe(mediaLayout.viewportHeight);
+  await page.locator('#media-close').click();
+  await expect(mediaTrigger).toBeFocused();
   const layout = await page.evaluate(() => {
     const workspace = document.querySelector('.workspace').getBoundingClientRect();
     const sidebar = document.querySelector('.source-sidebar').getBoundingClientRect();
@@ -655,12 +714,58 @@ test('editor mobile layout keeps the workspace ahead of navigation', async ({bro
   await context.close();
 });
 
+test('desktop editor can collapse and restore the document panel', async ({browser}) => {
+  const context = await browser.newContext({viewport: {width: 1440, height: 900}});
+  const page = await context.newPage();
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+  await page.locator('#editor .cm-content').waitFor();
+  await expect(page.locator('#sidebar-collapse')).toBeVisible();
+  await expect(page.locator('#sidebar-collapse')).toHaveAttribute('data-state', 'expanded');
+  await expect(page.locator('#sidebar-collapse-icon')).toHaveAttribute('href', '#icon-panel-left');
+  const expanded = await page.evaluate(() => ({
+    sidebarWidth: document.querySelector('.source-sidebar').getBoundingClientRect().width,
+    editorWidth: document.querySelector('#editor').getBoundingClientRect().width,
+  }));
+  const resizer = page.locator('#sidebar-resizer');
+  await expect(resizer).toBeVisible();
+  const resizerBox = await resizer.boundingBox();
+  await page.mouse.move(resizerBox.x + resizerBox.width / 2, resizerBox.y + 300);
+  await page.mouse.down();
+  await page.mouse.move(resizerBox.x + resizerBox.width / 2 + 80, resizerBox.y + 300);
+  await page.mouse.up();
+  const resized = await page.evaluate(() => document.querySelector('.source-sidebar').getBoundingClientRect().width);
+  expect(resized).toBeGreaterThan(expanded.sidebarWidth);
+  await resizer.focus();
+  await resizer.press('ArrowLeft');
+  const keyboardResized = await page.evaluate(() => document.querySelector('.source-sidebar').getBoundingClientRect().width);
+  expect(keyboardResized).toBeLessThan(resized);
+  await page.locator('#sidebar-collapse').click();
+  await expect(page.locator('.editor-layout')).toHaveClass(/sidebar-collapsed/);
+  await expect(page.locator('#sidebar-collapse')).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#sidebar-collapse')).toHaveAttribute('data-state', 'collapsed');
+  await expect(page.locator('#sidebar-collapse-icon')).toHaveAttribute('href', '#icon-panel-left-collapsed');
+  const collapsed = await page.evaluate(() => ({
+    sidebarWidth: document.querySelector('.source-sidebar').getBoundingClientRect().width,
+    editorWidth: document.querySelector('#editor').getBoundingClientRect().width,
+  }));
+  expect(collapsed.sidebarWidth).toBeLessThan(expanded.sidebarWidth);
+  expect(collapsed.editorWidth).toBeGreaterThan(expanded.editorWidth);
+  await page.locator('#sidebar-collapse').click();
+  await expect(page.locator('.editor-layout')).not.toHaveClass(/sidebar-collapsed/);
+  await expect(page.locator('#sidebar-collapse')).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#sidebar-collapse')).toHaveAttribute('data-state', 'expanded');
+  await expect(page.locator('#sidebar-collapse-icon')).toHaveAttribute('href', '#icon-panel-left');
+  await context.close();
+});
+
 test('browser create defaults to a private draft, rejects bad posts, and deletes after confirmation', async ({browser}) => {
   const context = await browser.newContext();
   const page = await context.newPage();
   await login(page);
   await page.goto(`${origin}/_oxpio/editor?path=article.md`);
 
+  await openMoreActions(page);
   await page.locator('#new').click();
   await page.locator('#new-dialog input[name="path"]').fill('new-browser.md');
   await page.locator('#new-dialog input[name="title"]').fill('Browser draft');
@@ -675,6 +780,7 @@ test('browser create defaults to a private draft, rejects bad posts, and deletes
 
   await page.goto(`${origin}/_oxpio/editor?path=new-browser.md`);
   page.once('dialog', dialog => dialog.accept());
+  await openMoreActions(page);
   await page.locator('#delete').click();
   await expect.poll(async () => (await fs.access(path.join(vault, 'new-browser.md')).then(() => true).catch(() => false))).toBe(false);
   expect((await context.request.get(`${origin}/new-browser/`)).status()).toBe(404);
@@ -805,7 +911,19 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   expect(saved).toMatch(/updated: ["']?2026-04-11["']?/);
   expect(saved).toContain('publish: false');
 
-  await page.getByRole('button', {name: 'Media library'}).click();
+  const mediaTrigger = page.getByRole('button', {name: 'Media library'});
+  await mediaTrigger.click();
+  await expect(page.locator('#media-panel')).toBeVisible();
+  await expect(page.locator('#media-list')).toHaveText('No images yet.');
+  await expect(page.locator('#media-panel .upload-button use')).toHaveAttribute('href', '#icon-upload');
+  await expect(page.locator('#media-close')).toBeFocused();
+  const mediaDropzone = page.locator('#media-dropzone');
+  for (const key of ['Enter', 'Space']) {
+    await mediaDropzone.focus();
+    const fileChooser = page.waitForEvent('filechooser');
+    await page.keyboard.press(key);
+    await fileChooser;
+  }
   const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
   await page.evaluate(bytes => {
     const transfer = new DataTransfer();
@@ -816,10 +934,20 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   await page.locator('#media-upload').setInputFiles({name: 'editor-pixel.png', mimeType: 'image/png', buffer: png});
   await expect(page.locator('.media-item').filter({hasText: 'editor-pixel.png'})).toHaveCount(1);
   await expect(page.locator('#status')).toContainText('Uploaded editor-pixel.png');
+  await page.locator('#media-close').click();
+  await expect(page.locator('#media-panel')).toBeHidden();
+  await expect(mediaTrigger).toBeFocused();
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   const mediaSaved = await fs.readFile(path.join(vault, 'draft.md'), 'utf8');
   expect(mediaSaved).toContain('editor-pixel.png');
+  const uploadedResource = page.locator('.file-entry[data-path="editor-pixel.png"]');
+  await uploadedResource.click();
+  await expect(uploadedResource).toHaveAttribute('data-selected', 'true');
+  await page.locator('.source-tree-entry[data-path="article.md"]').click();
+  await expect(uploadedResource).toHaveAttribute('data-selected', 'false');
+  await page.locator('.source-tree-entry[data-path="draft.md"]').click();
+  await expect(page.locator('.source-tree-entry[data-path="draft.md"]')).toHaveAttribute('data-selected', 'true');
 
   await page.locator('#read-mode').click();
   const contentPreview = page.frameLocator('#preview-frame');
@@ -829,57 +957,47 @@ test('structured editor exposes metadata forms, draft preview, and media managem
   await page.locator('#file-submit').click();
   await expect(page.locator('.file-entry[data-path="docs"]')).toHaveCount(1);
 
-  const orphanMarkdown = Buffer.from('---\ntitle: Orphan\npublish: false\ntype: doc\n---\nOrphan\n');
-  await page.locator('#write-mode').click();
-  await page.getByRole('button', {name: 'Media library'}).click();
-  await page.locator('#upload-folder').fill('docs');
-  await page.locator('#media-upload').setInputFiles({name: 'orphan.md', mimeType: 'text/markdown', buffer: orphanMarkdown});
-  await expect(page.locator('#upload-parent-warning')).toContainText('docs/_index.md');
-  await expect(page.locator('.file-entry[data-path="docs/orphan.md"]')).toHaveCount(0);
-  await page.locator('#read-mode').click();
-
+  await openMoreActions(page);
   await page.getByRole('button', {name: 'New', exact: true}).click();
   await page.locator('#new-form input[name="path"]').fill('docs/top-level.md');
   await expect(page.locator('#new-parent-warning')).toContainText('docs/_index.md');
   await expect(page.locator('#new-submit')).toBeDisabled();
   await page.locator('#new-dialog').evaluate(dialog => dialog.close());
 
-  await page.getByRole('button', {name: 'New Markdown'}).click();
-  await page.locator('#file-path').fill('docs/guide.md');
-  await expect(page.locator('#file-parent-warning')).toContainText('docs/_index.md');
-  await expect(page.locator('#file-submit')).toBeDisabled();
-  await page.locator('#file-dialog').evaluate(dialog => dialog.close());
+  await openMoreActions(page);
+  await page.getByRole('button', {name: 'New', exact: true}).click();
+  await page.locator('#new-kind').selectOption('section-index');
+  await page.locator('#new-form input[name="path"]').fill('docs/_INDEX.MD');
+  await expect(page.locator('#new-parent-warning')).toHaveText('Section files must use the exact filename _index.md.');
+  await expect(page.locator('#new-submit')).toBeDisabled();
+  await page.locator('#new-form input[name="path"]').fill('docs/_index.md');
+  await page.locator('#new-form input[name="title"]').fill('Docs');
+  await expect(page.locator('#new-submit')).toBeEnabled();
+  await page.locator('#new-submit').click();
+  await expect(page.locator('.source-tree-entry[data-path="docs/_index.md"]')).toHaveCount(1);
+  await expect(page.locator('.file-entry[data-path="docs/_index.md"]')).toHaveCount(0);
 
-  await page.getByRole('button', {name: 'New Markdown'}).click();
-  await page.locator('#file-path').fill('docs/_INDEX.MD');
-  await expect(page.locator('#file-parent-warning')).toHaveText('Section index files must use the exact filename _index.md.');
-  await expect(page.locator('#file-submit')).toBeDisabled();
-  await page.locator('#file-path').fill('docs/_index.md');
-  await expect(page.locator('#file-parent-warning')).toHaveText('Files named _index.md must use Section index kind.');
-  await expect(page.locator('#file-submit')).toBeDisabled();
-  await page.locator('#file-title').fill('Docs');
-  await page.locator('#file-kind').selectOption('section-index');
-  await expect(page.locator('#file-submit')).toBeEnabled();
-  await page.locator('#file-submit').click();
-  await expect(page.locator('.file-entry[data-path="docs/_index.md"]')).toHaveCount(1);
+  await openMoreActions(page);
+  await page.getByRole('button', {name: 'New', exact: true}).click();
+  await page.locator('#new-form input[name="path"]').fill('docs/guide.md');
+  await page.locator('#new-form input[name="title"]').fill('Guide');
+  await page.locator('#new-submit').click();
+  await expect(page.locator('.source-tree-entry[data-path="docs/guide.md"]')).toHaveCount(1);
+  await expect(page.locator('.file-entry[data-path="docs/guide.md"]')).toHaveCount(0);
 
-  await page.getByRole('button', {name: 'New Markdown'}).click();
-  await page.locator('#file-path').fill('docs/guide.md');
-  await page.locator('#file-title').fill('Guide');
-  await page.locator('#file-submit').click();
-  await expect(page.locator('.file-entry[data-path="docs/guide.md"]')).toHaveCount(1);
-
-  await page.getByRole('button', {name: 'Rename'}).click();
+  await page.locator('#content-rename').click();
   await page.locator('#file-path').fill('docs/renamed.md');
   await page.locator('#file-submit').click();
-  await expect(page.locator('.file-entry[data-path="docs/renamed.md"]')).toHaveCount(1);
+  await expect(page.locator('.source-tree-entry[data-path="docs/renamed.md"]')).toHaveCount(1);
+  await expect(page.locator('.file-entry[data-path="docs/renamed.md"]')).toHaveCount(0);
 
   page.once('dialog', dialog => dialog.accept());
-  await page.locator('#file-delete').click();
+  await openMoreActions(page);
+  await page.locator('#delete').click();
+  await expect(page.locator('.source-tree-entry[data-path="docs/renamed.md"]')).toHaveCount(0);
   await expect(page.locator('.file-entry[data-path="docs/renamed.md"]')).toHaveCount(0);
-  await page.locator('.file-entry[data-path="docs"]').click();
-  await page.locator('.file-entry[data-path="docs"]').click();
-  await expect(page.locator('#file-delete')).toBeDisabled();
+  await expect(page.locator('.file-entry[data-path="docs"]')).toHaveCount(0);
+  await expect(page.locator('.file-actions button')).toHaveCount(1);
   expect(externalRequests).toEqual([]);
   await context.close();
 });
@@ -947,6 +1065,74 @@ test('visual local drafts restore metadata changes before save', async ({browser
   await page.getByRole('button', {name: 'Save'}).click();
   await expect(page.locator('#status')).toContainText('Saved and rebuilt');
   expect(await fs.readFile(path.join(vault, 'article.md'), 'utf8')).toContain('title: Visual local title');
+  await context.close();
+});
+
+test('resource actions rename references, block used deletes, and clean unused assets', async ({browser}) => {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64');
+  await login(page);
+  await page.goto(`${origin}/_oxpio/editor?path=article.md`);
+
+  const openResourceActions = async () => {
+    await page.locator('#file-resource-actions').evaluate(element => { element.open = true; });
+  };
+  const upload = async name => {
+    await page.getByRole('button', {name: 'Media library'}).click();
+    await page.locator('#media-upload').setInputFiles({name, mimeType: 'image/png', buffer: png});
+    await expect(page.locator('.media-item').filter({hasText: name})).toHaveCount(1);
+    await page.locator('#media-close').click();
+  };
+
+  await upload('used.png');
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+
+  await upload('unused.png');
+  await page.locator('#source-mode').click();
+  await page.locator('#editor .cm-content').fill('---\ntitle: Article\npublish: true\ntype: doc\n---\n![used](used.png)\nOriginal\n');
+  await page.getByRole('button', {name: 'Save'}).click();
+  await expect(page.locator('#status')).toContainText('Saved and rebuilt');
+  expect((await source(context, 'article.md')).body).toContain('![used](used.png)');
+  const usageProbe = await context.request.get(`${origin}/_oxpio/file/usages?path=used.png`);
+  expect(usageProbe.status()).toBe(200);
+  expect((await usageProbe.json()).documentCount).toBe(1);
+
+  await page.locator('.file-entry[data-path="used.png"]').click();
+  await expect(page.locator('#resource-usage-count')).toContainText('Used by 1 document');
+  await openResourceActions();
+  await page.locator('#resource-rename').click();
+  await page.locator('#file-path').fill('renamed.png');
+  await page.locator('#file-submit').click();
+  await expect(page.locator('#status')).toContainText('Updated 1 document');
+  await expect.poll(async () => (await source(context, 'article.md')).body).toContain('renamed.png');
+  await expect(page.locator('.file-entry[data-path="renamed.png"]')).toHaveCount(1);
+
+  await page.locator('.file-entry[data-path="renamed.png"]').click();
+  await openResourceActions();
+  await page.locator('#resource-show-usages').click();
+  await expect(page.locator('#resource-dialog')).toBeVisible();
+  await expect(page.locator('#resource-dialog-list')).toContainText('article.md');
+  await expect(page.locator('#resource-dialog-list')).toContainText('markdown-image');
+  await page.locator('#resource-dialog button[value="cancel"]').click();
+
+  await openResourceActions();
+  await page.locator('#resource-delete').click();
+  await expect(page.locator('#resource-dialog')).toBeVisible();
+  await expect(page.locator('#resource-dialog-summary')).toContainText('Used by 1 reference');
+  await page.locator('#resource-dialog button[value="cancel"]').click();
+  await expect(page.locator('.file-entry[data-path="renamed.png"]')).toHaveCount(1);
+
+  await page.locator('#resource-filter').selectOption('unused');
+  await expect(page.locator('.file-entry[data-path="unused.png"]')).toHaveCount(1);
+  await expect(page.locator('.file-entry[data-path="renamed.png"]')).toHaveCount(0);
+  await page.locator('.file-entry[data-path="unused.png"]').click();
+  await openResourceActions();
+  page.once('dialog', dialog => dialog.accept());
+  await page.locator('#resource-delete').click();
+  await expect(page.locator('.file-entry[data-path="unused.png"]')).toHaveCount(0);
+  await expect(fs.access(path.join(vault, 'unused.png'))).rejects.toThrow();
   await context.close();
 });
 

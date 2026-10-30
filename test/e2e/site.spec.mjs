@@ -203,6 +203,12 @@ test('strict section pages and article flow remain usable without JavaScript', a
   const page = await context.newPage();
   await page.goto(`${origin}/alpha/child/`);
   await expect(page.getByRole('heading', {name: 'Nested Child'})).toBeVisible();
+  const skipLink = page.getByRole('link', {name: 'Skip to content', exact: true});
+  await expect(skipLink).toHaveAttribute('href', '#main-content');
+  await expect(page.locator('main#main-content')).toHaveAttribute('tabindex', '-1');
+  await page.keyboard.press('Tab');
+  await expect(skipLink).toBeFocused();
+  await expect(skipLink).toHaveCSS('outline-style', 'solid');
   await expect(page.locator('[data-theme-toggle]')).toBeHidden();
   await expect(page.locator('nav[aria-label="Global navigation"] a')).toHaveCount(2);
   await expect(page.locator('.breadcrumbs')).toContainText('Nested Child');
@@ -333,6 +339,8 @@ test('strict Markdown runtime stays local and social PNG is independently reacha
   await expect(page.locator('[data-sidebar-root] a[aria-current="page"]')).toHaveText('Child Article');
   const childDirectory = page.locator('[data-sidebar-root] .sidebar-node-dir').filter({hasText: 'Nested Child'}).first();
   const childToggle = childDirectory.locator(':scope > .sidebar-item > .sidebar-toggle');
+  await expect(childToggle).toHaveCSS('width', '44px');
+  await expect(childToggle).toHaveCSS('height', '44px');
   const childBranch = childDirectory.locator(':scope > .sidebar-list');
   await expect(childBranch).toBeVisible();
   await childToggle.click();
@@ -358,10 +366,11 @@ test('strict Markdown runtime stays local and social PNG is independently reacha
 });
 
 test('mobile sidebar opens and closes through the in-panel control', async ({browser}) => {
-  const {context, blocked} = await offlineContext(browser, {viewport: {width: 390, height: 844}});
+  const {context, blocked} = await offlineContext(browser, {viewport: {width: 390, height: 844}, reducedMotion: 'reduce'});
   const page = await context.newPage();
   await page.goto(`${origin}/alpha/child/child/`);
   await expect.poll(() => page.locator('[data-site-body]').getAttribute('data-sidebar-ready')).toBe('true');
+  await expect(page.locator('.sidebar-shell')).toHaveCSS('transition-property', 'none');
   await page.locator('[data-sidebar-toggle]').click();
   await expect(page.locator('body')).toHaveAttribute('data-sidebar-open', 'true');
   const close = page.locator('[data-sidebar-close]');

@@ -17,6 +17,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -282,6 +283,10 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 		s.serveLogin(w, r)
 	case "login.css":
 		s.serveLoginAsset(w, r)
+	case "tokens.css":
+		s.serveSharedTokensAsset(w, r)
+	case "theme.js":
+		s.serveThemeAsset(w, r)
 	case "logo.svg":
 		s.serveLogoAsset(w, r)
 	case "favicon.svg":
@@ -298,8 +303,8 @@ func (s *Server) serveControl(w http.ResponseWriter, r *http.Request) {
 		s.serveFiles(w, r)
 	case "file/folder":
 		s.serveFileFolder(w, r)
-	case "file/markdown":
-		s.serveFileMarkdown(w, r)
+	case "file/usages":
+		s.serveFileUsages(w, r)
 	case "file":
 		s.serveFile(w, r)
 	case "source-meta":
@@ -456,12 +461,32 @@ func (s *Server) serveSourceCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	pathValue, title, typeValue, dateValue := r.Form.Get("path"), r.Form.Get("title"), r.Form.Get("type"), r.Form.Get("date")
-	content, err := NewArticleSource(title, typeValue, dateValue)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	kind := strings.ToLower(strings.TrimSpace(r.Form.Get("kind")))
+	var result TransactionResult
+	var err error
+	if kind == "section-index" {
+		if path.Base(pathValue) != "_index.md" {
+			http.Error(w, "section-index sources must be named _index.md", http.StatusBadRequest)
+			return
+		}
+		content, contentErr := NewSectionSource(title)
+		if contentErr != nil {
+			http.Error(w, contentErr.Error(), http.StatusBadRequest)
+			return
+		}
+		result, err = s.coordinator.CreateMarkdownContext(r.Context(), pathValue, r.Header.Get("X-OXPIO-Source-Hash"), content)
+	} else {
+		if kind != "" && kind != "article" {
+			http.Error(w, "kind must be article or section-index", http.StatusBadRequest)
+			return
+		}
+		content, contentErr := NewArticleSource(title, typeValue, dateValue)
+		if contentErr != nil {
+			http.Error(w, contentErr.Error(), http.StatusBadRequest)
+			return
+		}
+		result, err = s.coordinator.CreateContext(r.Context(), pathValue, r.Header.Get("X-OXPIO-Source-Hash"), content)
 	}
-	result, err := s.coordinator.CreateContext(r.Context(), pathValue, r.Header.Get("X-OXPIO-Source-Hash"), content)
 	if err != nil {
 		s.writeMutationError(w, err)
 		return
@@ -496,6 +521,9 @@ func (s *Server) writeMutationResult(w http.ResponseWriter, result TransactionRe
 	if result.RelPath != "" {
 		response["path"] = result.RelPath
 	}
+	if result.ReferenceDocumentCount > 0 {
+		response["referenceDocumentCount"] = result.ReferenceDocumentCount
+	}
 	if result.Build != nil {
 		response["warningCount"] = result.Build.WarningCount
 		response["diagnostics"] = s.editorDiagnostics(result.Build.Diagnostics)
@@ -527,6 +555,11 @@ func (s *Server) authorizeMutation(w http.ResponseWriter, r *http.Request) bool 
 
 func (s *Server) writeMutationError(w http.ResponseWriter, err error) {
 	status := http.StatusUnprocessableEntity
+	var usageConflict *ResourceUsageConflictError
+	if errors.As(err, &usageConflict) {
+		writeJSONStatus(w, http.StatusConflict, map[string]any{"ok": false, "error": usageConflict.Error(), "path": usageConflict.Path, "usages": usageConflict.Usages})
+		return
+	}
 	var conflict *ConflictError
 	if errors.As(err, &conflict) {
 		status = http.StatusConflict

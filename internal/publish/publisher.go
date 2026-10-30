@@ -157,6 +157,7 @@ func initializeTransaction(boundary internalfsutil.VaultOutputBoundary, state ou
 			journal.SourceAfterHash = options.JournalSeed.SourceAfterHash
 			journal.CleanupPaths = append([]string(nil), options.JournalSeed.CleanupPaths...)
 			journal.BackupPath = options.JournalSeed.BackupPath
+			journal.ReferenceChanges = append([]workspace.SourceChange(nil), options.JournalSeed.ReferenceChanges...)
 		}
 		transaction.journal = journal
 		if err := workspace.WriteJournal(boundary.VaultPath, transaction.journal); err != nil {

@@ -117,7 +117,7 @@ func renderThemedDocument(plan *model.SitePlan, currentRoute, title, description
 		Title: title, Description: description, URL: currentRoute, Href: strictSitePath(plan, currentRoute), Canonical: canonical,
 		Content: template.HTML(contentPreviewStartMarker + body + contentPreviewEndMarker), HeadHTML: template.HTML(head),
 		Navigation: themedNavigation(plan, currentRoute, canonical), Breadcrumbs: themedBreadcrumbs(plan, breadcrumbs), Sidebar: themedSidebar(plan, sidebarNodes, currentRoute), SidebarEnabled: plan.Config.Sidebar.Enabled && len(sidebarNodes) > 0,
-		Versions: themedVersions(plan, versionID, versionRoutes), VersionID: versionID, HasMath: strings.Contains(body, "data-oxpio-math-source"), HasMermaid: strings.Contains(body, `class="mermaid"`), Popover: plan.Config.Popover.Enabled, BasePath: strictBasePath(plan),
+		Versions: themedVersions(plan, versionID, versionRoutes), VersionID: versionID, VersionRoot: themedVersionRoot(plan, versionID), HasMath: strings.Contains(body, "data-oxpio-math-source"), HasMermaid: strings.Contains(body, `class="mermaid"`), Popover: plan.Config.Popover.Enabled, BasePath: strictBasePath(plan),
 		SEO: pageSEO,
 	}
 	page.Entries = themedCards(plan, extras.entries)
@@ -559,6 +559,18 @@ func themedPaginationForRoute(plan *model.SitePlan, entries []viewmodel.Card, ro
 		return viewmodel.Pagination{}, false
 	}
 	return themedPagination(plan, entries, route, current.Number, len(pages.Pages)), true
+}
+
+func themedVersionRoot(plan *model.SitePlan, versionID string) string {
+	if plan == nil || versionID == "" {
+		return ""
+	}
+	for _, version := range plan.Versions {
+		if version != nil && version.ID == versionID && version.Root != nil {
+			return version.Root.Route
+		}
+	}
+	return ""
 }
 
 func themedVersions(plan *model.SitePlan, current string, routes map[string]string) []viewmodel.Version {

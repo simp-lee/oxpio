@@ -16,10 +16,7 @@ import (
 	internalfsutil "github.com/simp-lee/oxpio/internal/fsutil"
 )
 
-const (
-	maxUploadBytes    = 10 << 20
-	maxUploadMarkdown = 1 << 20
-)
+const maxUploadBytes = 10 << 20
 
 type mediaItem struct {
 	Path string `json:"path"`
@@ -160,21 +157,7 @@ func (s *Server) serveMediaUpload(w http.ResponseWriter, r *http.Request) {
 	if strings.TrimSpace(folder) != "" {
 		relPath = path.Join(folder, name)
 	}
-	if strings.EqualFold(path.Ext(name), ".md") {
-		if len(data) > maxUploadMarkdown {
-			http.Error(w, "Markdown upload exceeds 1 MiB", http.StatusRequestEntityTooLarge)
-			return
-		}
-		kind := strings.ToLower(strings.TrimSpace(r.FormValue("kind")))
-		if strings.EqualFold(path.Base(name), "_index.md") && kind != "section-index" {
-			http.Error(w, "_index.md uploads require section-index kind", http.StatusBadRequest)
-			return
-		}
-		if !strings.EqualFold(path.Base(name), "_index.md") && kind != "article" {
-			http.Error(w, "ordinary Markdown uploads require article kind", http.StatusBadRequest)
-			return
-		}
-	} else if err := validateUploadImage(name, data); err != nil {
+	if err := validateUploadImage(name, data); err != nil {
 		http.Error(w, err.Error(), http.StatusUnsupportedMediaType)
 		return
 	}
@@ -221,7 +204,7 @@ func validateUploadImage(name string, data []byte) error {
 func normalizeMediaUploadName(name string) string {
 	ext := filepath.Ext(name)
 	switch strings.ToLower(ext) {
-	case ".md", ".png", ".jpg", ".jpeg", ".webp", ".svg":
+	case ".png", ".jpg", ".jpeg", ".webp", ".svg":
 		return strings.TrimSuffix(name, ext) + strings.ToLower(ext)
 	default:
 		return name

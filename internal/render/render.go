@@ -62,12 +62,27 @@ var loadSharedRuntimeFile = sync.OnceValues(func() (sharedRuntimeFile, error) {
 	return sharedRuntimeFile{outputPath: fmt.Sprintf("assets/oxpio/runtime.%x.js", hash), data: data}, nil
 })
 
+// SharedTokensCSS returns the canonical shared design tokens used by the
+// editor, login page, and published site stylesheet.
+func SharedTokensCSS() ([]byte, error) {
+	data, err := readEmbeddedAsset("tokens.css")
+	if err != nil {
+		return nil, fmt.Errorf("read tokens.css: %w", err)
+	}
+	return append([]byte(nil), data...), nil
+}
+
 // StyleCSSData returns the fixed built-in stylesheet for owner-registry publication.
 func StyleCSSData() ([]byte, error) {
 	data, err := readEmbeddedAsset("style.css")
 	if err != nil {
 		return nil, fmt.Errorf("read style.css: %w", err)
 	}
+	tokens, err := SharedTokensCSS()
+	if err != nil {
+		return nil, err
+	}
+	data = append(append(tokens, '\n'), data...)
 	minifier := minify.New()
 	minifier.AddFunc("text/css", mincss.Minify)
 	compact, err := minifier.Bytes("text/css", data)
