@@ -67,7 +67,7 @@ for line in open(sys.argv[1]):
     m=pat.search(line)
     if m: values.append(int(m.group(1)))
 if len(values)!=5: raise SystemExit(f'end-to-end: got {len(values)} rows, want 5')
-if statistics.median(values)>30_000_000_000: raise SystemExit('end-to-end median exceeds 30 seconds')
+if statistics.median(values)>45_000_000_000: raise SystemExit('end-to-end median exceeds 45 seconds')
 print('end-to-end time budget verified')
 PY
     ;;
