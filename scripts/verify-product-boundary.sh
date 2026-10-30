@@ -61,7 +61,7 @@ check_embed_inventory() {
   fi
 
   site_files=$(find internal/render/site -type f -print | sed 's#^internal/render/site/##' | sort)
-  expected_site_files=$(printf '%s\n' runtime.js style.css | sort)
+  expected_site_files=$(printf '%s\n' runtime.js style.css tokens.css | sort)
   if [ "$site_files" != "$expected_site_files" ]; then
     printf 'embedded site inventory changed:\n%s\n' "$site_files" >&2
     exit 1
