@@ -16,19 +16,19 @@ OXPIO is also a focused online writing workspace. Run `oxpio editor`, open a Mar
 oxpio editor --vault ./vault --port 8080
 ```
 
-The editor keeps the vault as the source of truth and publishes only after validation and a successful build. It includes a local CodeMirror Markdown editor, metadata form, toolbar, Content and Assets & files panels, server-rendered draft preview, media library, responsive layout, Write/Source/Preview/Diff views, and safe save/rollback behavior. Live preview stays in one editor surface: the line under the pointer or cursor exposes Markdown while surrounding lines keep their rendered treatment. Use Preview for a complete server-rendered view. The English showcase article below intentionally exercises inline and block math, a Go code block, a Markdown table, a callout, and a local image.
+The editor keeps the vault as the source of truth and publishes only after validation and a successful build. It includes a local CodeMirror Markdown editor, metadata form, toolbar, Content and Assets & files panels, server-rendered draft preview, media library, responsive layout, Write/Source/Preview/Diff views, and safe save/rollback behavior. Write mode keeps rendered Markdown and source editing in one surface: click a rendered block to reveal its source, or move the cursor into Markdown syntax to see its original markers. Use Preview for a complete server-rendered draft. The English showcase article below intentionally exercises inline and block math, a Go code block, a Markdown table, a callout, and a local image.
 
 <div align="center">
-  <a href="docs/images/editor-live.png"><img src="docs/images/editor-live.png" alt="OXPIO editor single-surface Live preview with the active Markdown line exposed" width="49%"></a>
-  <a href="docs/images/editor-preview.png"><img src="docs/images/editor-preview.png" alt="OXPIO editor full-width Preview mode with rendered Markdown, formula, code block, and table" width="49%"></a>
+  <a href="docs/images/editor-write.png"><img src="docs/images/editor-write.png" alt="OXPIO editor Write mode with metadata, content tree, assets panel, and rendered Markdown" width="49%"></a>
+  <a href="docs/images/editor-preview.png"><img src="docs/images/editor-preview.png" alt="OXPIO editor Preview mode with a server-rendered draft, callout, formula, code block, and table" width="49%"></a>
 </div>
 
 <div align="center">
-  <a href="docs/images/editor-source.png"><img src="docs/images/editor-source.png" alt="OXPIO editor full-width source mode with frontmatter and Markdown content" width="49%"></a>
-  <a href="docs/images/editor-diff.png"><img src="docs/images/editor-diff.png" alt="OXPIO editor full-width Diff mode with source comparison and visible deletions" width="49%"></a>
+  <a href="docs/images/editor-source.png"><img src="docs/images/editor-source.png" alt="OXPIO editor Source mode with article frontmatter and Markdown content" width="49%"></a>
+  <a href="docs/images/editor-diff.png"><img src="docs/images/editor-diff.png" alt="OXPIO editor Diff mode comparing an unsaved candidate with the saved source" width="49%"></a>
 </div>
 
-<p align="center"><em>The captures show single-surface Live preview, the complete Preview view, full Markdown source, and source Diff for an unsaved candidate.</em></p>
+<p align="center"><em>The captures focus on the four main editing states: Write, Preview, Source, and Diff.</em></p>
 
 ## Commands
 
