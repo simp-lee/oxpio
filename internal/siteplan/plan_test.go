@@ -754,7 +754,7 @@ func TestPlanVaultCSSBoundsImageDependencyBeforePlanning(t *testing.T) {
 	if err := png.Encode(&encoded, image.NewRGBA(image.Rect(0, 0, 8193, 1))); err != nil {
 		t.Fatal(err)
 	}
-	writePlanFile(t, root, "images/large.gif", string(encoded.Bytes()))
+	writePlanFile(t, root, "images/large.gif", encoded.String())
 	scan, err := vault.Scan(root)
 	if err != nil {
 		t.Fatal(err)
