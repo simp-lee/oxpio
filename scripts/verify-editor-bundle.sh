@@ -25,7 +25,7 @@ fi
 
 (
   cd "$ROOT"
-  GOOS=js GOARCH=wasm go build -trimpath -ldflags='-s -w -buildid=' -o "$WASM_TEMP" ./cmd/livepreview-wasm
+  GOOS=js GOARCH=wasm go build -trimpath -buildvcs=false -ldflags='-s -w -buildid=' -o "$WASM_TEMP" ./cmd/livepreview-wasm
 )
 if ! cmp -s "$WASM_TEMP" "$WASM"; then
   echo "live-preview WASM is stale; run npm run build:live-preview" >&2
